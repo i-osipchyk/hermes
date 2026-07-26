@@ -49,14 +49,22 @@ higher-TF filter that would need a timeframe not an integer multiple of the base
 
 ## 3. Write `strategies/<name>.py`
 
-Create `strategies/` if absent. The file holds the `Strategy` subclass **and** a runnable
-`Backtest` config under `if __name__ == "__main__":`, mirroring the example's structure so
-`hermes-backtest` can execute it directly. Declare indicators/parameters in `setup`, logic
-in `on_bar`, and use a `Sizer` + `stop_loss`/`take_profit` on entries. Only include the AI
-Advisor if the user asked for it.
+Create `strategies/` if absent. Declare indicators/parameters in `setup`, logic in
+`on_bar`, and use a `Sizer` + `stop_loss`/`take_profit` on entries. Only include the AI
+Advisor if the user asked for it. The file must follow the **discovery convention** so it
+drops straight into `hermes-backtest` and the web UI (`hermes-ui`):
+
+- a module constant `GENERATED_BY = "hermes-strategy"` (provenance — the UI badges it and
+  auto-runs a Claude review);
+- a factory `build_backtest(**overrides) -> Backtest` that returns a fully-configured
+  `Backtest` (Strategy instance, source, symbol, timeframes, dates, starting cash) and
+  applies any `overrides` (symbol/start/end/starting_cash) — build a fresh Strategy each
+  call so re-runs are clean;
+- `if __name__ == "__main__": build_backtest().run()` for direct CLI use.
 
 Completion criterion: the file imports only names that exist in `hermes`'s public API
-(verify against `src/hermes/__init__.py`) and reflects every interview answer.
+(verify against `src/hermes/__init__.py`), exposes `GENERATED_BY` + `build_backtest`, and
+reflects every interview answer.
 
 ## 4. Hand off
 

@@ -100,3 +100,20 @@ Main flow: **`/hermes-strategy` → run → analyse → iterate.** The four `aut
 fire on their own in conversation; `hermes-strategy` and `ask-hermes` you invoke by name.
 The skills read the repo's living docs (`CONTEXT.md`, `examples/`, ADRs), so they stay in
 step with the code.
+
+## Web UI
+
+A local Streamlit app for running and reviewing backtests (ADR-0008):
+
+```bash
+pip install -e ".[ui]"
+hermes-ui
+```
+
+Pick a strategy from `strategies/`, tweak the pre-filled config (symbol/dates/cash), and
+Run. You get an interactive **equity curve + drawdown**, **metric cards**, a **trades
+table**, and a **Claude review** — an AI diagnosis of the run produced by driving *Claude
+Code headlessly* (`claude -p`, reusing the `hermes-analyze-results` skill and your
+subscription — no API key, no billed request), written to `.hermes_cache/reviews/` and
+shown on refresh. AI-generated strategies auto-review; others review on a button. If the
+headless call isn't available, the page shows a copy-paste prompt to run it by hand.

@@ -34,6 +34,9 @@ indicators = ["pandas-ta>=0.3.14b"]
 # Reporting / plots
 report = ["matplotlib>=3.9", "quantstats>=0.0.62"]
 
+# Local web UI (Streamlit). Review uses the Claude Code CLI, not the API — no extra dep.
+ui = ["streamlit>=1.36", "plotly>=5.22"]
+
 # Everything for local development
 dev = [
     "pytest>=8",
@@ -41,6 +44,9 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
 ]
+
+[project.scripts]
+hermes-ui = "hermes.webui.launch:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hermes"]

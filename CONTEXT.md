@@ -80,6 +80,10 @@ _Avoid_: Verdict, Response
 A declared, tunable input of a Strategy (lookback lengths, thresholds, risk %). First-class so a backtest run is a pure function of (Parameters, data) — the basis for reproducibility and Optimization.
 _Avoid_: Setting, Config, Hyperparameter
 
+**Backtest Review**:
+An AI-written diagnosis of a `BacktestResult` — is the edge real, biggest risks, overfitting/look-ahead smells, what to try next. Produced by driving **Claude Code** headlessly with the `hermes-analyze-results` skill (not a Claude API call), written to a review file and displayed in the web UI. Distinct from the per-trade [[ai-advisor]] confirm/veto — a review judges the whole run.
+_Avoid_: Analysis, critique, AI report
+
 **Optimization**:
 Running the core backtest repeatedly over a space of Strategy Parameters (grid search, walk-forward). **Deferred from v1** but the design stays ready for it: a backtest run is a pure function of (Parameters, data), so an optimizer can later sit on top of the engine without bypassing its fill/cost logic.
 _Avoid_: Tuning, Sweep, Backtest (optimization is many backtests)

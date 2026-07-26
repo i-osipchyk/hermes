@@ -8,7 +8,7 @@ tear-sheets (quantstats) consume it; the object itself imports no plotting lib.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 from ..execution import Trade
@@ -48,6 +48,36 @@ class BacktestResult:
             return pd.Series(dtype=float)
         idx, vals = zip(*self.equity_curve)
         return pd.Series(vals, index=pd.DatetimeIndex(idx), name="equity")
+
+    def to_dict(self) -> dict:
+        """JSON-serialisable view of the result (equity curve, trades, metrics).
+
+        Reused by the web UI to hand a run to a Claude Code review and to render
+        without touching live objects.
+        """
+        return {
+            "metrics": asdict(self.metrics),
+            "equity_curve": [(ts.isoformat(), eq) for ts, eq in self.equity_curve],
+            "trades": [_trade_dict(t) for t in self.trades],
+        }
+
+
+def _trade_dict(t: Trade) -> dict:
+    return {
+        "symbol": str(t.instrument.symbol),
+        "side": t.side.value,
+        "size": t.size,
+        "entry_price": t.entry_price,
+        "entry_time": t.entry_time.isoformat() if t.entry_time else None,
+        "exit_price": t.exit_price,
+        "exit_time": t.exit_time.isoformat() if t.exit_time else None,
+        "exit_reason": t.exit_reason,
+        "stop_loss": t.stop_loss,
+        "take_profit": t.take_profit,
+        "gross_pnl": t.gross_pnl,
+        "costs": t.costs,
+        "net_pnl": t.net_pnl,
+    }
 
 
 def _metrics(equity_curve, trades) -> Metrics:

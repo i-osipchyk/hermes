@@ -1,0 +1,156 @@
+"""Hermes backtesting web UI (Streamlit). Launch with ``hermes-ui``.
+
+Runs a strategy's Backtest in-process and shows the equity curve, metrics, trades, and a
+Claude Code–driven review (ADR-0008). Run as a script by Streamlit, so imports are
+absolute.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, time
+
+import plotly.graph_objects as go
+import streamlit as st
+
+from hermes.webui import discovery, review
+
+st.set_page_config(page_title="Hermes Backtester", layout="wide")
+st.title("Hermes — backtesting")
+
+
+def _fmt_pct(x):
+    return "—" if x is None else f"{x * 100:.2f}%"
+
+
+def _fmt_num(x):
+    return "—" if x is None else f"{x:.2f}"
+
+
+def _equity_figure(result):
+    ts = [t for t, _ in result.equity_curve]
+    eq = [e for _, e in result.equity_curve]
+    peak, dd = eq[0] if eq else 0, []
+    for e in eq:
+        peak = max(peak, e)
+        dd.append((e / peak - 1) * 100 if peak else 0)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=ts, y=eq, name="Equity", line=dict(color="#2563eb")))
+    fig.add_trace(
+        go.Scatter(x=ts, y=dd, name="Drawdown %", yaxis="y2", line=dict(color="#dc2626"))
+    )
+    fig.update_layout(
+        height=420,
+        margin=dict(l=0, r=0, t=10, b=0),
+        yaxis=dict(title="Equity"),
+        yaxis2=dict(title="Drawdown %", overlaying="y", side="right", showgrid=False),
+        legend=dict(orientation="h", y=1.1),
+    )
+    return fig
+
+
+# --- pick a strategy -------------------------------------------------------
+
+entries = discovery.discover()
+if not entries:
+    st.info(
+        "No strategies found in `strategies/`. Create one with the **`/hermes-strategy`** "
+        "skill in Claude Code, then reload."
+    )
+    st.stop()
+
+names = [e.name for e in entries]
+choice = st.selectbox("Strategy", names)
+entry = next(e for e in entries if e.name == choice)
+if entry.is_ai_generated:
+    st.caption("🤖 AI-generated — a review runs automatically after each backtest.")
+
+# --- config form (pre-filled from the strategy's defaults) -----------------
+
+defaults = discovery.default_config(entry)
+with st.form("run"):
+    c1, c2, c3 = st.columns(3)
+    ticker = c1.text_input("Symbol", value=defaults.symbol.ticker)
+    cash = c1.number_input("Starting cash", value=float(defaults.starting_cash), step=1000.0)
+    start = c2.date_input("Start", value=defaults.start.date())
+    end = c3.date_input("End", value=defaults.end.date())
+    st.caption(
+        f"Source: `{defaults.source.name}` · timeframes: "
+        f"{', '.join(str(tf) for tf in defaults.timeframes)}"
+    )
+    run = st.form_submit_button("Run backtest", type="primary")
+
+if run:
+    bt = discovery.configured_backtest(
+        entry,
+        ticker=ticker,
+        start=datetime.combine(start, time(), tzinfo=UTC),
+        end=datetime.combine(end, time(), tzinfo=UTC),
+        starting_cash=cash,
+    )
+    with st.spinner("Running backtest… (first run may fetch data)"):
+        result = bt.run()
+    rid = review.run_id(result.to_dict())
+    review.write_result(result.to_dict(), rid)
+    st.session_state["result"] = result
+    st.session_state["rid"] = rid
+    st.session_state["ai"] = entry.is_ai_generated
+    if entry.is_ai_generated and review.claude_available():
+        review.launch(rid)
+
+# --- results ---------------------------------------------------------------
+
+result = st.session_state.get("result")
+if result is None:
+    st.stop()
+rid = st.session_state["rid"]
+m = result.metrics
+
+st.subheader("Metrics")
+r1 = st.columns(4)
+r1[0].metric("Total return", _fmt_pct(m.total_return))
+r1[1].metric("CAGR", _fmt_pct(m.cagr))
+r1[2].metric("Sharpe", _fmt_num(m.sharpe))
+r1[3].metric("Sortino", _fmt_num(m.sortino))
+r2 = st.columns(4)
+r2[0].metric("Max drawdown", _fmt_pct(m.max_drawdown))
+r2[1].metric("Win rate", _fmt_pct(m.win_rate))
+r2[2].metric("Profit factor", _fmt_num(m.profit_factor))
+r2[3].metric("Trades", m.num_trades)
+
+st.subheader("Equity curve")
+if result.equity_curve:
+    st.plotly_chart(_equity_figure(result), use_container_width=True)
+else:
+    st.warning("No equity curve — the backtest produced no trading bars.")
+
+st.subheader("Trades")
+trades = result.to_dict()["trades"]
+if trades:
+    st.dataframe(trades, use_container_width=True, hide_index=True)
+else:
+    st.caption("No trades in this run.")
+
+# --- Claude review ---------------------------------------------------------
+
+st.subheader("Claude review")
+state = review.status(rid)
+cols = st.columns([1, 1, 4])
+if cols[0].button("Review with Claude Code", disabled=not review.claude_available()):
+    review.launch(rid)
+    state = review.status(rid)
+cols[1].button("Refresh")  # any interaction reruns the page and re-reads the file
+if not review.claude_available():
+    cols[2].caption("`claude` not on PATH — use the manual fallback below.")
+
+if state.state == "done":
+    st.markdown(review.read_review(rid))
+elif state.state == "running":
+    st.info("Review is running in Claude Code… click **Refresh** in a bit.")
+elif state.state == "failed":
+    st.error("Review failed. Log tail:")
+    st.code(state.detail or "(no log)")
+else:
+    st.caption("No review yet.")
+
+with st.expander("Run the review manually"):
+    st.markdown(review.manual_instructions(rid))
