@@ -97,7 +97,10 @@ with st.form("run"):
         help="Run one symbol (typed below) or a whole ticker list from tickers/*.json.",
     )
     ticker = c1.text_input("Symbol", value=defaults.symbol.ticker, help=f"Used when Symbols = {_SINGLE}.")
-    cash = c1.number_input("Starting cash", value=float(defaults.starting_cash), step=1000.0)
+    cash = c1.number_input(
+        "Starting cash", value=float(defaults.starting_cash), step=1000.0,
+        help="For a universe, this is the TOTAL — split equally across the symbols.",
+    )
     start = c2.date_input("Start", value=defaults.start.date())
     end = c3.date_input("End", value=defaults.end.date())
     st.caption(f"Timeframes: {', '.join(str(tf) for tf in defaults.timeframes)}")
@@ -172,7 +175,10 @@ if mode == "batch" and batch is not None:
     view = st.selectbox("Equity curve, metrics & review for", ["Combined portfolio", *batch.results])
     if view == "Combined portfolio":
         result = batch.combined_result()
-        st.caption("The basket as one portfolio — equal capital per symbol, run independently and summed.")
+        st.caption(
+            "The basket as one portfolio — starting cash split equally across symbols, "
+            "run independently and summed."
+        )
     else:
         result = batch.results[view]
     rid = review.run_id(result.to_dict())

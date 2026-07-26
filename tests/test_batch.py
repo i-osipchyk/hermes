@@ -112,6 +112,54 @@ def test_combined_result_pools_all_trades():
     assert len(combined.equity_curve) > 0
 
 
+# --- run_universe splits the total cash across tickers ---------------------
+
+_UNIVERSE_STRATEGY = '''
+from datetime import datetime, timezone, timedelta
+from hermes import Backtest, Strategy, Symbol, Timeframe
+from hermes.core import Bar, CryptoPair
+from hermes.data import InMemorySource
+
+H1 = Timeframe.parse("1h")
+
+
+class S(Strategy):
+    def setup(self): ...
+    def on_bar(self, bar): ...
+
+
+def build_backtest(**overrides):
+    inst = CryptoPair(Symbol("X", "binance"), base_asset="X", quote_currency="USDT", tick_size=0.01)
+    t0 = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    bars = [Bar(t0 + timedelta(hours=i), H1, 100, 100, 100, 100, 1.0) for i in range(4)]
+    bt = Backtest(strategy=S(), source=InMemorySource(inst, {H1: bars}),
+                  symbol=Symbol("X", "binance"), timeframes=[H1])
+    for k, v in overrides.items():
+        setattr(bt, k, v)
+    return bt
+'''
+
+
+def test_run_universe_splits_total_cash(tmp_path):
+    from hermes.webui import discovery
+
+    sdir = tmp_path / "strategies"
+    sdir.mkdir()
+    (sdir / "u.py").write_text(_UNIVERSE_STRATEGY)
+    entry = discovery.discover(sdir)[0]
+
+    batch = discovery.run_universe(
+        entry, tickers=["A", "B"], source_name=None,
+        start=datetime(2023, 1, 1, tzinfo=UTC), end=datetime(2023, 1, 1, 3, tzinfo=UTC),
+        starting_cash=1_000,
+    )
+    # each sleeve funded with total / N = 500
+    for r in batch.results.values():
+        assert r.equity_curve[0][1] == 500.0
+    # combined portfolio starts at the full total
+    assert batch.combined_equity_curve()[0][1] == 1_000.0
+
+
 # --- universe (ticker list) loading ----------------------------------------
 
 def test_universe_loading(tmp_path):

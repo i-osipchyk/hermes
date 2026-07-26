@@ -119,13 +119,19 @@ def run_universe(
     params: dict | None = None,
     progress=None,
 ):
-    """Run the strategy independently on each ticker and collect a BatchResult."""
+    """Run the strategy independently on each ticker and collect a BatchResult.
+
+    ``starting_cash`` is the total for the whole batch — it is split equally across the
+    tickers, so each sleeve is funded with ``starting_cash / len(tickers)`` and the
+    combined portfolio starts at ``starting_cash``."""
     from ..backtest import run_batch
+
+    per_ticker = starting_cash / len(tickers) if tickers else starting_cash
 
     def build(ticker: str):
         return configured_backtest(
             entry, source_name=source_name, ticker=ticker,
-            start=start, end=end, starting_cash=starting_cash, params=params,
+            start=start, end=end, starting_cash=per_ticker, params=params,
         )
 
     return run_batch(tickers, build, progress=progress)
