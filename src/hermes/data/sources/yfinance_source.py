@@ -70,6 +70,9 @@ class YFinanceSource(DataSource):
         if df.empty:
             return []
         df = _split_adjust(df)
+        # yfinance can return a stray NaN row (e.g. a partial current/holiday day);
+        # dropping it keeps NaN prices out of the backtest.
+        df = df.dropna(subset=["Open", "High", "Low", "Close"])
 
         bars = []
         for ts, row in df.iterrows():
