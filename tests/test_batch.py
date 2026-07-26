@@ -73,6 +73,45 @@ def test_batch_summary_and_aggregate():
     assert agg["errors"] == 0
 
 
+# --- combined portfolio (basket as one) ------------------------------------
+
+def test_combined_equity_curve_sums_symbols():
+    from hermes.backtest import BatchResult
+    from hermes.backtest.result import BacktestResult
+
+    t0, t1 = T0, T0 + timedelta(hours=1)
+    a = BacktestResult.compute([(t0, 100.0), (t1, 110.0)], [])
+    b = BacktestResult.compute([(t0, 100.0), (t1, 90.0)], [])
+    batch = BatchResult(results={"A": a, "B": b})
+
+    curve = batch.combined_equity_curve()
+    assert curve[0][1] == 200.0            # 100 + 100
+    assert curve[1][1] == 200.0            # 110 + 90
+    assert batch.combined_result().metrics.total_return == 0.0  # 200 -> 200
+
+
+def test_combined_forward_fills_misaligned_timestamps():
+    from hermes.backtest import BatchResult
+    from hermes.backtest.result import BacktestResult
+
+    t0, t1, t2 = T0, T0 + timedelta(hours=1), T0 + timedelta(hours=2)
+    a = BacktestResult.compute([(t0, 100.0), (t2, 120.0)], [])   # no point at t1
+    b = BacktestResult.compute([(t1, 100.0), (t2, 80.0)], [])    # starts at t1
+    batch = BatchResult(results={"A": a, "B": b})
+
+    by_ts = dict(batch.combined_equity_curve())
+    assert by_ts[t0] == 200.0   # A=100, B back-filled to its start 100
+    assert by_ts[t1] == 200.0   # A carried 100, B=100
+    assert by_ts[t2] == 200.0   # 120 + 80
+
+
+def test_combined_result_pools_all_trades():
+    batch = run_batch(["AAA", "BBB"], _build)
+    combined = batch.combined_result()
+    assert combined.metrics.num_trades == 2          # both symbols' trades pooled
+    assert len(combined.equity_curve) > 0
+
+
 # --- universe (ticker list) loading ----------------------------------------
 
 def test_universe_loading(tmp_path):

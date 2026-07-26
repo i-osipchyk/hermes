@@ -153,10 +153,10 @@ result = None
 
 if mode == "batch" and batch is not None:
     agg = batch.aggregate()
-    st.subheader("Universe results")
+    st.subheader("Universe scan — by symbol")
     a = st.columns(5)
     a[0].metric("Symbols", agg["symbols"])
-    a[1].metric("Mean return", _fmt_pct(agg["mean_return"]))
+    a[1].metric("Mean return / symbol", _fmt_pct(agg["mean_return"]))
     a[2].metric("Median Sharpe", _fmt_num(agg["median_sharpe"]))
     a[3].metric("% profitable", _fmt_pct(agg["pct_profitable"]))
     a[4].metric("Total trades", agg["total_trades"])
@@ -167,9 +167,14 @@ if mode == "batch" and batch is not None:
                 st.write(f"**{t}** — {e}")
     if not batch.results:
         st.stop()
-    st.subheader("Inspect a symbol")
-    pick = st.selectbox("Symbol", list(batch.results))
-    result = batch.results[pick]
+
+    st.divider()
+    view = st.selectbox("Equity curve, metrics & review for", ["Combined portfolio", *batch.results])
+    if view == "Combined portfolio":
+        result = batch.combined_result()
+        st.caption("The basket as one portfolio — equal capital per symbol, run independently and summed.")
+    else:
+        result = batch.results[view]
     rid = review.run_id(result.to_dict())
     review.write_result(result.to_dict(), rid)
     st.session_state["rid"] = rid

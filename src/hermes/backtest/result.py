@@ -108,12 +108,15 @@ def _metrics(equity_curve, trades) -> Metrics:
                 if dstd > 0:
                     m.sortino = mean / dstd * math.sqrt(steps_per_year)
 
-        # Time-based CAGR.
+        # Time-based CAGR. Annualising a large return over a tiny span explodes, so
+        # only compute it over a meaningful span and guard the exponentiation.
         span_days = (equity_curve[-1][0] - equity_curve[0][0]).total_seconds() / 86_400
-        if span_days > 0 and start_eq > 0 and end_eq > 0:
+        if span_days >= 1 and start_eq > 0 and end_eq > 0:
             years = span_days / 365.25
-            if years > 0:
+            try:
                 m.cagr = (end_eq / start_eq) ** (1 / years) - 1.0
+            except OverflowError:
+                m.cagr = None
 
         m.max_drawdown = _max_drawdown(equities)
 

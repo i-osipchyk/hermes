@@ -38,6 +38,25 @@ class BatchResult:
             )
         return rows
 
+    def combined_equity_curve(self) -> list[tuple]:
+        """The basket viewed as one portfolio: each symbol funded with equal capital and
+        run independently, its equity summed across the union of timestamps (carried
+        forward between a symbol's points, and held at its starting capital before it
+        begins). Return metrics on this curve are the equal-weight portfolio's."""
+        import pandas as pd
+
+        cols = {sym: pd.Series(dict(r.equity_curve)) for sym, r in self.results.items() if r.equity_curve}
+        if not cols:
+            return []
+        total = pd.DataFrame(cols).sort_index().ffill().bfill().sum(axis=1)
+        return [(ts.to_pydatetime(), float(v)) for ts, v in total.items()]
+
+    def combined_result(self) -> BacktestResult:
+        """A single BacktestResult for the whole basket — combined equity curve + every
+        symbol's trades — so it renders like any other run."""
+        trades = [t for r in self.results.values() for t in r.trades]
+        return BacktestResult.compute(self.combined_equity_curve(), trades)
+
     def aggregate(self) -> dict:
         """Universe-level summary across the per-symbol runs."""
         rets = [r.metrics.total_return for r in self.results.values() if r.metrics.total_return is not None]
