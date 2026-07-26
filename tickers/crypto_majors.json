@@ -1,0 +1,4 @@
+{
+  "source": "binance-futures",
+  "tickers": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+}

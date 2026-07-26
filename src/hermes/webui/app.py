@@ -12,10 +12,12 @@ from datetime import UTC, datetime, time
 import plotly.graph_objects as go
 import streamlit as st
 
-from hermes.webui import discovery, review, sources
+from hermes.webui import discovery, review, sources, universes
 
 st.set_page_config(page_title="Hermes Backtester", layout="wide")
 st.title("Hermes — backtesting")
+
+_SINGLE = "— single symbol —"
 
 
 def _fmt_pct(x):
@@ -97,7 +99,12 @@ with st.form("run"):
         index=src_names.index(defaults.source.name) if defaults.source.name in src_names else 0,
         help="Data provider for the symbol. cTrader/Pepperstone needs CTRADER_* env credentials.",
     )
-    ticker = c1.text_input("Symbol", value=defaults.symbol.ticker)
+    universe = c1.selectbox(
+        "Symbols",
+        [_SINGLE, *universes.universe_names()],
+        help="Run one symbol (typed below) or a whole ticker list from tickers/*.json.",
+    )
+    ticker = c1.text_input("Symbol", value=defaults.symbol.ticker, help=f"Used when Symbols = {_SINGLE}.")
     cash = c1.number_input("Starting cash", value=float(defaults.starting_cash), step=1000.0)
     start = c2.date_input("Start", value=defaults.start.date())
     end = c3.date_input("End", value=defaults.end.date())
@@ -116,41 +123,75 @@ with st.form("run"):
     run = st.form_submit_button("Run backtest", type="primary")
 
 if run:
-    bt = discovery.configured_backtest(
-        entry,
-        source_name=source_name,
-        ticker=ticker,
-        start=datetime.combine(start, time(), tzinfo=UTC),
-        end=datetime.combine(end, time(), tzinfo=UTC),
-        starting_cash=cash,
-        params=param_values,
-    )
-    try:
-        with st.spinner("Running backtest… (first run may fetch data)"):
-            result = bt.run()
-    except Exception as exc:  # surface fetch/provider errors cleanly instead of a traceback
-        st.error(f"Backtest failed on source `{source_name}` / `{ticker}`: {exc}")
-        st.stop()
-    rid = review.run_id(result.to_dict())
-    review.write_result(result.to_dict(), rid)
-    review.save_last_rid(rid)
-    st.session_state["result"] = result
-    st.session_state["rid"] = rid
-    st.session_state["ai"] = entry.is_ai_generated
-    # No automatic review — it's on-demand only (see the button below) so a backtest
-    # never spends Claude tokens unless you ask for one.
+    start_dt = datetime.combine(start, time(), tzinfo=UTC)
+    end_dt = datetime.combine(end, time(), tzinfo=UTC)
+    if universe == _SINGLE:
+        bt = discovery.configured_backtest(
+            entry, source_name=source_name, ticker=ticker,
+            start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
+        )
+        try:
+            with st.spinner("Running backtest… (first run may fetch data)"):
+                result = bt.run()
+        except Exception as exc:  # surface fetch/provider errors cleanly, not a traceback
+            st.error(f"Backtest failed on source `{source_name}` / `{ticker}`: {exc}")
+            st.stop()
+        rid = review.run_id(result.to_dict())
+        review.write_result(result.to_dict(), rid)
+        review.save_last_rid(rid)
+        st.session_state.update(result=result, rid=rid, ai=entry.is_ai_generated, mode="single")
+        st.session_state.pop("batch", None)
+    else:
+        src_override, tickers = universes.load_universe(universe)
+        bar = st.progress(0.0, f"Running {universe} ({len(tickers)} symbols)…")
+        batch = discovery.run_universe(
+            entry, tickers=tickers, source_name=src_override or source_name,
+            start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
+            progress=lambda done, total: bar.progress(done / max(total, 1), f"Backtesting {done}/{total}…"),
+        )
+        bar.empty()
+        st.session_state.update(batch=batch, mode="batch")
+        st.session_state.pop("result", None)
 
 # --- results ---------------------------------------------------------------
 
-result = st.session_state.get("result")
-rid = st.session_state.get("rid")
-if result is None:
-    rid = rid or review.load_last_rid()
-    if rid:
-        result = review.load_result(rid)
-    if result is None:
+mode = st.session_state.get("mode")
+batch = st.session_state.get("batch")
+result = None
+
+if mode == "batch" and batch is not None:
+    agg = batch.aggregate()
+    st.subheader("Universe results")
+    a = st.columns(5)
+    a[0].metric("Symbols", agg["symbols"])
+    a[1].metric("Mean return", _fmt_pct(agg["mean_return"]))
+    a[2].metric("Median Sharpe", _fmt_num(agg["median_sharpe"]))
+    a[3].metric("% profitable", _fmt_pct(agg["pct_profitable"]))
+    a[4].metric("Total trades", agg["total_trades"])
+    st.dataframe(batch.summary_rows(), use_container_width=True, hide_index=True)
+    if batch.errors:
+        with st.expander(f"⚠️ {len(batch.errors)} symbol(s) failed"):
+            for t, e in batch.errors.items():
+                st.write(f"**{t}** — {e}")
+    if not batch.results:
         st.stop()
-    st.info("Showing results from the last run — re-run the backtest above to refresh.")
+    st.subheader("Inspect a symbol")
+    pick = st.selectbox("Symbol", list(batch.results))
+    result = batch.results[pick]
+    rid = review.run_id(result.to_dict())
+    review.write_result(result.to_dict(), rid)
+    st.session_state["rid"] = rid
+else:
+    result = st.session_state.get("result")
+    rid = st.session_state.get("rid")
+    if result is None:
+        rid = rid or review.load_last_rid()
+        if rid:
+            result = review.load_result(rid)
+        if result is None:
+            st.stop()
+        st.info("Showing results from the last run — re-run the backtest above to refresh.")
+
 m = result.metrics
 
 st.subheader("Metrics")

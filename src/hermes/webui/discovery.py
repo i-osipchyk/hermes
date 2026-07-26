@@ -106,3 +106,26 @@ def configured_backtest(
         starting_cash=starting_cash,
         params=params or {},
     )
+
+
+def run_universe(
+    entry: StrategyEntry,
+    *,
+    tickers: list[str],
+    source_name: str | None,
+    start: datetime,
+    end: datetime,
+    starting_cash: float,
+    params: dict | None = None,
+    progress=None,
+):
+    """Run the strategy independently on each ticker and collect a BatchResult."""
+    from ..backtest import run_batch
+
+    def build(ticker: str):
+        return configured_backtest(
+            entry, source_name=source_name, ticker=ticker,
+            start=start, end=end, starting_cash=starting_cash, params=params,
+        )
+
+    return run_batch(tickers, build, progress=progress)

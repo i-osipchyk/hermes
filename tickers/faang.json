@@ -1,0 +1,4 @@
+{
+  "source": "yfinance",
+  "tickers": ["AAPL", "AMZN", "META", "NFLX", "GOOGL"]
+}
