@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Hermes local caches (data + AI responses) — never commit
+.hermes_cache/
+*.parquet
+
+# Secrets
+.env
+*.key
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Local Claude Code settings
+.claude/

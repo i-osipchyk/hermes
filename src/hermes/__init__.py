@@ -1,0 +1,79 @@
+"""Hermes — a framework for developing, backtesting, and deploying intraday/swing
+trading strategies on candlestick data.
+
+See ``CONTEXT.md`` for the ubiquitous language and ``docs/adr/`` for the load-bearing
+architectural decisions. The public surface below is the intended entry point for
+strategy authors.
+"""
+
+from __future__ import annotations
+
+__version__ = "0.0.1"
+
+from .ai import AdvisorDecision, AIAdvisor, AIProvider, ClaudeProvider
+from .backtest import Backtest, BacktestResult
+from .core import (
+    AssetClass,
+    Bar,
+    Cfd,
+    CryptoPair,
+    Instrument,
+    PriceBasis,
+    SessionCalendar,
+    Stock,
+    Symbol,
+    Timeframe,
+)
+from .data import BinanceSource, DataSource, PepperstoneSource, YFinanceSource
+from .execution import Order, OrderType, Position, Side, Trade
+from .indicators import ATR, EMA, MACD, RSI, SMA, BollingerBands, Indicator
+from .strategy import NotionalCash, Parameter, RiskCash, RiskPercent, Strategy, Units
+
+__all__ = [
+    "__version__",
+    # core
+    "Bar",
+    "Timeframe",
+    "Symbol",
+    "Instrument",
+    "Stock",
+    "CryptoPair",
+    "Cfd",
+    "AssetClass",
+    "PriceBasis",
+    "SessionCalendar",
+    # data
+    "DataSource",
+    "YFinanceSource",
+    "BinanceSource",
+    "PepperstoneSource",
+    # indicators
+    "Indicator",
+    "SMA",
+    "EMA",
+    "RSI",
+    "ATR",
+    "MACD",
+    "BollingerBands",
+    # strategy
+    "Strategy",
+    "Parameter",
+    "Units",
+    "NotionalCash",
+    "RiskCash",
+    "RiskPercent",
+    # execution
+    "Order",
+    "OrderType",
+    "Side",
+    "Trade",
+    "Position",
+    # ai
+    "AIAdvisor",
+    "AIProvider",
+    "AdvisorDecision",
+    "ClaudeProvider",
+    # backtest
+    "Backtest",
+    "BacktestResult",
+]
