@@ -71,6 +71,14 @@ def default_config(entry: StrategyEntry) -> Backtest:
     return entry.build_backtest()
 
 
+def declared_parameters(entry: StrategyEntry):
+    """The strategy's tunable Parameters (specs), by running ``setup()`` on a fresh
+    instance. Returns ``list[Parameter]`` the UI renders as editable controls."""
+    strat = entry.build_backtest().strategy
+    strat.setup()
+    return strat.declared_parameters()
+
+
 def configured_backtest(
     entry: StrategyEntry,
     *,
@@ -78,8 +86,10 @@ def configured_backtest(
     start: datetime,
     end: datetime,
     starting_cash: float,
+    params: dict | None = None,
 ) -> Backtest:
-    """Build a fresh Backtest (new Strategy instance) with the form's overrides."""
+    """Build a fresh Backtest (new Strategy instance) with the form's overrides —
+    ticker, dates, cash, and strategy Parameter overrides."""
     bt = entry.build_backtest()
     return replace(
         bt,
@@ -87,4 +97,5 @@ def configured_backtest(
         start=start,
         end=end,
         starting_cash=starting_cash,
+        params=params or {},
     )

@@ -36,6 +36,7 @@ class Strategy(ABC):
     def __init__(self) -> None:
         self._indicators: list[Indicator] = []
         self._params: dict[str, object] = {}
+        self._param_specs: dict[str, Parameter] = {}
         self._view = None           # MultiTimeframeView, set by the engine
         self._current_bar: Bar | None = None
         self.venue = None
@@ -70,9 +71,16 @@ class Strategy(ABC):
         before any data flows."""
 
     def param(self, spec: Parameter):
-        """Declare a tunable Parameter and return its current value."""
+        """Declare a tunable Parameter and return its current value (an override seeded
+        by the engine if present, else the default)."""
+        self._param_specs[spec.name] = spec
         self._params.setdefault(spec.name, spec.default)
         return self._params[spec.name]
+
+    def declared_parameters(self) -> list[Parameter]:
+        """The Parameter specs this strategy declared in :meth:`setup` — what a UI
+        renders as editable controls. Requires ``setup()`` to have run."""
+        return list(self._param_specs.values())
 
     def use(self, indicator: Indicator) -> Indicator:
         """Register an Indicator so the engine updates it each Base step and sizes

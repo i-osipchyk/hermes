@@ -26,6 +26,26 @@ def _fmt_num(x):
     return "—" if x is None else f"{x:.2f}"
 
 
+def _param_widget(spec):
+    """Render an editable control for a declared strategy Parameter; return its value."""
+    label = spec.description or spec.name
+    key = f"p_{spec.name}"
+    if spec.choices:
+        default = spec.default if spec.default in spec.choices else spec.choices[0]
+        return st.selectbox(label, list(spec.choices), index=list(spec.choices).index(default), key=key)
+    if isinstance(spec.default, bool):
+        return st.checkbox(label, value=spec.default, key=key)
+    cast = int if isinstance(spec.default, int) else float
+    kw = {}
+    if spec.bounds:
+        kw["min_value"], kw["max_value"] = cast(spec.bounds[0]), cast(spec.bounds[1])
+    if isinstance(spec.default, int):
+        return int(st.number_input(label, value=spec.default, step=1, key=key, **kw))
+    if isinstance(spec.default, float):
+        return float(st.number_input(label, value=float(spec.default), key=key, **kw))
+    return st.text_input(label, value=str(spec.default), key=key)
+
+
 def _equity_figure(result):
     ts = [t for t, _ in result.equity_curve]
     eq = [e for _, e in result.equity_curve]
@@ -67,6 +87,7 @@ if entry.is_ai_generated:
 # --- config form (pre-filled from the strategy's defaults) -----------------
 
 defaults = discovery.default_config(entry)
+param_specs = discovery.declared_parameters(entry)
 with st.form("run"):
     c1, c2, c3 = st.columns(3)
     ticker = c1.text_input("Symbol", value=defaults.symbol.ticker)
@@ -77,6 +98,15 @@ with st.form("run"):
         f"Source: `{defaults.source.name}` · timeframes: "
         f"{', '.join(str(tf) for tf in defaults.timeframes)}"
     )
+
+    param_values: dict = {}
+    if param_specs:
+        st.markdown("**Parameters**")
+        pcols = st.columns(min(len(param_specs), 3))
+        for i, spec in enumerate(param_specs):
+            with pcols[i % len(pcols)]:
+                param_values[spec.name] = _param_widget(spec)
+
     run = st.form_submit_button("Run backtest", type="primary")
 
 if run:
@@ -86,6 +116,7 @@ if run:
         start=datetime.combine(start, time(), tzinfo=UTC),
         end=datetime.combine(end, time(), tzinfo=UTC),
         starting_cash=cash,
+        params=param_values,
     )
     with st.spinner("Running backtest… (first run may fetch data)"):
         result = bt.run()

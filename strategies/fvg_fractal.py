@@ -28,6 +28,7 @@ from hermes import (
     Fractals,
     Order,
     OrderType,
+    Parameter,
     RiskPercent,
     Strategy,
     Symbol,
@@ -39,8 +40,6 @@ GENERATED_BY = "hermes-strategy"
 
 M15 = Timeframe.parse("15m")
 H1 = Timeframe.parse("1h")
-
-_MAX_RENEWALS = 2
 
 
 @dataclass
@@ -67,6 +66,17 @@ class _FVGRecord:
 class FvgFractalStrategy(Strategy):
 
     def setup(self) -> None:
+        # Tunable parameters (editable in the web UI without a new strategy file).
+        self._rr = self.param(
+            Parameter("rr", 2.0, bounds=(1.0, 5.0), description="Reward:risk target")
+        )
+        self._max_renewals = self.param(
+            Parameter("max_renewals", 2, bounds=(0, 5), description="Max TP renewals")
+        )
+        self._risk_pct = self.param(
+            Parameter("risk_pct", 0.01, bounds=(0.001, 0.05), description="Risk per trade")
+        )
+
         # Registered so the engine computes the correct Lead-in length.
         self._fvg_ind = self.use(FairValueGap(H1))
         self._frac_ind = self.use(Fractals(M15))
@@ -174,8 +184,8 @@ class FvgFractalStrategy(Strategy):
     # ── entry computation ─────────────────────────────────────────────────────
 
     def _long_entry(self, sl, tp, top, bottom) -> float | None:
-        """Entry for bullish long: place at 2RR level, or FVG top if 2RR is above it."""
-        e = (tp + 2 * sl) / 3
+        """Entry for bullish long: place at the RR level, or FVG top if RR is above it."""
+        e = (tp + self._rr * sl) / (self._rr + 1)
         if e > top:
             return top      # FVG top gives better than 2RR — use it
         if e > bottom:
@@ -183,8 +193,8 @@ class FvgFractalStrategy(Strategy):
         return None         # 2RR level is below the FVG — unachievable inside it
 
     def _short_entry(self, sl, tp, top, bottom) -> float | None:
-        """Entry for bearish short: place at 2RR level, or FVG top if 2RR is below bottom."""
-        e = (tp + 2 * sl) / 3
+        """Entry for bearish short: place at the RR level, or FVG top if RR is below bottom."""
+        e = (tp + self._rr * sl) / (self._rr + 1)
         if e < bottom:
             return top      # FVG top gives better than 2RR — use it
         if e < top:
@@ -196,7 +206,7 @@ class FvgFractalStrategy(Strategy):
     def _place_order(self, rec: _FVGRecord) -> None:
         if rec.bullish:
             rec.order = self.buy(
-                RiskPercent(0.01),
+                RiskPercent(self._risk_pct),
                 type=OrderType.LIMIT,
                 limit=rec.entry,
                 stop_loss=rec.sl,
@@ -205,7 +215,7 @@ class FvgFractalStrategy(Strategy):
             )
         else:
             rec.order = self.sell(
-                RiskPercent(0.01),
+                RiskPercent(self._risk_pct),
                 type=OrderType.LIMIT,
                 limit=rec.entry,
                 stop_loss=rec.sl,
@@ -244,7 +254,7 @@ class FvgFractalStrategy(Strategy):
                 if rec.order is not None:
                     self.venue.cancel(rec.order)
                     rec.order = None
-                if rec.renewal_count < _MAX_RENEWALS:
+                if rec.renewal_count < self._max_renewals:
                     rec.awaiting_renewal = True
                 else:
                     rec.done = True
