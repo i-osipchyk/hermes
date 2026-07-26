@@ -175,3 +175,77 @@ class BollingerBands(Indicator):
             "middle": mean,
             "lower": mean - self.num_std * std,
         }
+
+
+class Fractals(Indicator):
+    """Williams-style fractals over a 3-bar window (user-defined conditions).
+
+    For a candidate candle ``i`` (the middle of the last triple), with ``i-1`` and
+    ``i+1`` as its neighbours:
+
+    * **down** fractal (a swing low, based on lows):
+      ``low[i-1] > low[i]`` and ``low[i+1] >= low[i]``
+    * **up** fractal (a swing high, based on highs):
+      ``high[i-1] < high[i]`` and ``high[i+1] >= high[i]``
+
+    Because a fractal needs its right neighbour, the candidate is ``bars[-2]`` and the
+    result confirms with a **1-bar lag** (using the possibly-forming ``bars[-1]`` as
+    ``i+1``, per the repaint-but-parity-safe model, ADR-0002). Outputs are 1.0/0.0.
+
+    Note the asymmetry in the ``up`` condition (right side is ``>=``, as specified) — it
+    is not a strict local maximum; ``down`` is a strict local minimum.
+    """
+
+    @property
+    def lookback(self) -> int:
+        return 3
+
+    @property
+    def outputs(self) -> tuple[str, ...]:
+        return ("up", "down")
+
+    def compute(self, bars: list[Bar]) -> dict[str, float | None]:
+        if len(bars) < 3:
+            return {"up": None, "down": None}
+        prev, cand, nxt = bars[-3], bars[-2], bars[-1]  # i-1, i, i+1
+        up = prev.high < cand.high and nxt.high >= cand.high
+        down = prev.low > cand.low and nxt.low >= cand.low
+        return {"up": 1.0 if up else 0.0, "down": 1.0 if down else 0.0}
+
+
+class FairValueGap(Indicator):
+    """Fair Value Gap (3-candle imbalance).
+
+    Over the last triple (``c1``, ``c2``, ``c3`` = ``bars[-3:]``), the gap is defined by
+    the outer candles and located at the middle candle ``c2``:
+
+    * **bullish** FVG when ``c1.high < c3.low`` — an up-gap zone ``[c1.high, c3.low]``
+    * **bearish** FVG when ``c1.low > c3.high`` — a down-gap zone ``[c3.high, c1.low]``
+
+    Confirms with a **1-bar lag** (needs ``c3``; ``bars[-1]`` may be the Forming Bar).
+    Outputs: ``bullish``/``bearish`` (1.0/0.0) and the gap boundaries ``top``/``bottom``
+    (``None`` when no gap), so a strategy can react to the zone.
+    """
+
+    @property
+    def lookback(self) -> int:
+        return 3
+
+    @property
+    def outputs(self) -> tuple[str, ...]:
+        return ("bullish", "bearish", "top", "bottom")
+
+    def compute(self, bars: list[Bar]) -> dict[str, float | None]:
+        none = {"bullish": None, "bearish": None, "top": None, "bottom": None}
+        if len(bars) < 3:
+            return none
+        c1, _c2, c3 = bars[-3], bars[-2], bars[-1]
+        if c1.high < c3.low:
+            return {"bullish": 1.0, "bearish": 0.0, "top": c3.low, "bottom": c1.high}
+        if c1.low > c3.high:
+            return {"bullish": 0.0, "bearish": 1.0, "top": c1.low, "bottom": c3.high}
+        return {"bullish": 0.0, "bearish": 0.0, "top": None, "bottom": None}
+
+
+# `fvg` is the common shorthand.
+FVG = FairValueGap

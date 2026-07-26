@@ -33,7 +33,18 @@ from .data import (
 )
 from .data._ssl import ensure_system_trust as use_system_certs
 from .execution import Order, OrderType, Position, Side, Trade
-from .indicators import ATR, EMA, MACD, RSI, SMA, BollingerBands, Indicator
+from .indicators import (
+    ATR,
+    EMA,
+    FVG,
+    MACD,
+    RSI,
+    SMA,
+    BollingerBands,
+    FairValueGap,
+    Fractals,
+    Indicator,
+)
 from .skilltools import install_skills
 from .strategy import NotionalCash, Parameter, RiskCash, RiskPercent, Strategy, Units
 
@@ -64,6 +75,9 @@ __all__ = [
     "ATR",
     "MACD",
     "BollingerBands",
+    "Fractals",
+    "FairValueGap",
+    "FVG",
     # strategy
     "Strategy",
     "Parameter",
