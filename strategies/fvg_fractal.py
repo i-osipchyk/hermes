@@ -38,6 +38,9 @@ from hermes.data import BinanceFuturesSource
 
 GENERATED_BY = "hermes-strategy"
 
+# Any subset is valid — each is an integer multiple of the finest selected (the base).
+_TF_CHOICES = ("5m", "15m", "30m", "1h", "2h", "4h", "1d")
+
 
 @dataclass
 class _FVGRecord:
@@ -65,13 +68,13 @@ class FvgFractalStrategy(Strategy):
     def setup(self) -> None:
         # Timeframes are Parameters too — editable in the UI like any other knob.
         self._fractal_tf = self.timeframe_param(
-            "fractal_tf", "15m", choices=("5m", "15m", "30m"), description="Fractal timeframe"
+            "fractal_tf", "15m", choices=_TF_CHOICES, description="Fractal timeframe"
         )
         self._fvg_tf = self.timeframe_param(
-            "fvg_tf", "1h", choices=("15m", "30m", "1h", "2h", "4h"), description="FVG timeframe"
+            "fvg_tf", "1h", choices=_TF_CHOICES, description="FVG timeframe"
         )
         self._trend_tf = self.timeframe_param(
-            "trend_tf", "4h", choices=("1h", "2h", "4h", "1d"), description="Trend EMA timeframe"
+            "trend_tf", "4h", choices=_TF_CHOICES, description="Trend EMA timeframe"
         )
 
         # Tunable parameters (editable in the web UI without a new strategy file).
