@@ -130,6 +130,39 @@ def _bar_15m(i, price):
     return Bar(ts, Timeframe.parse("15m"), price, price + 1, price - 1, price, 1.0)
 
 
+class OpenThenSignalClose(Strategy):
+    """Buy once (fills next open), then signal-close on the following bar."""
+
+    def setup(self):
+        self.opened = False
+
+    def on_bar(self, bar):
+        if not self.opened and self.venue.position().is_flat:
+            self.buy(1)
+            self.opened = True
+        elif not self.venue.position().is_flat:
+            for t in self.venue.open_trades():
+                self.close(t)
+
+
+def test_signal_close_exit_time_is_the_fill_bar_not_stale():
+    # Regression: a signal-close must be stamped with the bar it fills on, not the
+    # stale _last_bar (which produced zero-duration trades).
+    bars = [_bar(i, 100, 100, 100, 100) for i in range(5)]
+    src = InMemorySource(_btc(), {H1: bars})
+    bt = Backtest(
+        strategy=OpenThenSignalClose(), source=src, symbol=Symbol("BTCUSDT", "binance"),
+        timeframes=[H1], start=bars[0].timestamp, end=bars[-1].timestamp,
+        cost_model=_zero_costs(),
+    )
+    result = bt.run()
+    assert len(result.trades) == 1
+    t = result.trades[0]
+    assert t.entry_time == bars[1].timestamp    # market submitted bar0, fills bar1 open
+    assert t.exit_time == bars[2].timestamp     # close decided bar1, fills bar2 open
+    assert t.exit_time > t.entry_time           # never zero-duration
+
+
 def test_sl_tp_clash_defaults_to_stop_first():
     bars = [
         _bar(0, 100, 100, 100, 100),

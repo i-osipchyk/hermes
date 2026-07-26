@@ -59,7 +59,7 @@ class SimulatedVenue(ExecutionVenue):
 
         # 2. Exits decided on the previous bar fill at this bar's open.
         for trade in list(self._pending_closes):
-            self._close_trade(trade, bar.open, "signal")
+            self._close_trade(trade, bar.open, "signal", bar.timestamp)
         self._pending_closes.clear()
 
         # 3. SL/TP on trades that were already open at the start of this bar.
@@ -67,7 +67,7 @@ class SimulatedVenue(ExecutionVenue):
             hit = self._check_exit(trade, bar)
             if hit is not None:
                 raw_price, reason = hit
-                self._close_trade(trade, raw_price, reason)
+                self._close_trade(trade, raw_price, reason, bar.timestamp)
 
         # 4. Working orders: market entries fill at open; limit/stop when touched.
         for order in list(self._working):
@@ -228,7 +228,7 @@ class SimulatedVenue(ExecutionVenue):
                         return "take_profit"
         return "stop_loss"
 
-    def _close_trade(self, trade: Trade, raw_price: float, reason: str) -> None:
+    def _close_trade(self, trade: Trade, raw_price: float, reason: str, ts: datetime) -> None:
         if not trade.is_open:
             return
         exit_side = Side.SELL if trade.side is Side.BUY else Side.BUY
@@ -242,7 +242,7 @@ class SimulatedVenue(ExecutionVenue):
         self.account.credit(gross - exit_commission)
 
         trade.exit_price = exit_price
-        trade.exit_time = self._last_bar.timestamp if self._last_bar else trade.entry_time
+        trade.exit_time = ts  # the bar this fill occurs on (not the stale _last_bar)
         trade.exit_reason = reason
         trade.gross_pnl = gross
         trade.costs = (trade.costs or 0.0) + exit_commission

@@ -31,6 +31,7 @@ from .data import (
     PepperstoneSource,
     YFinanceSource,
 )
+from .data._ssl import ensure_system_trust as use_system_certs
 from .execution import Order, OrderType, Position, Side, Trade
 from .indicators import ATR, EMA, MACD, RSI, SMA, BollingerBands, Indicator
 from .skilltools import install_skills
@@ -86,4 +87,5 @@ __all__ = [
     "BacktestResult",
     # tooling
     "install_skills",
+    "use_system_certs",
 ]

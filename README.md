@@ -52,6 +52,10 @@ src/hermes/
 pip install -e ".[dev,yfinance,binance,ai,report]"
 ```
 
+Behind a **corporate TLS proxy** (self-signed root in the chain)? Data fetches trust the
+OS certificate store automatically via `truststore` — no `SSL_CERT_FILE` needed. Opt out
+with `HERMES_NO_TRUSTSTORE=1`.
+
 ## Status
 
 **Usable.** The core is implemented and tested (28 tests):

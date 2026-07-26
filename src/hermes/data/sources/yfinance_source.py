@@ -16,6 +16,7 @@ from datetime import UTC, datetime, time
 from zoneinfo import ZoneInfo
 
 from ...core import Bar, Instrument, SessionCalendar, Stock, Symbol, Timeframe
+from .._ssl import ensure_system_trust
 from ..cache import BarCache
 from ..source import DataSource
 
@@ -53,6 +54,7 @@ class YFinanceSource(DataSource):
     # --- internals -------------------------------------------------------------
 
     def _fetch(self, ticker: str, timeframe: Timeframe, start: datetime, end: datetime) -> list[Bar]:
+        ensure_system_trust()  # trust the OS store (corporate proxies) before any fetch
         try:
             import yfinance as yf
         except ImportError as e:  # pragma: no cover

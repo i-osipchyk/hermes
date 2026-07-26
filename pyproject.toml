@@ -17,6 +17,7 @@ dependencies = [
     "numpy>=1.26",
     "pyarrow>=16",          # Parquet cache
     "exchange-calendars>=4.5",  # Session Calendars for stocks/CFDs
+    "truststore>=0.9",      # trust the OS cert store (corporate proxies) for fetches
 ]
 
 [project.optional-dependencies]

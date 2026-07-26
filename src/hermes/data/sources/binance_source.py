@@ -13,6 +13,7 @@ import urllib.request
 from datetime import UTC, datetime
 
 from ...core import Bar, CryptoPair, Instrument, Symbol, Timeframe
+from .._ssl import ensure_system_trust
 from ..cache import BarCache
 from ..source import DataSource
 
@@ -88,6 +89,7 @@ class BinanceSource(DataSource):
         return out
 
     def _get(self, path: str, params: dict) -> object:
+        ensure_system_trust()  # trust the OS store (corporate proxies) before any fetch
         url = f"{_BASE}{path}?{urllib.parse.urlencode(params)}"
         with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 (public API)
             return json.loads(resp.read().decode())
