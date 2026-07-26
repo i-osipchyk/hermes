@@ -12,7 +12,7 @@ from datetime import UTC, datetime, time
 import plotly.graph_objects as go
 import streamlit as st
 
-from hermes.webui import discovery, review
+from hermes.webui import discovery, review, sources
 
 st.set_page_config(page_title="Hermes Backtester", layout="wide")
 st.title("Hermes — backtesting")
@@ -88,16 +88,22 @@ if entry.is_ai_generated:
 
 defaults = discovery.default_config(entry)
 param_specs = discovery.declared_parameters(entry)
+src_names = sources.source_names()
 with st.form("run"):
     c1, c2, c3 = st.columns(3)
+    source_name = c1.selectbox(
+        "Source",
+        src_names,
+        index=src_names.index(defaults.source.name) if defaults.source.name in src_names else 0,
+        help="Data provider for the symbol. cTrader/Pepperstone needs CTRADER_* env credentials.",
+    )
     ticker = c1.text_input("Symbol", value=defaults.symbol.ticker)
     cash = c1.number_input("Starting cash", value=float(defaults.starting_cash), step=1000.0)
     start = c2.date_input("Start", value=defaults.start.date())
     end = c3.date_input("End", value=defaults.end.date())
-    st.caption(
-        f"Source: `{defaults.source.name}` · timeframes: "
-        f"{', '.join(str(tf) for tf in defaults.timeframes)}"
-    )
+    st.caption(f"Timeframes: {', '.join(str(tf) for tf in defaults.timeframes)}")
+    if source_name in sources.NEEDS_SETUP:
+        st.caption("⚠️ cTrader/Pepperstone needs `CTRADER_*` credentials and its live fetch wired.")
 
     param_values: dict = {}
     if param_specs:
@@ -112,14 +118,19 @@ with st.form("run"):
 if run:
     bt = discovery.configured_backtest(
         entry,
+        source_name=source_name,
         ticker=ticker,
         start=datetime.combine(start, time(), tzinfo=UTC),
         end=datetime.combine(end, time(), tzinfo=UTC),
         starting_cash=cash,
         params=param_values,
     )
-    with st.spinner("Running backtest… (first run may fetch data)"):
-        result = bt.run()
+    try:
+        with st.spinner("Running backtest… (first run may fetch data)"):
+            result = bt.run()
+    except Exception as exc:  # surface fetch/provider errors cleanly instead of a traceback
+        st.error(f"Backtest failed on source `{source_name}` / `{ticker}`: {exc}")
+        st.stop()
     rid = review.run_id(result.to_dict())
     review.write_result(result.to_dict(), rid)
     review.save_last_rid(rid)

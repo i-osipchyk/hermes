@@ -86,14 +86,21 @@ def configured_backtest(
     start: datetime,
     end: datetime,
     starting_cash: float,
+    source_name: str | None = None,
     params: dict | None = None,
 ) -> Backtest:
     """Build a fresh Backtest (new Strategy instance) with the form's overrides —
-    ticker, dates, cash, and strategy Parameter overrides."""
+    source, ticker, dates, cash, and strategy Parameter overrides."""
+    from .sources import build_source
+
     bt = entry.build_backtest()
+    source = (
+        build_source(source_name) if source_name and source_name != bt.source.name else bt.source
+    )
     return replace(
         bt,
-        symbol=Symbol(ticker, bt.source.name),
+        source=source,
+        symbol=Symbol(ticker, source.name),
         start=start,
         end=end,
         starting_cash=starting_cash,
