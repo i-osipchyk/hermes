@@ -81,6 +81,7 @@ def test_manual_instructions_mentions_paths(tmp_path, monkeypatch):
 # --- discovery -------------------------------------------------------------
 
 _STRATEGY_FILE = '''
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from hermes import Backtest, Strategy, Symbol, Timeframe
 from hermes.core import Bar, CryptoPair
@@ -88,6 +89,11 @@ from hermes.data import InMemorySource
 
 GENERATED_BY = "hermes-strategy"
 H1 = Timeframe.parse("1h")
+
+
+@dataclass  # must not crash when loaded via importlib (needs sys.modules registration)
+class Params:
+    fast: int = 10
 
 
 class Buy(Strategy):

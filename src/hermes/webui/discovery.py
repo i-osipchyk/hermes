@@ -9,6 +9,7 @@ Streamlit-free so it stays unit-testable without the ``[ui]`` extra.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,9 @@ class StrategyEntry:
 def _load_module(path: Path):
     spec = importlib.util.spec_from_file_location(f"hermes_strategy_{path.stem}", path)
     module = importlib.util.module_from_spec(spec)
+    # Register before exec: dataclasses/typing resolve a class's module via
+    # sys.modules[cls.__module__], which is None if we never register it.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
