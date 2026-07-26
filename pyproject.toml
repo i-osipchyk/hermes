@@ -46,10 +46,20 @@ dev = [
 ]
 
 [project.scripts]
+hermes = "hermes.cli:main"
 hermes-ui = "hermes.webui.launch:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hermes"]
+
+# Bundle the canonical skills + the docs they reference INTO the wheel (single source
+# of truth stays in the repo). `hermes install-skills` materialises them into a target
+# project. See ADR-0007.
+[tool.hatch.build.targets.wheel.force-include]
+".claude/skills" = "hermes/_skills"
+"CONTEXT.md" = "hermes/_reference/CONTEXT.md"
+"docs/adr" = "hermes/_reference/docs/adr"
+"examples" = "hermes/_reference/examples"
 
 [tool.ruff]
 line-length = 110

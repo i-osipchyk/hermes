@@ -101,6 +101,18 @@ fire on their own in conversation; `hermes-strategy` and `ask-hermes` you invoke
 The skills read the repo's living docs (`CONTEXT.md`, `examples/`, ADRs), so they stay in
 step with the code.
 
+**Using the skills in another project.** Claude Code doesn't auto-load skills from
+installed packages, so they're bundled in the wheel and materialised on demand:
+
+```bash
+pip install hermes
+hermes install-skills          # into ./.claude/skills   (--user for ~/.claude/skills)
+```
+
+This copies the five user-facing skills plus a `hermes-reference/` folder (CONTEXT.md,
+ADRs, the example) the ported skills point at. `hermes-extend` stays repo-only (it targets
+the library's own source).
+
 ## Web UI
 
 A local Streamlit app for running and reviewing backtests (ADR-0008):

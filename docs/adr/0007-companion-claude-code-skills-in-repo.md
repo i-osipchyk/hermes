@@ -22,3 +22,16 @@ rot as the library changes.
   directory, so the committed skills travel with the repo while local settings don't.
 - Naming uses a `hermes-` namespace (plus `ask-hermes`) so the set groups together and
   doesn't collide with a user's global skills.
+
+## Distribution to other projects
+
+Claude Code discovers skills from `.claude/skills/` (project/user) and plugins — **not**
+from installed packages. So the canonical skills at `.claude/skills/` are **force-included
+into the wheel** (`hermes/_skills`, plus `hermes/_reference` = CONTEXT.md + ADRs + example),
+a single source with no committed duplicate. `hermes install-skills` then copies them into
+a target project's `.claude/skills/` (or `~/.claude/skills` with `--user`), alongside a
+`hermes-reference/` docs folder the ported skills point at (via an injected note). Running
+editable, the command falls back to the repo layout so it works before any wheel is built.
+`hermes-extend` is excluded from the portable set — it targets the library's own source and
+only makes sense in the repo. The plugin/marketplace route was considered and deferred: it
+isn't bundled with `pip install`, which was the goal.
