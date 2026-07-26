@@ -1,0 +1,25 @@
+{
+  "source": "yfinance",
+  "tickers": [
+    "BRK-B", "JPM", "BAC", "WFC", "C", "USB", "PNC", "TFC", "RF", "KEY",
+    "GS", "MS", "BK", "STT",
+    "ALL", "CB", "TRV", "AIG", "MET", "PRU", "AFL", "HIG",
+    "XOM", "CVX", "OXY", "COP", "MRO", "APA", "EOG", "DVN",
+    "MPC", "VLO", "PSX", "SLB", "HAL", "BKR",
+    "NUE", "CLF", "FCX", "AA", "STLD", "CMC", "X",
+    "LYB", "DOW", "CF", "MOS",
+    "CAT", "DE", "MMM", "HON", "EMR", "ITW", "ETN", "CMI", "DOV", "PH", "ROK",
+    "GE", "RTX", "LMT", "NOC", "BA",
+    "CSX", "NSC", "FDX",
+    "F", "GM",
+    "WMT", "KO", "PEP", "MCD", "PG", "CL", "KMB", "GIS", "K", "CAG", "HRL", "MO", "PM",
+    "TSN", "CPB", "SJM", "MDLZ", "KHC",
+    "TGT",
+    "DUK", "SO", "D", "NEE", "EXC", "AEP", "XEL", "ED", "PPL",
+    "JNJ", "ABBV", "BMY", "PFE", "MRK", "GILD", "CVS", "CI", "UNH",
+    "ABC", "MCK", "CAH", "HUM", "ELV",
+    "IBM", "CSCO", "INTC", "HPQ", "VZ", "T", "CMCSA",
+    "PARA",
+    "O", "SPG", "VTR", "WPC"
+  ]
+}
