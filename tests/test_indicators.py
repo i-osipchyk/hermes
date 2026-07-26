@@ -86,8 +86,8 @@ def test_fractals_down_swing_low():
 
 
 def test_fractals_up_swing_high():
-    # highs 10, 12, 13 -> prev.high<cand.high and next.high>=cand.high (as specified).
-    bars = _series([(8, 10, 5, 8), (11, 12, 6, 11), (13, 13, 7, 13)])
+    # highs 10, 12, 11 -> a peak: prev.high < cand.high and next.high <= cand.high.
+    bars = _series([(8, 10, 5, 8), (11, 12, 6, 11), (11, 11, 7, 11)])
     out = Fractals(TF).compute(bars)
     assert out["up"] == 1.0 and out["down"] == 0.0
 
@@ -99,11 +99,10 @@ def test_fractals_neither():
     assert out["up"] == 0.0 and out["down"] == 0.0
 
 
-def test_fractals_up_condition_is_asymmetric():
-    # Per the spec, a strictly-rising-highs triple IS an `up` fractal (right side is >=,
-    # not a strict local max). Documented behaviour, pinned here so it can't drift.
+def test_fractals_rising_highs_is_not_up():
+    # A strictly-rising-highs triple is NOT a swing high (the right neighbour exceeds it).
     bars = _series([(1, 2, 0, 1), (1, 3, 1, 2), (1, 4, 2, 3)])
-    assert Fractals(TF).compute(bars)["up"] == 1.0
+    assert Fractals(TF).compute(bars)["up"] == 0.0
 
 
 # --- Fair Value Gap (gap defined by the outer candles of the last triple) ---

@@ -183,17 +183,15 @@ class Fractals(Indicator):
     For a candidate candle ``i`` (the middle of the last triple), with ``i-1`` and
     ``i+1`` as its neighbours:
 
+    * **up** fractal (a swing high, based on highs):
+      ``high[i-1] < high[i]`` and ``high[i+1] <= high[i]``
     * **down** fractal (a swing low, based on lows):
       ``low[i-1] > low[i]`` and ``low[i+1] >= low[i]``
-    * **up** fractal (a swing high, based on highs):
-      ``high[i-1] < high[i]`` and ``high[i+1] >= high[i]``
 
-    Because a fractal needs its right neighbour, the candidate is ``bars[-2]`` and the
-    result confirms with a **1-bar lag** (using the possibly-forming ``bars[-1]`` as
+    Both are local extremes — strict against the left neighbour, ties allowed against the
+    right. Because a fractal needs its right neighbour, the candidate is ``bars[-2]`` and
+    the result confirms with a **1-bar lag** (using the possibly-forming ``bars[-1]`` as
     ``i+1``, per the repaint-but-parity-safe model, ADR-0002). Outputs are 1.0/0.0.
-
-    Note the asymmetry in the ``up`` condition (right side is ``>=``, as specified) — it
-    is not a strict local maximum; ``down`` is a strict local minimum.
     """
 
     @property
@@ -208,7 +206,7 @@ class Fractals(Indicator):
         if len(bars) < 3:
             return {"up": None, "down": None}
         prev, cand, nxt = bars[-3], bars[-2], bars[-1]  # i-1, i, i+1
-        up = prev.high < cand.high and nxt.high >= cand.high
+        up = prev.high < cand.high and nxt.high <= cand.high
         down = prev.low > cand.low and nxt.low >= cand.low
         return {"up": 1.0 if up else 0.0, "down": 1.0 if down else 0.0}
 
