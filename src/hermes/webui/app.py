@@ -91,6 +91,7 @@ if run:
         result = bt.run()
     rid = review.run_id(result.to_dict())
     review.write_result(result.to_dict(), rid)
+    review.save_last_rid(rid)
     st.session_state["result"] = result
     st.session_state["rid"] = rid
     st.session_state["ai"] = entry.is_ai_generated
@@ -100,9 +101,14 @@ if run:
 # --- results ---------------------------------------------------------------
 
 result = st.session_state.get("result")
+rid = st.session_state.get("rid")
 if result is None:
-    st.stop()
-rid = st.session_state["rid"]
+    rid = rid or review.load_last_rid()
+    if rid:
+        result = review.load_result(rid)
+    if result is None:
+        st.stop()
+    st.info("Showing results from the last run — re-run the backtest above to refresh.")
 m = result.metrics
 
 st.subheader("Metrics")

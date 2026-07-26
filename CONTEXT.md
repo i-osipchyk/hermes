@@ -57,7 +57,7 @@ The capital pool behind a Strategy: cash/equity, used vs free margin (per-Instru
 _Avoid_: Wallet, Balance (as the object)
 
 **Cost Model**:
-A pluggable per-Instrument model of trading costs with asset-class defaults, covering four components: **commission** (% for crypto, per-share/flat for stocks, per-lot for CFD), **spread** (bid/ask applied at fill — buy@ask/sell@bid; the dominant cost for CFDs), **slippage** (fixed ticks or %), and **financing/swap** (carry for positions held past a session; a configurable rate, since it isn't in candle data). Overridable per Instrument.
+A pluggable per-Instrument model of trading costs with asset-class defaults, covering four components: **commission** (% for crypto, per-share/flat for stocks, per-lot for CFD; maker/taker-aware), **spread** (bid/ask applied at fill — buy@ask/sell@bid; the dominant cost for CFDs), **slippage** (fixed ticks or %), and **financing/swap** (carry for positions held past a session; a configurable rate, since it isn't in candle data). Costs are **liquidity-aware** (ADR-0009): a resting limit order (limit entry, take-profit) fills as a **maker** — maker fee (possibly a rebate), no slippage/spread; market/stop/signal fills are **takers** — taker fee + slippage. Overridable per Instrument.
 _Avoid_: Fees, Commission (as the whole model)
 
 **Corporate Action handling**:

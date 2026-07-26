@@ -32,6 +32,15 @@ class OrderStatus(Enum):
     REJECTED = "rejected"    # e.g. exceeds available margin
 
 
+class Liquidity(Enum):
+    """Whether a fill provided or removed liquidity — drives maker/taker fees and
+    whether slippage applies."""
+
+    MAKER = "maker"   # a resting limit order (limit entry, take-profit): fills at its
+                      # price, provides liquidity, no adverse slippage
+    TAKER = "taker"   # a market/stop order that crosses the book: pays taker fee + slippage
+
+
 @dataclass(slots=True)
 class Order:
     instrument: Instrument

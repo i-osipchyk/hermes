@@ -33,7 +33,7 @@ from hermes import (
     Symbol,
     Timeframe,
 )
-from hermes.data import BinanceSource
+from hermes.data import BinanceFuturesSource
 
 GENERATED_BY = "hermes-strategy"
 
@@ -316,11 +316,11 @@ class FvgFractalStrategy(Strategy):
 def build_backtest(**overrides) -> Backtest:
     end = overrides.pop("end", datetime(2024, 12, 31, tzinfo=UTC))
     start = overrides.pop("start", datetime(2024, 1, 1, tzinfo=UTC))
-    symbol = overrides.pop("symbol", Symbol("BTCUSDT", "binance"))
-    starting_cash = overrides.pop("starting_cash", 10_000.0)
+    symbol = overrides.pop("symbol", Symbol("BTCUSDT", "binance-futures"))
+    starting_cash = overrides.pop("starting_cash", 1_000_000.0)
     return Backtest(
         strategy=FvgFractalStrategy(),
-        source=BinanceSource(),
+        source=BinanceFuturesSource(),
         symbol=symbol,
         timeframes=[M15, H1],
         start=start,

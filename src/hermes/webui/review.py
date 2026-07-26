@@ -13,9 +13,11 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 REVIEWS_DIR = Path(".hermes_cache/reviews")
+_LAST_RID_FILE = REVIEWS_DIR / "last.rid"
 
 
 def run_id(result_dict: dict) -> str:
@@ -28,12 +30,47 @@ def _dir(rid: str) -> Path:
     return REVIEWS_DIR / rid
 
 
+def save_last_rid(rid: str) -> None:
+    REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+    _LAST_RID_FILE.write_text(rid)
+
+
+def load_last_rid() -> str | None:
+    return _LAST_RID_FILE.read_text().strip() if _LAST_RID_FILE.exists() else None
+
+
 def write_result(result_dict: dict, rid: str) -> Path:
     d = _dir(rid)
     d.mkdir(parents=True, exist_ok=True)
     path = d / "result.json"
     path.write_text(json.dumps(result_dict, indent=2))
     return path
+
+
+@dataclass(slots=True)
+class _RestoredResult:
+    """Lightweight stand-in for BacktestResult rebuilt from cached JSON."""
+    metrics: object
+    equity_curve: list
+    _dict: dict
+
+    def to_dict(self) -> dict:
+        return self._dict
+
+
+def load_result(rid: str) -> _RestoredResult | None:
+    """Reconstruct a display-ready result object from a cached result.json."""
+    path = _dir(rid) / "result.json"
+    if not path.exists():
+        return None
+    d = json.loads(path.read_text())
+    from hermes.backtest.result import Metrics  # local import to avoid circular
+    metrics = Metrics(**d["metrics"])
+    equity_curve = [
+        (datetime.fromisoformat(ts).replace(tzinfo=UTC), eq)
+        for ts, eq in d.get("equity_curve", [])
+    ]
+    return _RestoredResult(metrics=metrics, equity_curve=equity_curve, _dict=d)
 
 
 def review_path(rid: str) -> Path:

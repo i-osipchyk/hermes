@@ -5,13 +5,14 @@ from .costs import (
     CommissionModel,
     CostModel,
     FinancingModel,
+    MakerTakerCommission,
     PercentCommission,
     PerLotCommission,
     PerShareCommission,
     SlippageModel,
     SpreadModel,
 )
-from .order import Order, OrderStatus, OrderType, Side
+from .order import Liquidity, Order, OrderStatus, OrderType, Side
 from .simulated import SimulatedVenue
 from .trade import Position, Trade
 from .venue import ExecutionVenue
@@ -21,12 +22,14 @@ __all__ = [
     "OrderType",
     "OrderStatus",
     "Side",
+    "Liquidity",
     "Trade",
     "Position",
     "Account",
     "CostModel",
     "CommissionModel",
     "PercentCommission",
+    "MakerTakerCommission",
     "PerShareCommission",
     "PerLotCommission",
     "SpreadModel",
