@@ -176,8 +176,8 @@ if mode == "batch" and batch is not None:
     if view == "Combined portfolio":
         result = batch.combined_result()
         st.caption(
-            "The basket as one portfolio — starting cash split equally across symbols, "
-            "run independently and summed."
+            "One shared, compounding capital pool — each trade risks a % of the *current* "
+            "equity, so a win on one symbol grows the capital for the next trade on any symbol."
         )
     else:
         result = batch.results[view]
