@@ -17,7 +17,7 @@ One normalized OHLCV row: UTC timestamp + open/high/low/close/volume + timeframe
 _Avoid_: Candle, Candlestick, OHLC, Row
 
 **DataSource**:
-A per-provider adapter that fetches raw data and normalizes it into `Bar`s and `Instrument`s — the market-data side of the parity seam. Concrete: `YFinanceSource`, `BinanceSource`, `PepperstoneSource`. Same interface serves historical/replay bars (backtest) and (later) live streaming bars. Owns all the messy provider-specific conversion, and a local Parquet cache (fetch-once, incremental).
+A per-provider adapter that fetches raw data and normalizes it into `Bar`s and `Instrument`s — the market-data side of the parity seam. Concrete: `YFinanceSource`, `BinanceSource`, `PepperstoneSource` (CFDs via the **cTrader Open API**). Same interface serves historical/replay bars (backtest) and (later) live streaming bars. Owns all the messy provider-specific conversion, and a local Parquet cache (fetch-once, incremental). For cTrader, only ≤1h is fetched natively; anything above 1h is rebuilt from 1h so alignment stays under Hermes's control (see ADR-0006).
 _Avoid_: Feed, Provider, Broker, Connector
 
 **ExecutionVenue**:
@@ -105,7 +105,7 @@ The still-open current bar of a higher Timeframe, aggregated from Base bars seen
 _Avoid_: Developing bar, partial bar, incomplete candle
 
 **Session Calendar**:
-Per-Instrument trading hours/days + timezone that define higher-Timeframe boundaries and when the Instrument is tradeable. Crypto = 24/7 UTC; Stocks = exchange session (e.g. 09:30–16:00 ET); CFDs = near-24/5. Lives on the Instrument.
+Per-Instrument trading hours/days + timezone that define higher-Timeframe boundaries and when the Instrument is tradeable. Crypto = 24/7 UTC; Stocks = exchange session (e.g. 09:30–16:00 ET); CFDs = near-24/5. Lives on the Instrument. Optional **`day_anchor`** sets the time-of-day the trading "day" rolls over for bucket anchoring (`None` = local midnight for stocks/crypto; 17:00 New York for forex/CFD, which is how their 4h/1d bars line up with TradingView — see ADR-0006).
 _Avoid_: Trading hours, market hours
 
 **Bar bucketing rule**:

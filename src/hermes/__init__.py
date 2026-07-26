@@ -24,7 +24,13 @@ from .core import (
     Symbol,
     Timeframe,
 )
-from .data import BinanceSource, DataSource, PepperstoneSource, YFinanceSource
+from .data import (
+    BinanceSource,
+    CTraderSource,
+    DataSource,
+    PepperstoneSource,
+    YFinanceSource,
+)
 from .execution import Order, OrderType, Position, Side, Trade
 from .indicators import ATR, EMA, MACD, RSI, SMA, BollingerBands, Indicator
 from .strategy import NotionalCash, Parameter, RiskCash, RiskPercent, Strategy, Units
@@ -46,6 +52,7 @@ __all__ = [
     "DataSource",
     "YFinanceSource",
     "BinanceSource",
+    "CTraderSource",
     "PepperstoneSource",
     # indicators
     "Indicator",

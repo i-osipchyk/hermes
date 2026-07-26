@@ -66,12 +66,16 @@ pip install -e ".[dev,yfinance,binance,ai,report]"
 - ✅ **AI Advisor** confirm/veto gate with deterministic content-addressed cache; Claude provider.
 - ✅ **Data**: Binance (public REST, no dep) and yfinance (split-only adjust) sources, Parquet cache,
   and an `InMemorySource` for offline/synthetic runs.
+- ✅ **Pepperstone CFDs via cTrader**: timestamp/price decode, whole-hour offset correction, and
+  17:00-NY day-anchored bucketing that rebuilds 4h/1d from 1h to match TradingView (all tested);
+  the Spotware Protobuf transport is the one live-only seam.
 
 Try it: `python examples/sma_crossover_with_ai.py`
 
 ### Known gaps / next up
 
-- **Pepperstone/MT5** source is stubbed (MetaTrader5 is Windows-only).
+- **cTrader live transport** (`_request_trendbars`) needs Spotware credentials + network — the
+  decode/normalise/resample/anchoring pipeline around it is implemented and tested.
 - **Dividend-as-cash** on ex-dates: yfinance surfaces the data; wiring it into the Account is a TODO.
 - **Live deployment** (streaming `DataSource` + real broker `ExecutionVenue`) is deliberately out of
   scope — the seam exists, the adapters don't.

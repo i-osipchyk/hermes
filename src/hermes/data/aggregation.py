@@ -40,16 +40,33 @@ def _local_midnight(local_dt: datetime) -> datetime:
     return local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _day_anchor_ref(local_dt: datetime, session: SessionCalendar) -> datetime:
+    """The start-of-trading-day reference for ``local_dt`` in session-local time.
+
+    Local midnight for stocks/crypto (``day_anchor is None``); the most recent
+    ``day_anchor`` time for forex/CFD (e.g. 17:00 New York)."""
+    anchor = session.day_anchor
+    if anchor is None:
+        return _local_midnight(local_dt)
+    ref = local_dt.replace(hour=anchor.hour, minute=anchor.minute, second=0, microsecond=0)
+    if local_dt < ref:
+        ref -= timedelta(days=1)
+    return ref
+
+
 def bucket_bounds(
     ts_utc: datetime, timeframe: Timeframe, session: SessionCalendar
 ) -> tuple[datetime, datetime]:
     """Return ``(open_utc, close_utc)`` of the higher-TF bucket ``ts_utc`` falls in.
 
-    * intraday (< 1 day): wall-clock-anchored within the local day, close clamped to
-      the session close (so the last bar of a session may be short and the first is
-      partial);
-    * daily (== 1 day): one bucket per trading day, close = session close;
+    * intraday (< 1 day): anchored within the trading day (from ``day_anchor``, else
+      local midnight), close clamped to the session close (so the last bar of a
+      session may be short and the first is partial);
+    * daily (== 1 day): one bucket per trading day (from ``day_anchor``);
     * weekly (multiples of 1 week): anchored to the local Monday, no session clamp.
+
+    ``day_anchor`` is how forex/CFD 4h/1d bars line up with TradingView (17:00 NY
+    rollover) despite cTrader's non-midnight day (see ADR-0006).
     """
     local = session.to_local(ts_utc)
 
@@ -59,9 +76,9 @@ def bucket_bounds(
         close_local = open_local + timedelta(seconds=timeframe.seconds)
         return open_local.astimezone(_UTC), close_local.astimezone(_UTC)
 
-    midnight = _local_midnight(local)
-    idx = int((local - midnight).total_seconds() // timeframe.seconds)
-    open_local = midnight + timedelta(seconds=idx * timeframe.seconds)
+    ref = _day_anchor_ref(local, session)
+    idx = int((local - ref).total_seconds() // timeframe.seconds)
+    open_local = ref + timedelta(seconds=idx * timeframe.seconds)
     close_local = open_local + timedelta(seconds=timeframe.seconds)
     open_utc = open_local.astimezone(_UTC)
     close_utc = close_local.astimezone(_UTC)

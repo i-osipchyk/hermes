@@ -50,6 +50,11 @@ class SessionCalendar:
     close_time: time | None = None
     weekdays: tuple[int, ...] = (0, 1, 2, 3, 4)  # Mon-Fri; crypto overrides to all
     calendar_code: str | None = None
+    # Time-of-day (in this tz) at which the trading "day" rolls over, for
+    # higher-Timeframe bucket anchoring. ``None`` = local midnight (stocks/crypto).
+    # Forex/CFD roll at 17:00 New York, which is why cTrader 4h/1d bars look shifted
+    # versus a midnight-anchored view — set this to align them (see ADR-0006).
+    day_anchor: time | None = None
 
     @property
     def is_24_7(self) -> bool:

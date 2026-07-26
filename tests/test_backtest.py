@@ -126,7 +126,8 @@ def test_multi_timeframe_warmup_suppresses_until_indicator_ready():
 
 
 def _bar_15m(i, price):
-    return Bar(T0 + timedelta(minutes=15 * i), Timeframe.parse("15m"), price, price + 1, price - 1, price, 1.0)
+    ts = T0 + timedelta(minutes=15 * i)
+    return Bar(ts, Timeframe.parse("15m"), price, price + 1, price - 1, price, 1.0)
 
 
 def test_sl_tp_clash_defaults_to_stop_first():

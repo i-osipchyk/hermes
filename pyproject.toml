@@ -23,7 +23,7 @@ dependencies = [
 # Data sources
 yfinance = ["yfinance>=0.2.40"]
 binance = ["python-binance>=1.0.19"]
-pepperstone = ["MetaTrader5>=5.0.45; platform_system == 'Windows'"]
+pepperstone = ["ctrader-open-api>=0.9.2"]  # Pepperstone CFDs via cTrader Open API
 
 # AI Advisor (default provider)
 ai = ["anthropic>=0.40"]
