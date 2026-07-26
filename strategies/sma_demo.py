@@ -7,8 +7,6 @@ AI-generated, so the UI won't auto-review it (use the button).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 from hermes import SMA, Backtest, RiskPercent, Strategy, Symbol, Timeframe
 from hermes.data import BinanceSource
 
@@ -36,15 +34,12 @@ class SmaDemo(Strategy):
 
 
 def build_backtest(**overrides) -> Backtest:
-    end = overrides.pop("end", datetime.now(UTC))
-    start = overrides.pop("start", end - timedelta(days=120))
+    # start/end omitted -> Backtest defaults to year-to-date (Jan 1 -> today).
     bt = Backtest(
         strategy=SmaDemo(),
         source=BinanceSource(),
         symbol=Symbol("BTCUSDT", "binance"),
         timeframes=[H1, H4],
-        start=start,
-        end=end,
         starting_cash=10_000,
     )
     for key, value in overrides.items():

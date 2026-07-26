@@ -172,3 +172,15 @@ def test_sl_tp_clash_defaults_to_stop_first():
     ]
     result = _run(bars)
     assert result.trades[0].exit_reason == "stop_loss"  # conservative default
+
+
+def test_backtest_defaults_to_year_to_date():
+    now = datetime.now(UTC)
+    bt = Backtest(
+        strategy=BuyOnce(),
+        source=InMemorySource(_btc(), {H1: [_bar(0, 100, 100, 100, 100)]}),
+        symbol=Symbol("BTCUSDT", "binance"),
+        timeframes=[H1],
+    )
+    assert bt.start == datetime(now.year, 1, 1, tzinfo=UTC)   # beginning of the year
+    assert (now - bt.end).total_seconds() < 60               # ~today

@@ -20,7 +20,7 @@ Trades both bullish FVGs (long) and bearish FVGs (short) independently.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from hermes import (
     Backtest,
@@ -314,8 +314,7 @@ class FvgFractalStrategy(Strategy):
 
 
 def build_backtest(**overrides) -> Backtest:
-    end = overrides.pop("end", datetime(2024, 12, 31, tzinfo=UTC))
-    start = overrides.pop("start", datetime(2024, 1, 1, tzinfo=UTC))
+    # start/end omitted -> Backtest defaults to year-to-date (Jan 1 -> today).
     symbol = overrides.pop("symbol", Symbol("BTCUSDT", "binance-futures"))
     starting_cash = overrides.pop("starting_cash", 1_000_000.0)
     return Backtest(
@@ -323,8 +322,6 @@ def build_backtest(**overrides) -> Backtest:
         source=BinanceFuturesSource(),
         symbol=symbol,
         timeframes=[M15, H1],
-        start=start,
-        end=end,
         starting_cash=starting_cash,
         **overrides,
     )

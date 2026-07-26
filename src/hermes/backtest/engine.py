@@ -26,14 +26,25 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=_UTC) if dt.tzinfo is None else dt.astimezone(_UTC)
 
 
+def default_start() -> datetime:
+    """Default Trading Window start: the beginning of the current year (UTC)."""
+    return datetime(datetime.now(_UTC).year, 1, 1, tzinfo=_UTC)
+
+
+def default_end() -> datetime:
+    """Default Trading Window end: now (today, UTC)."""
+    return datetime.now(_UTC)
+
+
 @dataclass(slots=True)
 class Backtest:
     strategy: Strategy
     source: DataSource
     symbol: Symbol
     timeframes: list[Timeframe]           # finest is the Base Timeframe
-    start: datetime                        # Trading Window start
-    end: datetime                          # Trading Window end
+    # Default Trading Window: year-to-date (Jan 1 this year → today).
+    start: datetime = field(default_factory=default_start)
+    end: datetime = field(default_factory=default_end)
     starting_cash: float = 10_000.0
     cost_model: CostModel | None = None    # defaults per asset class if None
     magnifier: Timeframe | None = None     # opt-in Fill-resolution Timeframe

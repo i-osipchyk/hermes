@@ -57,9 +57,10 @@ drops straight into `hermes-backtest` and the web UI (`hermes-ui`):
 - a module constant `GENERATED_BY = "hermes-strategy"` (provenance — the UI badges it and
   auto-runs a Claude review);
 - a factory `build_backtest(**overrides) -> Backtest` that returns a fully-configured
-  `Backtest` (Strategy instance, source, symbol, timeframes, dates, starting cash) and
-  applies any `overrides` (symbol/start/end/starting_cash) — build a fresh Strategy each
-  call so re-runs are clean;
+  `Backtest` (Strategy instance, source, symbol, timeframes, starting cash) and applies any
+  `overrides` (symbol/start/end/starting_cash) — build a fresh Strategy each call so re-runs
+  are clean. **Omit `start`/`end`** so the run defaults to year-to-date (Jan 1 → today);
+  pass them only if the strategy needs a specific window;
 - `if __name__ == "__main__": build_backtest().run()` for direct CLI use.
 
 Completion criterion: the file imports only names that exist in `hermes`'s public API
