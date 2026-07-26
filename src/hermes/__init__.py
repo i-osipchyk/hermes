@@ -33,6 +33,7 @@ from .data import (
 )
 from .execution import Order, OrderType, Position, Side, Trade
 from .indicators import ATR, EMA, MACD, RSI, SMA, BollingerBands, Indicator
+from .skilltools import install_skills
 from .strategy import NotionalCash, Parameter, RiskCash, RiskPercent, Strategy, Units
 
 __all__ = [
@@ -83,4 +84,6 @@ __all__ = [
     # backtest
     "Backtest",
     "BacktestResult",
+    # tooling
+    "install_skills",
 ]

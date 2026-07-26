@@ -109,9 +109,18 @@ pip install hermes
 hermes install-skills          # into ./.claude/skills   (--user for ~/.claude/skills)
 ```
 
+…or from Python:
+
+```python
+import hermes
+hermes.install_skills()        # or hermes.install_skills(user=True)
+```
+
 This copies the five user-facing skills plus a `hermes-reference/` folder (CONTEXT.md,
 ADRs, the example) the ported skills point at. `hermes-extend` stays repo-only (it targets
-the library's own source).
+the library's own source). Afterwards all three consumers work in that project: **you**
+(`/hermes-strategy`), **Claude Code** (the model-invoked utilities fire on their own), and
+the **UI's headless review** (`hermes-analyze-results` resolves in the project's cwd).
 
 ## Web UI
 

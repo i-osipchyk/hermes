@@ -14,8 +14,6 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import hermes
-
 # hermes-extend targets the library's own source, so it only makes sense in the repo.
 PORTABLE_SKILLS = [
     "ask-hermes",
@@ -26,7 +24,7 @@ PORTABLE_SKILLS = [
 ]
 _REFERENCE_ITEMS = ["CONTEXT.md", "docs/adr", "examples"]
 
-_PKG = Path(hermes.__file__).parent
+_PKG = Path(__file__).resolve().parent  # the installed `hermes` package dir
 
 
 def _repo_root() -> Path:

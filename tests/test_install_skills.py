@@ -1,4 +1,11 @@
+import hermes
 from hermes import skilltools
+
+
+def test_public_python_api_exported():
+    # `import hermes; hermes.install_skills()` is the "import it and run" entry point.
+    assert hermes.install_skills is skilltools.install_skills
+    assert "install_skills" in hermes.__all__
 
 
 def test_install_skills_into_project(tmp_path):
