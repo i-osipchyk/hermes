@@ -28,5 +28,5 @@ htmlcov/
 .idea/
 .vscode/
 
-# Local Claude Code settings
-.claude/
+# Local Claude Code settings (skills ARE committed; local settings are not)
+.claude/settings.local.json

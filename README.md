@@ -80,3 +80,23 @@ Try it: `python examples/sma_crossover_with_ai.py`
 - **Live deployment** (streaming `DataSource` + real broker `ExecutionVenue`) is deliberately out of
   scope — the seam exists, the adapters don't.
 - **Optimization** (grid/walk-forward) deferred by design; the pure `(params, data) → result` core is ready.
+
+## Using Hermes with Claude Code
+
+The repo ships a set of [Claude Code](https://claude.com/claude-code) skills under
+`.claude/skills/` — they load automatically when you open Hermes. Type **`/ask-hermes`**
+for a router that explains the flow; the short version:
+
+| Skill | Invoke | What it does |
+|---|---|---|
+| `ask-hermes` | `/ask-hermes` | Router — which skill fits your situation |
+| `hermes-strategy` | `/hermes-strategy` | Interview a trading idea → `strategies/<name>.py` + backtest config |
+| `hermes-explore-data` | automatic | Fetch + plot + analyse an instrument's candles |
+| `hermes-backtest` | automatic | Run a strategy's backtest, report metrics/blotter/plots |
+| `hermes-analyze-results` | automatic | Diagnose *why* a strategy wins/loses |
+| `hermes-extend` | automatic | Scaffold a custom Indicator / DataSource / ExecutionVenue |
+
+Main flow: **`/hermes-strategy` → run → analyse → iterate.** The four `automatic` skills
+fire on their own in conversation; `hermes-strategy` and `ask-hermes` you invoke by name.
+The skills read the repo's living docs (`CONTEXT.md`, `examples/`, ADRs), so they stay in
+step with the code.
