@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from hermes import (
+    EMA,
     Backtest,
     FairValueGap,
     Fractals,
@@ -32,14 +33,10 @@ from hermes import (
     RiskPercent,
     Strategy,
     Symbol,
-    Timeframe,
 )
 from hermes.data import BinanceFuturesSource
 
 GENERATED_BY = "hermes-strategy"
-
-M15 = Timeframe.parse("15m")
-H1 = Timeframe.parse("1h")
 
 
 @dataclass
@@ -66,6 +63,17 @@ class _FVGRecord:
 class FvgFractalStrategy(Strategy):
 
     def setup(self) -> None:
+        # Timeframes are Parameters too — editable in the UI like any other knob.
+        self._fractal_tf = self.timeframe_param(
+            "fractal_tf", "15m", choices=("5m", "15m", "30m"), description="Fractal timeframe"
+        )
+        self._fvg_tf = self.timeframe_param(
+            "fvg_tf", "1h", choices=("15m", "30m", "1h", "2h", "4h"), description="FVG timeframe"
+        )
+        self._trend_tf = self.timeframe_param(
+            "trend_tf", "4h", choices=("1h", "2h", "4h", "1d"), description="Trend EMA timeframe"
+        )
+
         # Tunable parameters (editable in the web UI without a new strategy file).
         self._rr = self.param(
             Parameter("rr", 2.0, bounds=(1.0, 5.0), description="Reward:risk target")
@@ -76,10 +84,16 @@ class FvgFractalStrategy(Strategy):
         self._risk_pct = self.param(
             Parameter("risk_pct", 0.01, bounds=(0.001, 0.05), description="Risk per trade")
         )
+        self._ema_period = self.param(
+            Parameter("ema_period", 20, bounds=(0, 500), description="Trend EMA period (0 = off)")
+        )
 
         # Registered so the engine computes the correct Lead-in length.
-        self._fvg_ind = self.use(FairValueGap(H1))
-        self._frac_ind = self.use(Fractals(M15))
+        self._fvg_ind = self.use(FairValueGap(self._fvg_tf))
+        self._frac_ind = self.use(Fractals(self._fractal_tf))
+        self._ema_ind = (
+            self.use(EMA(self._trend_tf, int(self._ema_period))) if self._ema_period > 0 else None
+        )
 
         # Confirmed 15m fractals: (candidate_bar_timestamp, price)
         self._highs: list[tuple[datetime, float]] = []
@@ -92,7 +106,7 @@ class FvgFractalStrategy(Strategy):
 
     def on_start(self) -> None:
         """Pre-populate fractal history from lead-in bars."""
-        bars = self.data(M15).closed()
+        bars = self.data(self._fractal_tf).closed()
         for i in range(2, len(bars)):
             self._check_fractal(bars[i - 2], bars[i - 1], bars[i])
 
@@ -104,7 +118,7 @@ class FvgFractalStrategy(Strategy):
     # ── fractal tracking ──────────────────────────────────────────────────────
 
     def _record_current_fractal(self) -> None:
-        bars = self.data(M15).closed()
+        bars = self.data(self._fractal_tf).closed()
         if len(bars) < 3:
             return
         self._check_fractal(bars[-3], bars[-2], bars[-1])
@@ -122,8 +136,8 @@ class FvgFractalStrategy(Strategy):
     # ── FVG detection ─────────────────────────────────────────────────────────
 
     def _detect_fvgs(self, bar) -> None:
-        h1 = self.data(H1)
-        # h1.forming is None only at the last 15m sub-bar of an H1 period
+        h1 = self.data(self._fvg_tf)
+        # forming is None only at the last base sub-bar of an FVG-timeframe period
         # (the engine calls _finalize inside push() before on_bar fires).
         if h1.forming is not None:
             return
@@ -135,8 +149,8 @@ class FvgFractalStrategy(Strategy):
             return
         self._seen_c3_ts.add(c3.timestamp)
 
-        c1_end_ts = c1.timestamp + timedelta(seconds=H1.seconds)
-        c3_end_ts = c3.timestamp + timedelta(seconds=H1.seconds)
+        c1_end_ts = c1.timestamp + timedelta(seconds=self._fvg_tf.seconds)
+        c3_end_ts = c3.timestamp + timedelta(seconds=self._fvg_tf.seconds)
 
         if c1.high < c3.low:  # bullish gap
             self._try_create(
@@ -168,6 +182,9 @@ class FvgFractalStrategy(Strategy):
         if sl is None or tp is None:
             return
 
+        if not self._ema_aligned(bullish):
+            return
+
         entry = self._long_entry(sl, tp, top, bottom) if bullish else \
                 self._short_entry(sl, tp, top, bottom)
         if entry is None:
@@ -180,6 +197,17 @@ class FvgFractalStrategy(Strategy):
         )
         self._place_order(rec)
         self._fvgs.append(rec)
+
+    # ── trend filter ──────────────────────────────────────────────────────────
+
+    def _ema_aligned(self, bullish: bool) -> bool:
+        if self._ema_ind is None:
+            return True
+        val = self.indicator_value(self._ema_ind)["value"]
+        if val is None:
+            return False  # EMA not yet warm
+        price = self.data(self._fvg_tf).closed()[-1].close
+        return price > val if bullish else price < val
 
     # ── entry computation ─────────────────────────────────────────────────────
 
@@ -331,7 +359,6 @@ def build_backtest(**overrides) -> Backtest:
         strategy=FvgFractalStrategy(),
         source=BinanceFuturesSource(),
         symbol=symbol,
-        timeframes=[M15, H1],
         starting_cash=starting_cash,
         **overrides,
     )

@@ -41,7 +41,9 @@ class Backtest:
     strategy: Strategy
     source: DataSource
     symbol: Symbol
-    timeframes: list[Timeframe]           # finest is the Base Timeframe
+    # Finest is the Base Timeframe. Empty -> derived from the strategy's declared
+    # Indicator timeframes (so a strategy can choose its timeframes via Parameters).
+    timeframes: list[Timeframe] = field(default_factory=list)
     # Default Trading Window: year-to-date (Jan 1 this year → today).
     start: datetime = field(default_factory=default_start)
     end: datetime = field(default_factory=default_end)
@@ -63,6 +65,10 @@ class Backtest:
         strat.setup()
 
         subscribed = set(self.timeframes) | {ind.timeframe for ind in strat.registered_indicators}
+        if not subscribed:
+            raise ValueError(
+                "No timeframes: set Backtest.timeframes or declare at least one Indicator."
+            )
         base = min(subscribed)
         higher = sorted(subscribed - {base})
         view = MultiTimeframeView(instrument, base, higher)

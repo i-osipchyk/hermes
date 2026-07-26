@@ -82,6 +82,15 @@ class Strategy(ABC):
         renders as editable controls. Requires ``setup()`` to have run."""
         return list(self._param_specs.values())
 
+    def timeframe_param(
+        self, name: str, default: str = "1h", *, choices=None, description: str = ""
+    ) -> Timeframe:
+        """Declare a Timeframe-valued Parameter (a choice string like ``"15m"``) and
+        return the parsed :class:`Timeframe`. It appears in the UI alongside the other
+        Parameters, so a strategy's timeframes are editable without a new file."""
+        value = self.param(Parameter(name, default, choices=choices, description=description))
+        return Timeframe.parse(value)
+
     def use(self, indicator: Indicator) -> Indicator:
         """Register an Indicator so the engine updates it each Base step and sizes
         the Lead-in from its lookback."""

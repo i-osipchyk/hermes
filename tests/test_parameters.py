@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
-from hermes import Backtest, CryptoPair, Parameter, Strategy, Symbol, Timeframe
+import pytest
+
+from hermes import SMA, Backtest, CryptoPair, Parameter, Strategy, Symbol, Timeframe
 from hermes.core import Bar
 from hermes.data import InMemorySource
 from hermes.webui import discovery
@@ -94,3 +96,53 @@ def test_discovery_declared_parameters(tmp_path):
     specs = discovery.declared_parameters(entry)
     assert [p.name for p in specs] == ["rr"]
     assert specs[0].bounds == (1.0, 5.0) and specs[0].description == "Reward:risk"
+
+
+# --- timeframes as parameters ----------------------------------------------
+
+def test_timeframe_param_declares_choice_and_parses():
+    class S(Strategy):
+        def setup(self):
+            self.tf = self.timeframe_param("tf", "1h", choices=("15m", "1h", "4h"), description="TF")
+            self.use(SMA(self.tf, 3))
+
+        def on_bar(self, bar): ...
+
+    s = S()
+    s.setup()
+    assert s.tf == Timeframe.parse("1h")
+    specs = {p.name: p for p in s.declared_parameters()}
+    assert specs["tf"].choices == ("15m", "1h", "4h") and specs["tf"].default == "1h"
+
+
+class _TFStrategy(Strategy):
+    def setup(self):
+        self.tf = self.timeframe_param("tf", "1h", choices=("15m", "1h"))
+        self.use(SMA(self.tf, 2))
+        self.bars_seen = 0
+
+    def on_bar(self, bar):
+        self.bars_seen += 1
+
+
+def test_engine_derives_timeframes_from_indicators():
+    # Backtest.timeframes empty -> base is taken from the strategy's declared indicator.
+    strat = _TFStrategy()
+    bars = [Bar(T0 + timedelta(hours=i), Timeframe.parse("1h"), 100, 100, 100, 100, 1.0) for i in range(6)]
+    Backtest(
+        strategy=strat, source=InMemorySource(_btc(), {Timeframe.parse("1h"): bars}),
+        symbol=Symbol("BTCUSDT", "binance"), start=T0, end=T0 + timedelta(hours=5),
+    ).run()
+    assert strat.bars_seen > 0  # ran on the 1h base derived from the indicator, no timeframes set
+
+
+def test_engine_errors_without_any_timeframe():
+    class Empty(Strategy):
+        def setup(self): ...
+        def on_bar(self, bar): ...
+
+    with pytest.raises(ValueError):
+        Backtest(
+            strategy=Empty(), source=InMemorySource(_btc(), {}),
+            symbol=Symbol("BTCUSDT", "binance"), start=T0, end=T0 + timedelta(hours=5),
+        ).run()
