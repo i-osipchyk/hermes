@@ -20,6 +20,7 @@ from .symbol import Symbol
 class AssetClass(Enum):
     STOCK = "stock"
     CRYPTO = "crypto"
+    CRYPTO_PERP = "crypto_perp"
     CFD = "cfd"
 
 
@@ -192,6 +193,50 @@ class CryptoPair(Instrument):
     @property
     def can_short(self) -> bool:
         return False  # spot only in v1
+
+    def contract_size(self) -> float:
+        return 1.0
+
+    def to_native_units(self, size: float) -> float:
+        return size
+
+
+@dataclass(eq=False)
+class CryptoPerpetual(Instrument):
+    """A crypto perpetual future (Binance USD-M). Like a spot pair — 24/7, real volume,
+    last-price — but **leveraged** and **shortable**. Funding (paid between longs/shorts)
+    is not auto-modelled; set a `FinancingModel` on the Cost Model if you want to charge
+    carry."""
+
+    base_asset: str = ""
+    leverage: float = 10.0
+
+    def __init__(
+        self,
+        symbol: Symbol,
+        *,
+        base_asset: str,
+        quote_currency: str,
+        tick_size: float,
+        leverage: float = 10.0,
+    ):
+        super().__init__(
+            symbol,
+            quote_currency=quote_currency,
+            tick_size=tick_size,
+            session=SessionCalendar(timezone=ZoneInfo("UTC"), weekdays=(0, 1, 2, 3, 4, 5, 6)),
+            price_basis=PriceBasis.LAST,
+        )
+        self.base_asset = base_asset
+        self.leverage = leverage
+
+    @property
+    def asset_class(self) -> AssetClass:
+        return AssetClass.CRYPTO_PERP
+
+    @property
+    def can_short(self) -> bool:
+        return True
 
     def contract_size(self) -> float:
         return 1.0

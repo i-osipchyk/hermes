@@ -103,6 +103,13 @@ class CostModel:
                 slippage=SlippageModel(percent=0.0002),
                 financing=FinancingModel(0.0),  # spot: no carry
             )
+        if ac is AssetClass.CRYPTO_PERP:
+            return cls(
+                commission=PercentCommission(0.0004),  # futures taker ~0.04%
+                spread=SpreadModel(0.0),
+                slippage=SlippageModel(percent=0.0002),
+                financing=FinancingModel(0.0),  # funding not auto-modelled; set if needed
+            )
         if ac is AssetClass.STOCK:
             return cls(
                 commission=PerShareCommission(per_share=0.0),  # commission-free default

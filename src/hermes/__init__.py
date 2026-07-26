@@ -17,6 +17,7 @@ from .core import (
     Bar,
     Cfd,
     CryptoPair,
+    CryptoPerpetual,
     Instrument,
     PriceBasis,
     SessionCalendar,
@@ -25,6 +26,7 @@ from .core import (
     Timeframe,
 )
 from .data import (
+    BinanceFuturesSource,
     BinanceSource,
     CTraderSource,
     DataSource,
@@ -57,6 +59,7 @@ __all__ = [
     "Instrument",
     "Stock",
     "CryptoPair",
+    "CryptoPerpetual",
     "Cfd",
     "AssetClass",
     "PriceBasis",
@@ -65,6 +68,7 @@ __all__ = [
     "DataSource",
     "YFinanceSource",
     "BinanceSource",
+    "BinanceFuturesSource",
     "CTraderSource",
     "PepperstoneSource",
     # indicators

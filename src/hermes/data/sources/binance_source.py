@@ -17,20 +17,22 @@ from .._ssl import ensure_system_trust
 from ..cache import BarCache
 from ..source import DataSource
 
-_BASE = "https://api.binance.com"
 _SUPPORTED = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
 
 
 class BinanceSource(DataSource):
     name = "binance"
+    base_url = "https://api.binance.com"
+    klines_path = "/api/v3/klines"
+    exchange_info_path = "/api/v3/exchangeInfo"
 
     def __init__(self, cache: BarCache | None = None) -> None:
         self.cache = cache or BarCache()
 
-    def get_instrument(self, symbol: Symbol) -> CryptoPair:
+    def get_instrument(self, symbol: Symbol) -> Instrument:
         tick_size, base_asset, quote = 0.01, "", "USDT"
         try:
-            info = self._get("/api/v3/exchangeInfo", {"symbol": symbol.ticker})
+            info = self._get(self.exchange_info_path, {"symbol": symbol.ticker})
             s = info["symbols"][0]
             base_asset, quote = s["baseAsset"], s["quoteAsset"]
             for f in s["filters"]:
@@ -38,6 +40,9 @@ class BinanceSource(DataSource):
                     tick_size = float(f["tickSize"])
         except Exception:
             pass  # best-effort metadata; defaults are fine for backtesting
+        return self._make_instrument(symbol, base_asset, quote, tick_size)
+
+    def _make_instrument(self, symbol: Symbol, base_asset: str, quote: str, tick_size: float):
         return CryptoPair(symbol, base_asset=base_asset, quote_currency=quote, tick_size=tick_size)
 
     def history(
@@ -59,7 +64,7 @@ class BinanceSource(DataSource):
         out: list[Bar] = []
         while start_ms < end_ms:
             rows = self._get(
-                "/api/v3/klines",
+                self.klines_path,
                 {
                     "symbol": ticker,
                     "interval": interval,
@@ -90,7 +95,7 @@ class BinanceSource(DataSource):
 
     def _get(self, path: str, params: dict) -> object:
         ensure_system_trust()  # trust the OS store (corporate proxies) before any fetch
-        url = f"{_BASE}{path}?{urllib.parse.urlencode(params)}"
+        url = f"{self.base_url}{path}?{urllib.parse.urlencode(params)}"
         with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 (public API)
             return json.loads(resp.read().decode())
 

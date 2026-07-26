@@ -4,6 +4,7 @@ from .aggregation import MultiTimeframeView, TimeframeSeries
 from .cache import BarCache
 from .source import DataSource
 from .sources import (
+    BinanceFuturesSource,
     BinanceSource,
     CTraderSource,
     InMemorySource,
@@ -18,6 +19,7 @@ __all__ = [
     "TimeframeSeries",
     "YFinanceSource",
     "BinanceSource",
+    "BinanceFuturesSource",
     "CTraderSource",
     "PepperstoneSource",
     "InMemorySource",
