@@ -51,21 +51,13 @@ def _param_widget(spec):
 def _equity_figure(result):
     ts = [t for t, _ in result.equity_curve]
     eq = [e for _, e in result.equity_curve]
-    peak, dd = eq[0] if eq else 0, []
-    for e in eq:
-        peak = max(peak, e)
-        dd.append((e / peak - 1) * 100 if peak else 0)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=ts, y=eq, name="Equity", line=dict(color="#2563eb")))
-    fig.add_trace(
-        go.Scatter(x=ts, y=dd, name="Drawdown %", yaxis="y2", line=dict(color="#dc2626"))
-    )
     fig.update_layout(
         height=420,
         margin=dict(l=0, r=0, t=10, b=0),
         yaxis=dict(title="Equity"),
-        yaxis2=dict(title="Drawdown %", overlaying="y", side="right", showgrid=False),
-        legend=dict(orientation="h", y=1.1),
+        showlegend=False,
     )
     return fig
 
@@ -209,6 +201,7 @@ r2[3].metric("Trades", m.num_trades)
 st.subheader("Equity curve")
 if result.equity_curve:
     st.plotly_chart(_equity_figure(result), use_container_width=True)
+    st.metric("Max drawdown", _fmt_pct(m.max_drawdown))
 else:
     st.warning("No equity curve — the backtest produced no trading bars.")
 
