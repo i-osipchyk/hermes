@@ -48,7 +48,15 @@ from .indicators import (
     Indicator,
 )
 from .skilltools import install_skills
-from .strategy import NotionalCash, Parameter, RiskCash, RiskPercent, Strategy, Units
+from .strategy import (
+    NotionalCash,
+    Parameter,
+    Reference,
+    RiskCash,
+    RiskPercent,
+    Strategy,
+    Units,
+)
 
 __all__ = [
     "__version__",
@@ -85,6 +93,7 @@ __all__ = [
     # strategy
     "Strategy",
     "Parameter",
+    "Reference",
     "Units",
     "NotionalCash",
     "RiskCash",

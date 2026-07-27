@@ -15,6 +15,7 @@ from ..core import Bar, Instrument, Timeframe
 from ..execution import Order, OrderType, Side, Trade
 from ..indicators import Indicator
 from .parameter import Parameter
+from .reference import Reference
 from .sizing import Sizer, SizingContext
 
 
@@ -37,6 +38,7 @@ class Strategy(ABC):
         self._indicators: list[Indicator] = []
         self._params: dict[str, object] = {}
         self._param_specs: dict[str, Parameter] = {}
+        self._references: list[Reference] = []
         self._view = None           # MultiTimeframeView, set by the engine
         self._current_bar: Bar | None = None
         self.venue = None
@@ -96,6 +98,19 @@ class Strategy(ABC):
         the Lead-in from its lookback."""
         self._indicators.append(indicator)
         return indicator
+
+    def use_reference(self, symbol: str, *, source=None) -> Reference:
+        """Declare a reference instrument to *observe* (not trade) — e.g. SPY for a
+        regime filter. The engine steps it in lockstep with the trading clock. Put
+        Indicators on the returned handle (``ref.use(...)``) and read ``ref.data(tf)`` /
+        ``ref.value(ind)`` in ``on_bar``. ``source`` defaults to the Backtest's source."""
+        ref = Reference(symbol, source)
+        self._references.append(ref)
+        return ref
+
+    @property
+    def references(self) -> list[Reference]:
+        return self._references
 
     # --- lifecycle hooks (override as needed) ---------------------------------
 

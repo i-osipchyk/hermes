@@ -83,10 +83,27 @@ class Backtest:
         strat.advisor = self.advisor
         strat._view = view
 
-        # --- size the Lead-in and fetch base bars ------------------------------
-        lead_start = self._lead_in_start(instrument, base, strat, start)
-        bars = self.source.history(instrument, base, lead_start, end)
-        bars = [b for b in bars if b.timestamp <= end]
+        # --- resolve reference feeds (observed, not traded) --------------------
+        refs = []  # (reference, ref_view, ref_instrument, ref_source, ref_base)
+        for ref in strat.references:
+            ref_source = ref.source or self.source
+            ref_inst = ref_source.get_instrument(Symbol(ref.symbol, ref_source.name))
+            ref_tfs = ref.timeframes or subscribed
+            ref_base = min(ref_tfs)
+            ref_view = MultiTimeframeView(ref_inst, ref_base, sorted(set(ref_tfs) - {ref_base}))
+            ref._view = ref_view
+            refs.append((ref, ref_view, ref_inst, ref_source, ref_base))
+
+        # --- size the Lead-in over main + reference indicators, then fetch -----
+        groups = [(strat.registered_indicators, base, instrument.session)]
+        groups += [(r.indicators, rb, ri.session) for r, _v, ri, _s, rb in refs]
+        lead_start = self._lead_in_start(start, groups)
+
+        bars = [b for b in self.source.history(instrument, base, lead_start, end) if b.timestamp <= end]
+        ref_feeds = []  # [ref_view, sorted_ref_bars, pointer]
+        for _ref, ref_view, ref_inst, ref_source, ref_base in refs:
+            rb = [b for b in ref_source.history(ref_inst, ref_base, lead_start, end) if b.timestamp <= end]
+            ref_feeds.append([ref_view, rb, 0])
 
         warm_needed: dict[Timeframe, int] = {}  # bars of each tf needed before ready
         for ind in strat.registered_indicators:
@@ -95,6 +112,15 @@ class Backtest:
         equity_curve: list[tuple[datetime, float]] = []
         trading = False
         for bar in bars:
+            t = bar.timestamp
+            # advance reference feeds up to now — no look-ahead
+            for feed in ref_feeds:
+                rv, rb, ptr = feed
+                while ptr < len(rb) and rb[ptr].timestamp <= t:
+                    rv.push(rb[ptr])
+                    ptr += 1
+                feed[2] = ptr
+
             prev_closed = len(venue.closed_trades)
             venue.on_base_bar(bar)
             view.push(bar)
@@ -103,9 +129,9 @@ class Backtest:
                 for tr in venue.closed_trades[prev_closed:]:
                     strat.on_trade_closed(tr)
 
-            if bar.timestamp < start:
+            if t < start:
                 continue
-            if not self._warm(view, strat, warm_needed):
+            if not self._warm(view, warm_needed, refs):
                 continue
 
             if not trading:
@@ -113,7 +139,7 @@ class Backtest:
                 strat.on_start()
             strat._current_bar = bar
             strat.on_bar(bar)
-            equity_curve.append((bar.timestamp, venue.equity()))
+            equity_curve.append((t, venue.equity()))
 
         strat.on_stop()
         return BacktestResult.compute(equity_curve, venue.closed_trades)
@@ -121,29 +147,38 @@ class Backtest:
     # --- helpers ---------------------------------------------------------------
 
     @staticmethod
-    def _warm(view, strat, warm_needed) -> bool:
+    def _warm(view, warm_needed, refs) -> bool:
         for tf, need in warm_needed.items():
             if len(view[tf].bars_for_compute()) < need:
                 return False
+        for ref, ref_view, *_ in refs:
+            for ind in ref.indicators:
+                if len(ref_view[ind.timeframe].bars_for_compute()) < ind.lookback:
+                    return False
         return True
 
-    def _lead_in_start(self, instrument, base: Timeframe, strat, start: datetime) -> datetime:
-        if not strat.registered_indicators:
-            return start
-        max_base_bars = 0
-        for ind in strat.registered_indicators:
-            ratio = ind.timeframe.seconds // base.seconds
-            max_base_bars = max(max_base_bars, ind.lookback * ratio)
-        needed = int(max_base_bars * 1.2) + 5
-        session = instrument.session
-        if session.is_24_7:
-            lead_seconds = needed * base.seconds
-        else:
-            open_s = session.open_time.hour * 3600 + session.open_time.minute * 60
-            close_s = session.close_time.hour * 3600 + session.close_time.minute * 60
-            frac = max((close_s - open_s) / 86_400, 0.05)
-            lead_seconds = needed * base.seconds / frac * (7 / 5)
-        return start - timedelta(seconds=lead_seconds * 1.5)
+    def _lead_in_start(self, start: datetime, groups) -> datetime:
+        """Earliest Lead-in start across all indicator groups (main + references).
+
+        ``groups`` is an iterable of ``(indicators, base_timeframe, session)``; the
+        group needing the most history wins."""
+        earliest = start
+        for indicators, base, session in groups:
+            if not indicators:
+                continue
+            max_base_bars = max(
+                ind.lookback * (ind.timeframe.seconds // base.seconds) for ind in indicators
+            )
+            needed = int(max_base_bars * 1.2) + 5
+            if session.is_24_7:
+                lead_seconds = needed * base.seconds
+            else:
+                open_s = session.open_time.hour * 3600 + session.open_time.minute * 60
+                close_s = session.close_time.hour * 3600 + session.close_time.minute * 60
+                frac = max((close_s - open_s) / 86_400, 0.05)
+                lead_seconds = needed * base.seconds / frac * (7 / 5)
+            earliest = min(earliest, start - timedelta(seconds=lead_seconds * 1.5))
+        return earliest
 
     def _make_magnifier(self, instrument):
         """Return a callable Bar -> finer sub-bars for intrabar fill resolution.
