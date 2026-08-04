@@ -18,8 +18,14 @@ MetaTrader5. Two cTrader realities drive the design:
    whole-hour shift on the raw timestamps.
 
 ## Consequences
-- The timestamp-decode, offset-correction, and 1h→N resampling are pure and tested;
-  only the Protobuf/TLS transport (`_request_trendbars`) needs live credentials.
+- The timestamp-decode, offset-correction, pagination, and 1h→N resampling are pure
+  and tested; only the Protobuf/TLS transport (`_request_trendbars`, and the
+  `_CTraderConnection` it drives) needs live credentials, so that part alone stays
+  untested.
+- `CTraderSource`/`PepperstoneSource` read credentials from `CTRADER_CLIENT_ID` /
+  `CTRADER_CLIENT_SECRET` / `CTRADER_ACCESS_TOKEN` / `CTRADER_ACCOUNT_ID` when not
+  passed explicitly, so `PepperstoneSource()` works with no arguments once those are
+  exported.
 - `day_anchor` is a general `SessionCalendar` field (default `None` = midnight), so
   stocks/crypto are unaffected; only forex/CFD set it.
 - Matching a *specific* TradingView chart may still need the user to tune

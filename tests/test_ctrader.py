@@ -1,15 +1,18 @@
 """Tests for the cTrader-specific normalization: timestamp/price decode, the
-whole-hour offset correction, forex day-anchored bucketing, and rebuilding
-higher timeframes from 1h."""
+whole-hour offset correction, forex day-anchored bucketing, rebuilding higher
+timeframes from 1h, env-var credential defaults, and trendbar pagination."""
 
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from hermes import Cfd, Symbol, Timeframe
+import pytest
+
+from hermes import Cfd, CTraderSource, PepperstoneSource, Symbol, Timeframe
 from hermes.core import Bar
 from hermes.data.aggregation import bucket_bounds
 from hermes.data.sources.ctrader_source import (
     _CFD_SESSION,
+    next_page_start,
     resample_from_hourly,
     trendbar_to_bar,
 )
@@ -75,3 +78,70 @@ def test_resample_from_hourly_builds_aligned_4h():
     assert four_h[0].open == bars_1h[0].open       # first hour's open
     assert four_h[0].close == bars_1h[3].close     # 4th hour's close
     assert four_h[0].high == max(b.high for b in bars_1h[:4])
+
+
+def _clear_ctrader_env(monkeypatch):
+    for name in (
+        "CTRADER_CLIENT_ID",
+        "CTRADER_CLIENT_SECRET",
+        "CTRADER_ACCESS_TOKEN",
+        "CTRADER_ACCOUNT_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_credentials_default_from_environment(monkeypatch):
+    _clear_ctrader_env(monkeypatch)
+    monkeypatch.setenv("CTRADER_CLIENT_ID", "id-from-env")
+    monkeypatch.setenv("CTRADER_CLIENT_SECRET", "secret-from-env")
+    monkeypatch.setenv("CTRADER_ACCESS_TOKEN", "token-from-env")
+    monkeypatch.setenv("CTRADER_ACCOUNT_ID", "42")
+
+    source = CTraderSource()
+    assert source.client_id == "id-from-env"
+    assert source.client_secret == "secret-from-env"
+    assert source.access_token == "token-from-env"
+    assert source.account_id == 42
+    # Pepperstone is just cTrader under another name; same env defaults apply.
+    assert PepperstoneSource().account_id == 42
+
+
+def test_explicit_credentials_override_environment(monkeypatch):
+    _clear_ctrader_env(monkeypatch)
+    monkeypatch.setenv("CTRADER_CLIENT_ID", "id-from-env")
+    monkeypatch.setenv("CTRADER_ACCOUNT_ID", "42")
+
+    source = CTraderSource(client_id="explicit-id", account_id=7)
+    assert source.client_id == "explicit-id"
+    assert source.account_id == 7
+
+
+def test_missing_credentials_raise_on_connect(monkeypatch):
+    _clear_ctrader_env(monkeypatch)
+    source = CTraderSource()
+    with pytest.raises(RuntimeError, match="requires client_id"):
+        source._connection()
+
+
+def test_next_page_start_stops_on_short_page():
+    # A page smaller than the request cap means the provider has no more data.
+    page = [{"utcTimestampInMinutes": 100}]
+    assert next_page_start(page, from_ms=0, to_ms=10**12, period_seconds=3600) is None
+
+
+def test_next_page_start_stops_when_range_covered():
+    page = [{"utcTimestampInMinutes": ts} for ts in range(1000, 1000 + 1000)]
+    to_ms = 1000 * 60_000 + 3600 * 1000  # right after the last bar's next period
+    assert next_page_start(page, from_ms=0, to_ms=to_ms, period_seconds=3600) is None
+
+
+def test_next_page_start_advances_past_last_bar():
+    page = [{"utcTimestampInMinutes": ts} for ts in range(0, 1000)]
+    to_ms = 10**12
+    next_start = next_page_start(page, from_ms=0, to_ms=to_ms, period_seconds=3600)
+    # Next request should start right after the last bar's period.
+    assert next_start == 999 * 60_000 + 3600 * 1000
+
+
+def test_next_page_start_empty_page_stops_pagination():
+    assert next_page_start([], from_ms=0, to_ms=10**12, period_seconds=3600) is None
