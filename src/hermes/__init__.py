@@ -36,6 +36,7 @@ from .data import (
 from .data._ssl import ensure_system_trust as use_system_certs
 from .execution import Order, OrderType, Position, Side, Trade
 from .indicators import (
+    ADX,
     ATR,
     EMA,
     FVG,
@@ -90,6 +91,7 @@ __all__ = [
     "Fractals",
     "FairValueGap",
     "FVG",
+    "ADX",
     # strategy
     "Strategy",
     "Parameter",

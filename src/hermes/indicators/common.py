@@ -247,3 +247,91 @@ class FairValueGap(Indicator):
 
 # `fvg` is the common shorthand.
 FVG = FairValueGap
+
+
+class ADX(Indicator):
+    """Wilder's Average Directional Index.
+
+    Measures **trend strength** (0–100, higher = stronger trend) together with
+    directional bias via ``plus_di`` and ``minus_di``.
+
+    Algorithm (Wilder smoothing throughout, matching ATR/RSI):
+    * **True Range** = max(H-L, |H-prev_close|, |L-prev_close|)
+    * **+DM** = H - prev_H when that is larger than prev_L - L and > 0, else 0
+    * **-DM** = prev_L - L when that is larger than H - prev_H and > 0, else 0
+    * **Smoothed ATR/+DM/-DM** over ``period`` bars (Wilder: seed = SMA, then
+      rolling ``(prev * (n-1) + cur) / n``)
+    * **+DI / -DI** = 100 × smoothed_DM / smoothed_ATR
+    * **DX** = 100 × |+DI - -DI| / (+DI + -DI)
+    * **ADX** = Wilder smooth of DX over ``period`` steps
+
+    Lookback is ``2 * period``: one period warms the DI lines, another warms ADX.
+    Outputs: ``adx``, ``plus_di``, ``minus_di``.
+    """
+
+    def __init__(self, timeframe: Timeframe, period: int = 14) -> None:
+        super().__init__(timeframe)
+        self.period = period
+
+    @property
+    def lookback(self) -> int:
+        return 2 * self.period
+
+    @property
+    def outputs(self) -> tuple[str, ...]:
+        return ("adx", "plus_di", "minus_di")
+
+    @staticmethod
+    def _wilder(values: list[float], period: int) -> list[float]:
+        """Wilder smoothing: seed = SMA of first `period` values, then rolling."""
+        out = [sum(values[:period]) / period]
+        for v in values[period:]:
+            out.append((out[-1] * (period - 1) + v) / period)
+        return out
+
+    def compute(self, bars: list[Bar]) -> dict[str, float | None]:
+        null: dict[str, float | None] = {"adx": None, "plus_di": None, "minus_di": None}
+        p = self.period
+        if len(bars) < 2 * p:
+            return null
+
+        # Step 1: TR, +DM, -DM for each successive pair (len(bars)-1 values).
+        trs: list[float] = []
+        plus_dms: list[float] = []
+        minus_dms: list[float] = []
+        for prev, cur in zip(bars, bars[1:]):
+            tr = max(cur.high - cur.low, abs(cur.high - prev.close), abs(cur.low - prev.close))
+            up = cur.high - prev.high
+            dn = prev.low - cur.low
+            trs.append(tr)
+            plus_dms.append(up if up > dn and up > 0 else 0.0)
+            minus_dms.append(dn if dn > up and dn > 0 else 0.0)
+
+        # Step 2: Wilder-smooth each series.  With len(bars) = 2p we get
+        # len(trs) = 2p-1, and _wilder produces p smoothed values.
+        smooth_tr = self._wilder(trs, p)
+        smooth_plus = self._wilder(plus_dms, p)
+        smooth_minus = self._wilder(minus_dms, p)
+
+        # Step 3: DX at each smoothed step.
+        dx_vals: list[float] = []
+        for atr, pdm, mdm in zip(smooth_tr, smooth_plus, smooth_minus):
+            if atr == 0:
+                dx_vals.append(0.0)
+                continue
+            pdi = 100.0 * pdm / atr
+            mdi = 100.0 * mdm / atr
+            di_sum = pdi + mdi
+            dx_vals.append(100.0 * abs(pdi - mdi) / di_sum if di_sum != 0 else 0.0)
+
+        # Step 4: ADX = Wilder smooth of DX.  At len(bars) = 2p we have exactly p
+        # dx values, which seeds the first ADX value.
+        adx_vals = self._wilder(dx_vals, p)
+        adx = adx_vals[-1]
+
+        last_atr = smooth_tr[-1]
+        if last_atr == 0:
+            return {"adx": adx, "plus_di": 0.0, "minus_di": 0.0}
+        plus_di = 100.0 * smooth_plus[-1] / last_atr
+        minus_di = 100.0 * smooth_minus[-1] / last_atr
+        return {"adx": adx, "plus_di": plus_di, "minus_di": minus_di}

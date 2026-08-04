@@ -2,6 +2,7 @@
 
 from .base import Indicator
 from .common import (
+    ADX,
     ATR,
     EMA,
     FVG,
@@ -25,5 +26,6 @@ __all__ = [
     "Fractals",
     "FairValueGap",
     "FVG",
+    "ADX",
     "LibraryIndicator",
 ]

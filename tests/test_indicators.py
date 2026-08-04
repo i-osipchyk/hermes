@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from hermes import (
+    ADX,
     ATR,
     EMA,
     FVG,
@@ -133,3 +134,65 @@ def test_fvg_no_gap():
     out = FairValueGap(TF).compute(bars)
     assert out["bullish"] == 0.0 and out["bearish"] == 0.0
     assert out["top"] is None and out["bottom"] is None
+
+
+# --- ADX (Wilder's Average Directional Index) --------------------------------
+
+def test_adx_outputs():
+    adx = ADX(TF, period=5)
+    assert adx.outputs == ("adx", "plus_di", "minus_di")
+    assert adx.lookback == 10
+
+
+def test_adx_none_until_warm():
+    adx = ADX(TF, period=5)
+    # Need 2*period = 10 bars; fewer should return all None.
+    bars = _series([(10, 11, 9, 10)] * 9)
+    out = adx.compute(bars)
+    assert out["adx"] is None and out["plus_di"] is None and out["minus_di"] is None
+
+
+def test_adx_values_present_when_warm():
+    adx = ADX(TF, period=5)
+    # 10 bars is exactly the minimum (2 * period).
+    bars = _series([(10 + i, 11 + i, 9 + i, 10 + i) for i in range(10)])
+    out = adx.compute(bars)
+    assert out["adx"] is not None
+    assert out["plus_di"] is not None
+    assert out["minus_di"] is not None
+
+
+def test_adx_bounded_0_to_100():
+    adx = ADX(TF, period=5)
+    bars = _series([(10 + i, 11 + i, 9 + i, 10 + i) for i in range(20)])
+    out = adx.compute(bars)
+    assert 0.0 <= out["adx"] <= 100.0
+    assert 0.0 <= out["plus_di"] <= 100.0
+    assert 0.0 <= out["minus_di"] <= 100.0
+
+
+def test_adx_uptrend_plus_di_dominates():
+    # Consistently rising bars: each bar opens and closes higher, large up-moves.
+    adx = ADX(TF, period=5)
+    bars = _series([(10 + i * 2, 12 + i * 2, 9 + i * 2, 11 + i * 2) for i in range(20)])
+    out = adx.compute(bars)
+    assert out["plus_di"] > out["minus_di"]
+
+
+def test_adx_downtrend_minus_di_dominates():
+    # Consistently falling bars.
+    adx = ADX(TF, period=5)
+    bars = _series([(100 - i * 2, 102 - i * 2, 99 - i * 2, 100 - i * 2) for i in range(20)])
+    out = adx.compute(bars)
+    assert out["minus_di"] > out["plus_di"]
+
+
+def test_adx_strong_trend_higher_than_choppy():
+    # A sustained trend should produce a higher ADX than a flat/choppy series.
+    p = 5
+    adx = ADX(TF, period=p)
+    trending = _series([(10 + i, 11 + i, 9 + i, 10 + i) for i in range(30)])
+    choppy = _series([(10 + (i % 2), 11 + (i % 2), 9 + (i % 2), 10 + (i % 2)) for i in range(30)])
+    adx_trend = adx.compute(trending)["adx"]
+    adx_chop = adx.compute(choppy)["adx"]
+    assert adx_trend > adx_chop
