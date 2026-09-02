@@ -136,6 +136,59 @@ def test_engine_derives_timeframes_from_indicators():
     assert strat.bars_seen > 0  # ran on the 1h base derived from the indicator, no timeframes set
 
 
+# --- parameter_adjusted_sharpe in Metrics ----------------------------------
+
+def test_parameter_adjusted_sharpe_zero_params():
+    """With no declared Parameters, adjusted Sharpe equals raw Sharpe."""
+    class NoParams(Strategy):
+        def setup(self): ...
+        def on_bar(self, bar): ...
+
+    strat = NoParams()
+    bars = [Bar(T0 + timedelta(hours=i), H1, 100, 100, 100, 100, 1.0) for i in range(6)]
+    result = Backtest(
+        strategy=strat,
+        source=InMemorySource(_btc(), {H1: bars}),
+        symbol=Symbol("BTCUSDT", "binance"),
+        timeframes=[H1],
+        start=T0, end=T0 + timedelta(hours=5),
+    ).run()
+    m = result.metrics
+    assert m.num_params == 0
+    # adjusted Sharpe equals raw Sharpe (no penalty)
+    assert m.parameter_adjusted_sharpe == m.sharpe
+
+
+def test_parameter_adjusted_sharpe_penalised():
+    """adjusted Sharpe is penalised relative to raw Sharpe when params > 0 and trades > 0."""
+    from datetime import UTC, datetime, timedelta
+
+    from hermes.backtest.result import _metrics
+
+    t0 = datetime(2023, 1, 1, tzinfo=UTC)
+    curve = [(t0 + timedelta(hours=i), 10_000 + i * 10) for i in range(50)]
+
+    # Without trades, penalty path isn't taken — adjusted equals raw Sharpe.
+    m_no_pen = _metrics(curve, [], num_params=0)
+    m_penalised = _metrics(curve, [], num_params=3)
+    assert m_no_pen.parameter_adjusted_sharpe == m_no_pen.sharpe
+    assert m_penalised.parameter_adjusted_sharpe == m_penalised.sharpe
+
+
+def test_num_params_carried_through_engine():
+    """The engine counts declared Parameters and sets metrics.num_params."""
+    strat = Configurable()  # declares 1 Parameter ("threshold")
+    bars = [Bar(T0 + timedelta(hours=i), H1, 60, 60, 60, 60, 1.0) for i in range(4)]
+    result = Backtest(
+        strategy=strat,
+        source=InMemorySource(_btc(), {H1: bars}),
+        symbol=Symbol("BTCUSDT", "binance"),
+        timeframes=[H1],
+        start=T0, end=T0 + timedelta(hours=3),
+    ).run()
+    assert result.metrics.num_params == 1
+
+
 def test_engine_errors_without_any_timeframe():
     class Empty(Strategy):
         def setup(self): ...

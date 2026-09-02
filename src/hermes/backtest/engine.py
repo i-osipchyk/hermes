@@ -142,7 +142,8 @@ class Backtest:
             equity_curve.append((t, venue.equity()))
 
         strat.on_stop()
-        return BacktestResult.compute(equity_curve, venue.closed_trades)
+        num_params = len(strat.declared_parameters())
+        return BacktestResult.compute(equity_curve, venue.closed_trades, num_params=num_params)
 
     # --- helpers ---------------------------------------------------------------
 

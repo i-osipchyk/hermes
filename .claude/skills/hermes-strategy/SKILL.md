@@ -47,7 +47,33 @@ a word. Cover, in order:
 Record answers in the framework's words; challenge any that fight the model (e.g. a
 higher-TF filter that would need a timeframe not an integer multiple of the base).
 
-## 3. Write `strategies/<name>.py`
+## 3. Parameter discipline — fewer is safer
+
+Before writing, count the `Parameter` declarations the strategy will need. The engine
+reports `metrics.num_params` and computes `metrics.parameter_adjusted_sharpe` =
+Sharpe × √((n_trades − k) / n_trades), where k = number of declared Parameters. A
+strategy with 10 parameters and 30 trades has a severe penalty; one with 2 parameters
+and 200 trades has almost none.
+
+**Rules of thumb:**
+
+- Target **≤ 3 tunable Parameters** for a first version (e.g. one lookback, one SL %, one
+  TP multiplier). Every extra parameter costs statistical power.
+- Prefer **structural / economic logic** over an extra parameter: if a threshold only makes
+  sense as 0.5%, write `0.5` — don't expose it as a Parameter just to leave it tunable.
+- When a filter or timeframe is "nice to have", leave it hard-coded at a sensible default
+  and note that it *could* be promoted to a Parameter later.
+- If the user insists on a high-parameter design, surface the expected trade count and
+  warn explicitly: "With k=8 parameters you need ≫ 80 trades for the adjusted Sharpe to
+  stay meaningful."
+
+Add a comment block at the top of the generated file:
+
+```python
+# Parameters: <k>  (≤ 3 recommended; more reduces parameter_adjusted_sharpe)
+```
+
+## 4. Write `strategies/<name>.py`
 
 Create `strategies/` if absent. Declare indicators/parameters in `setup`, logic in
 `on_bar`, and use a `Sizer` + `stop_loss`/`take_profit` on entries. Only include the AI
@@ -67,7 +93,9 @@ Completion criterion: the file imports only names that exist in `hermes`'s publi
 (verify against `src/hermes/__init__.py`), exposes `GENERATED_BY` + `build_backtest`, and
 reflects every interview answer.
 
-## 4. Hand off
+## 5. Hand off
 
-Show the user the file and the one line to run it. Suggest **`hermes-backtest`** next —
-don't run it yourself.
+Show the user the file and the one line to run it. Mention that after the run,
+`metrics.parameter_adjusted_sharpe` penalises the Sharpe for the declared parameter
+count — a low adjusted Sharpe relative to the raw Sharpe is an overfitting warning.
+Suggest **`hermes-backtest`** next — don't run it yourself.

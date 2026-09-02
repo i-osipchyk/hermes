@@ -24,6 +24,8 @@ class Metrics:
     win_rate: float | None = None
     profit_factor: float | None = None
     num_trades: int = 0
+    num_params: int = 0
+    parameter_adjusted_sharpe: float | None = None
 
 
 @dataclass(slots=True)
@@ -33,11 +35,11 @@ class BacktestResult:
     metrics: Metrics = field(default_factory=Metrics)
 
     @classmethod
-    def compute(cls, equity_curve, trades) -> BacktestResult:
+    def compute(cls, equity_curve, trades, num_params: int = 0) -> BacktestResult:
         return cls(
             equity_curve=list(equity_curve),
             trades=list(trades),
-            metrics=_metrics(equity_curve, trades),
+            metrics=_metrics(equity_curve, trades, num_params),
         )
 
     def to_frame(self):
@@ -80,8 +82,8 @@ def _trade_dict(t: Trade) -> dict:
     }
 
 
-def _metrics(equity_curve, trades) -> Metrics:
-    m = Metrics(num_trades=len(trades))
+def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:
+    m = Metrics(num_trades=len(trades), num_params=num_params)
     if len(equity_curve) >= 2:
         equities = [e for _, e in equity_curve]
         start_eq, end_eq = equities[0], equities[-1]
@@ -101,6 +103,14 @@ def _metrics(equity_curve, trades) -> Metrics:
             steps_per_year = _annualisation(equity_curve)
             if std > 0:
                 m.sharpe = mean / std * math.sqrt(steps_per_year)
+                # Penalise for free parameters: Sharpe × √((n−k)/n).
+                # With k=0 the adjustment is unity; with k≥n the result is 0.
+                n = len(trades)
+                if n > 0 and num_params > 0:
+                    penalty = max(0.0, (n - num_params) / n)
+                    m.parameter_adjusted_sharpe = m.sharpe * math.sqrt(penalty)
+                else:
+                    m.parameter_adjusted_sharpe = m.sharpe
             downside = [r for r in rets if r < 0]
             if downside:
                 dvar = sum(r * r for r in downside) / len(downside)
