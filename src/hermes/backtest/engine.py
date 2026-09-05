@@ -17,7 +17,8 @@ from ..core import Symbol, Timeframe
 from ..data import DataSource, MultiTimeframeView
 from ..execution import Account, CostModel, SimulatedVenue
 from ..strategy import Strategy
-from .result import BacktestResult
+from .result import BacktestResult, BenchmarkComparison
+from .validation import validate as _validate
 
 _UTC = UTC
 
@@ -52,6 +53,7 @@ class Backtest:
     magnifier: Timeframe | None = None     # opt-in Fill-resolution Timeframe
     advisor: AIAdvisor | None = None       # optional AI confirm/veto gate
     params: dict[str, object] = field(default_factory=dict)
+    validate: bool = False                 # run StatValidation after the backtest
 
     def run(self) -> BacktestResult:
         start = _as_utc(self.start)
@@ -111,6 +113,8 @@ class Backtest:
 
         equity_curve: list[tuple[datetime, float]] = []
         trading = False
+        first_close: float | None = None   # for buy-and-hold benchmark
+        last_close: float | None = None
         for bar in bars:
             t = bar.timestamp
             # advance reference feeds up to now — no look-ahead
@@ -137,13 +141,38 @@ class Backtest:
             if not trading:
                 trading = True
                 strat.on_start()
+                first_close = bar.close
+            last_close = bar.close
             strat._current_bar = bar
             strat.on_bar(bar)
             equity_curve.append((t, venue.equity()))
 
         strat.on_stop()
         num_params = len(strat.declared_parameters())
-        return BacktestResult.compute(equity_curve, venue.closed_trades, num_params=num_params)
+        result = BacktestResult.compute(equity_curve, venue.closed_trades, num_params=num_params)
+
+        # --- buy-and-hold benchmark ------------------------------------------
+        if first_close and last_close and first_close > 0 and equity_curve:
+            bh_return = last_close / first_close - 1.0
+            span_days = (equity_curve[-1][0] - equity_curve[0][0]).total_seconds() / 86_400
+            bh_cagr: float | None = None
+            if span_days >= 1:
+                years = span_days / 365.25
+                try:
+                    bh_cagr = (last_close / first_close) ** (1 / years) - 1.0
+                except OverflowError:
+                    pass
+            result.benchmark = BenchmarkComparison(
+                total_return=bh_return,
+                cagr=bh_cagr,
+                description=f"Buy-and-hold {instrument.symbol.ticker}",
+            )
+
+        # --- optional statistical validation ---------------------------------
+        if self.validate:
+            result.stat_validation = _validate(result)
+
+        return result
 
     # --- helpers ---------------------------------------------------------------
 

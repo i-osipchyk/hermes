@@ -10,8 +10,12 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from ..execution import Trade
+
+if TYPE_CHECKING:
+    from .validation import StatValidation
 
 
 @dataclass(slots=True)
@@ -29,10 +33,20 @@ class Metrics:
 
 
 @dataclass(slots=True)
+class BenchmarkComparison:
+    """Buy-and-hold baseline for the traded instrument over the same window."""
+    total_return: float         # e.g. 0.35 → +35 %
+    cagr: float | None          # annualised; None for windows < 1 day
+    description: str            # e.g. "Buy-and-hold BTCUSDT"
+
+
+@dataclass(slots=True)
 class BacktestResult:
     equity_curve: list[tuple[datetime, float]] = field(default_factory=list)
     trades: list[Trade] = field(default_factory=list)
     metrics: Metrics = field(default_factory=Metrics)
+    benchmark: BenchmarkComparison | None = None
+    stat_validation: StatValidation | None = None
 
     @classmethod
     def compute(cls, equity_curve, trades, num_params: int = 0) -> BacktestResult:
@@ -57,11 +71,16 @@ class BacktestResult:
         Reused by the web UI to hand a run to a Claude Code review and to render
         without touching live objects.
         """
-        return {
+        d: dict = {
             "metrics": asdict(self.metrics),
             "equity_curve": [(ts.isoformat(), eq) for ts, eq in self.equity_curve],
             "trades": [_trade_dict(t) for t in self.trades],
         }
+        if self.benchmark is not None:
+            d["benchmark"] = asdict(self.benchmark)
+        if self.stat_validation is not None:
+            d["stat_validation"] = self.stat_validation.to_dict()
+        return d
 
 
 def _trade_dict(t: Trade) -> dict:
