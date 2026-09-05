@@ -11,7 +11,7 @@ from __future__ import annotations
 __version__ = "0.0.1"
 
 from .ai import AdvisorDecision, AIAdvisor, AIProvider, ClaudeProvider
-from .backtest import Backtest, BacktestResult
+from .backtest import Backtest, BacktestResult, PortfolioBacktest, PortfolioResult
 from .core import (
     AssetClass,
     Bar,
@@ -114,6 +114,8 @@ __all__ = [
     # backtest
     "Backtest",
     "BacktestResult",
+    "PortfolioBacktest",
+    "PortfolioResult",
     # tooling
     "install_skills",
     "use_system_certs",
