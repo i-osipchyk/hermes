@@ -86,6 +86,8 @@ class StatValidation:
     monte_carlo: MonteCarloStats | None
     probabilistic_sharpe: float | None  # P(SR > 0) corrected for non-normality
     sample_quality: SampleQuality
+    deflated_sharpe: float | None = None   # DSR: P(true SR > SR*) correcting for n_trials
+    min_trl: int | None = None             # min observations for measured SR to be significant
 
     def to_dict(self) -> dict:
         return {
@@ -103,6 +105,8 @@ class StatValidation:
             "monte_carlo": asdict(self.monte_carlo) if self.monte_carlo else None,
             "probabilistic_sharpe": self.probabilistic_sharpe,
             "sample_quality": asdict(self.sample_quality),
+            "deflated_sharpe": self.deflated_sharpe,
+            "min_trl": self.min_trl,
         }
 
 
@@ -118,6 +122,7 @@ def validate(
     n_mc: int = 1000,
     level: float = 0.95,
     seed: int | None = 42,
+    n_trials: int = 1,
 ) -> StatValidation:
     """Compute statistical validation for a completed BacktestResult.
 
@@ -128,6 +133,7 @@ def validate(
     n_mc:        Number of Monte Carlo trade-reorder simulations.
     level:       Confidence level (default 0.95 → 95 % CI).
     seed:        RNG seed for reproducibility (None = non-deterministic).
+    n_trials:    Number of independent strategy variants tested (for DSR correction).
     """
     rng = random.Random(seed)
     trades = result.trades
@@ -138,8 +144,17 @@ def validate(
     mc = _monte_carlo(trades, equity_curve, n_mc, rng) if trades else None
     psr = _probabilistic_sharpe(equity_curve)
     sq = _sample_quality(metrics)
+    dsr = _deflated_sharpe(equity_curve, n_trials)
+    min_trl = _min_trl(equity_curve, level)
 
-    return StatValidation(ci=ci, monte_carlo=mc, probabilistic_sharpe=psr, sample_quality=sq)
+    return StatValidation(
+        ci=ci,
+        monte_carlo=mc,
+        probabilistic_sharpe=psr,
+        sample_quality=sq,
+        deflated_sharpe=dsr,
+        min_trl=min_trl,
+    )
 
 
 # ── bootstrap confidence intervals ───────────────────────────────────────────
@@ -440,3 +455,93 @@ def _excess_kurtosis(rets: list[float], mean: float, std: float, n: int) -> floa
 def _norm_cdf(x: float) -> float:
     """Standard normal CDF via math.erf (no scipy needed)."""
     return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
+
+
+def _norm_cdf_inv(p: float, tol: float = 1e-9) -> float:
+    """Inverse normal CDF via bisection on _norm_cdf (no scipy needed)."""
+    p = max(tol, min(1.0 - tol, p))
+    lo, hi = -20.0, 20.0
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        if _norm_cdf(mid) < p:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < tol:
+            break
+    return (lo + hi) / 2.0
+
+
+_EULER_MASCHERONI = 0.5772156649015328
+
+
+def _expected_max_sharpe(n_trials: int) -> float:
+    """SR* = expected maximum Sharpe from n_trials independent trials (Bailey & López de Prado 2014)."""
+    if n_trials <= 1:
+        return 0.0
+    gamma = _EULER_MASCHERONI
+    n = float(n_trials)
+    return (1 - gamma) * _norm_cdf_inv(1 - 1 / n) + gamma * _norm_cdf_inv(1 - 1 / (n * math.e))
+
+
+def _deflated_sharpe(equity_curve, n_trials: int = 1) -> float | None:
+    """Deflated Sharpe Ratio: P(true SR > SR*) correcting for multiple trials."""
+    if len(equity_curve) < 10:
+        return None
+
+    equities = [e for _, e in equity_curve]
+    rets = [equities[i] / equities[i - 1] - 1.0 for i in range(1, len(equities)) if equities[i - 1] > 0]
+    if len(rets) < 10:
+        return None
+
+    n = len(rets)
+    mean_r = sum(rets) / n
+    var_r = sum((r - mean_r) ** 2 for r in rets) / n
+    std_r = math.sqrt(var_r)
+    if std_r <= 0:
+        return None
+
+    sr_hat = mean_r / std_r  # per-step Sharpe (un-annualised)
+
+    skew = _skewness(rets, mean_r, std_r, n)
+    kurt = _excess_kurtosis(rets, mean_r, std_r, n)
+
+    sr_star = _expected_max_sharpe(n_trials)
+
+    denom_sq = 1.0 - skew * sr_hat + (kurt / 4.0) * sr_hat ** 2
+    if denom_sq <= 0:
+        return None
+
+    z = (sr_hat - sr_star) * math.sqrt(n - 1) / math.sqrt(denom_sq)
+    return _norm_cdf(z)
+
+
+def _min_trl(equity_curve, confidence: float = 0.95) -> int | None:
+    """Minimum Track Record Length: bars needed for measured SR to be significant."""
+    if len(equity_curve) < 10:
+        return None
+
+    equities = [e for _, e in equity_curve]
+    rets = [equities[i] / equities[i - 1] - 1.0 for i in range(1, len(equities)) if equities[i - 1] > 0]
+    if len(rets) < 10:
+        return None
+
+    n = len(rets)
+    mean_r = sum(rets) / n
+    var_r = sum((r - mean_r) ** 2 for r in rets) / n
+    std_r = math.sqrt(var_r)
+    if std_r <= 0:
+        return None
+
+    sr = mean_r / std_r  # per-step SR
+    if sr == 0:
+        return None
+
+    skew = _skewness(rets, mean_r, std_r, n)
+    kurt = _excess_kurtosis(rets, mean_r, std_r, n)
+
+    z_conf = _norm_cdf_inv(confidence)
+    # MinTRL = (1 + (1 - skew*SR + (kurt/4)*SR²)) * (z_conf / SR)²
+    adj = 1.0 - skew * sr + (kurt / 4.0) * sr ** 2
+    min_trl = (1 + adj) * (z_conf / sr) ** 2
+    return math.ceil(max(1.0, min_trl))
