@@ -3,8 +3,10 @@
 from .batch import BatchResult, run_batch
 from .engine import Backtest
 from .portfolio import PortfolioBacktest, PortfolioResult
+from .regime import RegimeAnalysis, RegimeStats, regime_analysis
 from .reporting import plot_equity, plot_trades, tearsheet
-from .result import BacktestResult, BenchmarkComparison, Metrics
+from .result import BacktestResult, BenchmarkComparison, BenchmarkStats, Metrics
+from .sensitivity import cost_sensitivity
 from .validation import (
     ConfidenceInterval,
     MetricsCI,
@@ -13,12 +15,14 @@ from .validation import (
     StatValidation,
     validate,
 )
+from .walk_forward import WalkForward, WalkForwardResult, WalkForwardWindow, split_isoos
 
 __all__ = [
     "Backtest",
     "BacktestResult",
     "Metrics",
     "BenchmarkComparison",
+    "BenchmarkStats",
     "BatchResult",
     "run_batch",
     "PortfolioBacktest",
@@ -32,4 +36,12 @@ __all__ = [
     "MonteCarloStats",
     "SampleQuality",
     "validate",
+    "WalkForward",
+    "WalkForwardResult",
+    "WalkForwardWindow",
+    "split_isoos",
+    "cost_sensitivity",
+    "RegimeAnalysis",
+    "RegimeStats",
+    "regime_analysis",
 ]
