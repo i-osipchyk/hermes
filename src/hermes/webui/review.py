@@ -53,6 +53,7 @@ class _RestoredResult:
     metrics: object
     equity_curve: list
     _dict: dict
+    stat_validation: object = None  # raw dict from JSON, or None
 
     def to_dict(self) -> dict:
         return self._dict
@@ -70,7 +71,12 @@ def load_result(rid: str) -> _RestoredResult | None:
         (datetime.fromisoformat(ts).replace(tzinfo=UTC), eq)
         for ts, eq in d.get("equity_curve", [])
     ]
-    return _RestoredResult(metrics=metrics, equity_curve=equity_curve, _dict=d)
+    return _RestoredResult(
+        metrics=metrics,
+        equity_curve=equity_curve,
+        _dict=d,
+        stat_validation=d.get("stat_validation"),
+    )
 
 
 def review_path(rid: str) -> Path:
