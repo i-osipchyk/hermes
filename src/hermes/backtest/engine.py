@@ -17,7 +17,7 @@ from ..core import Symbol, Timeframe
 from ..data import DataSource, MultiTimeframeView
 from ..execution import Account, CostModel, SimulatedVenue
 from ..strategy import Strategy
-from .result import BacktestResult, BenchmarkComparison
+from .result import BacktestResult, BenchmarkStats, _compute_benchmark_stats
 from .validation import validate as _validate
 
 _UTC = UTC
@@ -112,6 +112,7 @@ class Backtest:
             warm_needed[ind.timeframe] = max(warm_needed.get(ind.timeframe, 0), ind.lookback)
 
         equity_curve: list[tuple[datetime, float]] = []
+        benchmark_equity_curve: list[tuple[datetime, float]] = []
         trading = False
         first_close: float | None = None   # for buy-and-hold benchmark
         last_close: float | None = None
@@ -146,6 +147,9 @@ class Backtest:
             strat._current_bar = bar
             strat.on_bar(bar)
             equity_curve.append((t, venue.equity()))
+            if first_close and first_close > 0:
+                bh_eq = self.starting_cash * (bar.close / first_close)
+                benchmark_equity_curve.append((t, bh_eq))
 
         strat.on_stop()
         num_params = len(strat.declared_parameters())
@@ -153,19 +157,10 @@ class Backtest:
 
         # --- buy-and-hold benchmark ------------------------------------------
         if first_close and last_close and first_close > 0 and equity_curve:
-            bh_return = last_close / first_close - 1.0
-            span_days = (equity_curve[-1][0] - equity_curve[0][0]).total_seconds() / 86_400
-            bh_cagr: float | None = None
-            if span_days >= 1:
-                years = span_days / 365.25
-                try:
-                    bh_cagr = (last_close / first_close) ** (1 / years) - 1.0
-                except OverflowError:
-                    pass
-            result.benchmark = BenchmarkComparison(
-                total_return=bh_return,
-                cagr=bh_cagr,
-                description=f"Buy-and-hold {instrument.symbol.ticker}",
+            description = f"Buy-and-hold {instrument.symbol.ticker}"
+            result.benchmark_equity = benchmark_equity_curve
+            result.benchmark = _compute_benchmark_stats(
+                equity_curve, benchmark_equity_curve, description
             )
 
         # --- optional statistical validation ---------------------------------
