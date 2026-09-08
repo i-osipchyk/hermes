@@ -65,11 +65,10 @@ class YFinanceSource(DataSource):
             raise ValueError(f"yfinance does not support timeframe {timeframe}")
 
         df = yf.Ticker(ticker).history(
-            start=start, end=end, interval=interval, auto_adjust=False, actions=True
+            start=start, end=end, interval=interval, auto_adjust=True
         )
         if df.empty:
             return []
-        df = _split_adjust(df)
         # yfinance can return a stray NaN row (e.g. a partial current/holiday day);
         # dropping it keeps NaN prices out of the backtest.
         df = df.dropna(subset=["Open", "High", "Low", "Close"])
@@ -93,14 +92,3 @@ class YFinanceSource(DataSource):
         return bars
 
 
-def _split_adjust(df):
-    """Apply split factors only (dividends left as real price drops / cash events)."""
-    if "Stock Splits" not in df.columns:
-        return df
-    splits = df["Stock Splits"].replace(0, 1.0)
-    inclusive = splits[::-1].cumprod()[::-1]
-    factor = inclusive / splits  # product of splits strictly AFTER each row
-    for col in ("Open", "High", "Low", "Close"):
-        df[col] = df[col] / factor
-    df["Volume"] = df["Volume"] * factor
-    return df
