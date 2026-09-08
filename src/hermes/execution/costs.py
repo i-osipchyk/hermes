@@ -119,6 +119,36 @@ class CostModel:
         priced = self.spread.adjust_fill(instrument, side, raw_price, liquidity)
         return self.slippage.adjust_fill(instrument, side, priced, liquidity)
 
+    def scaled(self, factor: float) -> CostModel:
+        """Return a new CostModel with all cost components scaled by factor."""
+        comm = self.commission
+        if isinstance(comm, PercentCommission):
+            new_comm = PercentCommission(rate=comm.rate * factor)
+        elif isinstance(comm, MakerTakerCommission):
+            new_comm = MakerTakerCommission(
+                maker_rate=comm.maker_rate * factor,
+                taker_rate=comm.taker_rate * factor,
+            )
+        elif isinstance(comm, PerShareCommission):
+            new_comm = PerShareCommission(
+                per_share=comm.per_share * factor,
+                minimum=comm.minimum * factor,
+            )
+        elif isinstance(comm, PerLotCommission):
+            new_comm = PerLotCommission(per_lot=comm.per_lot * factor)
+        else:
+            new_comm = comm
+
+        return CostModel(
+            commission=new_comm,
+            spread=SpreadModel(points=self.spread.points * factor),
+            slippage=SlippageModel(
+                ticks=self.slippage.ticks * factor,
+                percent=self.slippage.percent * factor,
+            ),
+            financing=FinancingModel(annual_rate=self.financing.annual_rate * factor),
+        )
+
     @classmethod
     def default_for(cls, instrument: Instrument) -> CostModel:
         """Sensible per-asset-class defaults (all overridable)."""
