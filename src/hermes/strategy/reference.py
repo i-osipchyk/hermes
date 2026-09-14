@@ -19,7 +19,13 @@ class Reference:
         self._view = None             # MultiTimeframeView, set by the engine
 
     def use(self, indicator: Indicator) -> Indicator:
-        """Declare an Indicator on the reference (counted in Lead-in + warmup)."""
+        """Declare an Indicator on the reference (counted in Lead-in + warmup).
+
+        Indicators on a Reference default to ``"latest_confirmed"`` mode unless
+        overridden in their constructor.
+        """
+        if indicator.mode is None:
+            indicator.mode = "latest_confirmed"
         self._indicators.append(indicator)
         return indicator
 
@@ -28,8 +34,8 @@ class Reference:
         return self._view[timeframe]
 
     def value(self, indicator: Indicator) -> dict:
-        """Compute a declared Indicator over the reference's series as of now."""
-        return indicator.compute(self._view[indicator.timeframe].bars_for_compute())
+        """Return the pre-computed current value of a declared Indicator.  O(1)."""
+        return indicator.current_value()
 
     @property
     def indicators(self) -> list[Indicator]:

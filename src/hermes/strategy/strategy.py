@@ -26,7 +26,22 @@ class Strategy(ABC):
     the Account, and (optionally) the AI Advisor before the run starts. During the
     Lead-in the engine feeds bars to indicators but suppresses ``on_bar`` until
     every declared Indicator is warm; :meth:`on_start` fires when trading begins.
+
+    **Indicator update mode** — controls how indicator values are advanced each bar:
+
+    * ``"latest_confirmed"`` *(default)* — indicator values only advance when the
+      Indicator's Timeframe bar fully closes.  Between closes the cached value is
+      frozen at the last sealed bar.  This is the safe, honest default.
+    * ``"latest"`` — the indicator recomputes on every Base step using the most
+      recent available close (the Forming Bar's close for higher Timeframes),
+      matching what you'd see on a live chart in real time.
+
+    Set ``mode`` as a class attribute to apply it to all indicators of a Strategy;
+    override per-indicator by passing ``mode=`` to the indicator constructor.
+    This is a fixed design choice of the Strategy, not a tunable Parameter.
     """
+
+    mode: str = "latest_confirmed"
 
     # Populated by the engine at wiring time.
     instrument: Instrument
@@ -52,9 +67,9 @@ class Strategy(ABC):
         return self._view[timeframe]
 
     def indicator_value(self, indicator: Indicator) -> dict[str, float | None]:
-        """Compute an Indicator over its Timeframe's visible series (incl. Forming
-        Bar) as of now."""
-        return indicator.compute(self._view[indicator.timeframe].bars_for_compute())
+        """Return the pre-computed current value of an Indicator.  O(1) lookup —
+        the engine drives all updates before ``on_bar`` fires."""
+        return indicator.current_value()
 
     @property
     def price(self) -> float:
@@ -95,7 +110,13 @@ class Strategy(ABC):
 
     def use(self, indicator: Indicator) -> Indicator:
         """Register an Indicator so the engine updates it each Base step and sizes
-        the Lead-in from its lookback."""
+        the Lead-in from its lookback.
+
+        If the indicator was constructed without an explicit ``mode``, it inherits
+        this Strategy's ``mode`` (default ``"latest_confirmed"``).
+        """
+        if indicator.mode is None:
+            indicator.mode = self.mode
         self._indicators.append(indicator)
         return indicator
 

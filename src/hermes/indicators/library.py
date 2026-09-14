@@ -1,6 +1,10 @@
 """Adapter that wraps a third-party TA library (pandas-ta / TA-Lib) as an
 Indicator, so authors get breadth without giving up the Forming-Bar/warmup
 semantics Hermes owns.
+
+The incremental path (``precompute`` / ``on_bar_closed`` / ``on_forming_bar``)
+falls back to calling the wrapped function each time — still correct, and
+avoids bespoke incremental state for arbitrary library calls.
 """
 
 from __future__ import annotations
@@ -24,8 +28,10 @@ class LibraryIndicator(Indicator):
         fn: Callable,
         lookback: int,
         outputs: tuple[str, ...] = ("value",),
+        *,
+        mode: str | None = None,
     ) -> None:
-        super().__init__(timeframe)
+        super().__init__(timeframe, mode=mode)
         self._fn = fn
         self._lookback = lookback
         self._outputs = outputs
@@ -60,6 +66,16 @@ class LibraryIndicator(Indicator):
         # Series / scalar
         value = result.iloc[-1] if hasattr(result, "iloc") else result
         return {self._outputs[0]: _clean(value)}
+
+    # Incremental path: re-invoke the library function each time (correct but O(N)).
+    # This is acceptable because library indicators are typically used for breadth,
+    # not in tight inner loops.  Built-in indicators have proper O(1) paths.
+
+    def on_bar_closed(self, bars: list[Bar]) -> None:
+        self._current = self.compute(bars)
+
+    def on_forming_bar(self, bars: list[Bar]) -> None:
+        self._current = self.compute(bars)
 
 
 def _clean(x) -> float | None:

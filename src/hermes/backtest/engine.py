@@ -1,14 +1,25 @@
 """Backtest: the clock that drives everything (ADR-0001, -0002, -0004).
 
-Per Base step: SimulatedVenue.on_base_bar() processes fills/SL-TP/costs for the new
-bar; the MultiTimeframeView updates all Forming Bars; then ``on_bar`` is called
-(suppressed during Lead-in until every declared Indicator is warm; ``on_start``
-fires once at the boundary). A run is a pure function of (Strategy + Parameters,
-data, config) — the contract the deferred Optimizer relies on.
+Per Base step:
+1. SimulatedVenue.on_base_bar() processes fills/SL-TP/costs for the new bar.
+2. MultiTimeframeView.push() updates all Forming Bars / seals higher-TF bars.
+3. Indicator updates — before on_bar fires so indicator_value() is always O(1):
+   - On the first trading bar: precompute() seeds every indicator from lead-in history.
+   - On each subsequent bar: on_bar_closed() when the indicator's TF bar sealed;
+     on_forming_bar() for ``latest``-mode indicators when the forming bar changed.
+4. on_bar() fires (suppressed during Lead-in; on_start() fires once at the boundary).
+
+A run is a pure function of (Strategy + Parameters, data, config) — the contract
+the deferred Optimizer relies on.
+
+Indicator warmup gate:
+- ``latest_confirmed`` indicators: require len(closed_bars) >= lookback (only sealed data).
+- ``latest`` indicators: require len(bars_for_compute) >= lookback (forming bar counts).
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -16,6 +27,7 @@ from ..ai import AIAdvisor
 from ..core import Symbol, Timeframe
 from ..data import DataSource, MultiTimeframeView
 from ..execution import Account, CostModel, SimulatedVenue
+from ..indicators import Indicator
 from ..strategy import Strategy
 from .result import BacktestResult, BenchmarkStats, _compute_benchmark_stats
 from .validation import validate as _validate
@@ -85,6 +97,11 @@ class Backtest:
         strat.advisor = self.advisor
         strat._view = view
 
+        # --- build timeframe → indicator index for efficient per-bar updates ---
+        tf_to_indicators: dict[Timeframe, list[Indicator]] = defaultdict(list)
+        for ind in strat.registered_indicators:
+            tf_to_indicators[ind.timeframe].append(ind)
+
         # --- resolve reference feeds (observed, not traded) --------------------
         refs = []  # (reference, ref_view, ref_instrument, ref_source, ref_base)
         for ref in strat.references:
@@ -95,6 +112,13 @@ class Backtest:
             ref_view = MultiTimeframeView(ref_inst, ref_base, sorted(set(ref_tfs) - {ref_base}))
             ref._view = ref_view
             refs.append((ref, ref_view, ref_inst, ref_source, ref_base))
+
+        ref_tf_indicators: list[dict[Timeframe, list[Indicator]]] = []
+        for ref, *_ in refs:
+            rtf: dict[Timeframe, list[Indicator]] = defaultdict(list)
+            for ind in ref.indicators:
+                rtf[ind.timeframe].append(ind)
+            ref_tf_indicators.append(rtf)
 
         # --- size the Lead-in over main + reference indicators, then fetch -----
         groups = [(strat.registered_indicators, base, instrument.session)]
@@ -107,24 +131,44 @@ class Backtest:
             rb = [b for b in ref_source.history(ref_inst, ref_base, lead_start, end) if b.timestamp <= end]
             ref_feeds.append([ref_view, rb, 0])
 
-        warm_needed: dict[Timeframe, int] = {}  # bars of each tf needed before ready
-        for ind in strat.registered_indicators:
-            warm_needed[ind.timeframe] = max(warm_needed.get(ind.timeframe, 0), ind.lookback)
-
         equity_curve: list[tuple[datetime, float]] = []
         benchmark_equity_curve: list[tuple[datetime, float]] = []
         trading = False
         first_close: float | None = None   # for buy-and-hold benchmark
         last_close: float | None = None
+
+        # Closed-bar counts per TF — tracked to detect new closures each step.
+        closed_counts: dict[Timeframe, int] = {tf: 0 for tf in tf_to_indicators}
+        ref_closed_counts: list[dict[Timeframe, int]] = [
+            {tf: 0 for tf in rtf} for rtf in ref_tf_indicators
+        ]
+
         for bar in bars:
             t = bar.timestamp
-            # advance reference feeds up to now — no look-ahead
-            for feed in ref_feeds:
+
+            # Advance reference feeds up to now — no look-ahead.
+            for i, feed in enumerate(ref_feeds):
                 rv, rb, ptr = feed
+                rtf = ref_tf_indicators[i]
+                rc = ref_closed_counts[i]
                 while ptr < len(rb) and rb[ptr].timestamp <= t:
                     rv.push(rb[ptr])
                     ptr += 1
                 feed[2] = ptr
+                # Update ref indicator closed counts (batch: may have advanced many bars).
+                if trading:
+                    for tf, inds in rtf.items():
+                        new_count = len(rv[tf].closed())
+                        if new_count > rc.get(tf, 0):
+                            closed = rv[tf].closed()
+                            for ind in inds:
+                                ind.on_bar_closed(closed)
+                            rc[tf] = new_count
+                        elif rv[tf].forming is not None:
+                            bfc = rv[tf].bars_for_compute()
+                            for ind in inds:
+                                if ind.mode == "latest":
+                                    ind.on_forming_bar(bfc)
 
             prev_closed = len(venue.closed_trades)
             venue.on_base_bar(bar)
@@ -136,13 +180,43 @@ class Backtest:
 
             if t < start:
                 continue
-            if not self._warm(view, warm_needed, refs):
+            if not self._warm(view, tf_to_indicators, refs, ref_tf_indicators,
+                               [rv for rv, _, _ in ref_feeds]):
                 continue
 
             if not trading:
                 trading = True
+                # Precompute all strategy indicators from lead-in history.
+                for tf, inds in tf_to_indicators.items():
+                    closed = view[tf].closed()
+                    for ind in inds:
+                        ind.precompute(closed)
+                    closed_counts[tf] = len(closed)
+                # Precompute all reference indicators.
+                for i, (ref, ref_view, *_) in enumerate(refs):
+                    for tf, inds in ref_tf_indicators[i].items():
+                        closed = ref_view[tf].closed()
+                        for ind in inds:
+                            ind.precompute(closed)
+                        ref_closed_counts[i][tf] = len(closed)
                 strat.on_start()
                 first_close = bar.close
+            else:
+                # Incremental updates for strategy indicators.
+                for tf, inds in tf_to_indicators.items():
+                    series = view[tf]
+                    new_count = len(series.closed())
+                    if new_count > closed_counts[tf]:
+                        closed = series.closed()
+                        for ind in inds:
+                            ind.on_bar_closed(closed)
+                        closed_counts[tf] = new_count
+                    elif series.forming is not None:
+                        bfc = series.bars_for_compute()
+                        for ind in inds:
+                            if ind.mode == "latest":
+                                ind.on_forming_bar(bfc)
+
             last_close = bar.close
             strat._current_bar = bar
             strat.on_bar(bar)
@@ -172,14 +246,33 @@ class Backtest:
     # --- helpers ---------------------------------------------------------------
 
     @staticmethod
-    def _warm(view, warm_needed, refs) -> bool:
-        for tf, need in warm_needed.items():
-            if len(view[tf].bars_for_compute()) < need:
-                return False
-        for ref, ref_view, *_ in refs:
-            for ind in ref.indicators:
-                if len(ref_view[ind.timeframe].bars_for_compute()) < ind.lookback:
+    def _warm(
+        view,
+        tf_to_indicators: dict,
+        refs,
+        ref_tf_indicators: list[dict],
+        ref_views: list,
+    ) -> bool:
+        """Return True once every indicator has enough history to produce a value.
+
+        ``latest_confirmed`` indicators require len(closed_bars) >= lookback;
+        ``latest`` indicators accept len(bars_for_compute) >= lookback.
+        """
+        for tf, inds in tf_to_indicators.items():
+            series = view[tf]
+            for ind in inds:
+                need = ind.lookback
+                check = series.closed() if ind.mode == "latest_confirmed" else series.bars_for_compute()
+                if len(check) < need:
                     return False
+        for (ref, ref_view, *_), rtf in zip(refs, ref_tf_indicators):
+            for tf, inds in rtf.items():
+                series = ref_view[tf]
+                for ind in inds:
+                    need = ind.lookback
+                    check = series.closed() if ind.mode == "latest_confirmed" else series.bars_for_compute()
+                    if len(check) < need:
+                        return False
         return True
 
     def _lead_in_start(self, start: datetime, groups) -> datetime:
