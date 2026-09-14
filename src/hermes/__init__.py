@@ -18,6 +18,8 @@ from .backtest import (
     PortfolioBacktest,
     PortfolioResult,
     StatValidation,
+    UniverseBacktest,
+    UniverseResult,
     validate,
 )
 from .core import (
@@ -36,9 +38,11 @@ from .core import (
 from .data import (
     BinanceFuturesSource,
     BinanceSource,
+    ConstituentCalendar,
     CTraderSource,
     DataSource,
     PepperstoneSource,
+    TiingoSource,
     YFinanceSource,
 )
 from .data._ssl import ensure_system_trust as use_system_certs
@@ -83,11 +87,13 @@ __all__ = [
     "SessionCalendar",
     # data
     "DataSource",
+    "ConstituentCalendar",
     "YFinanceSource",
     "BinanceSource",
     "BinanceFuturesSource",
     "CTraderSource",
     "PepperstoneSource",
+    "TiingoSource",
     # indicators
     "Indicator",
     "SMA",
@@ -126,6 +132,8 @@ __all__ = [
     "PortfolioBacktest",
     "PortfolioResult",
     "StatValidation",
+    "UniverseBacktest",
+    "UniverseResult",
     "validate",
     # tooling
     "install_skills",

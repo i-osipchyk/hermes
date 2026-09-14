@@ -2,6 +2,7 @@
 
 from .aggregation import MultiTimeframeView, TimeframeSeries
 from .cache import BarCache
+from .constituent_calendar import ConstituentCalendar
 from .source import DataSource
 from .sources import (
     BinanceFuturesSource,
@@ -9,12 +10,14 @@ from .sources import (
     CTraderSource,
     InMemorySource,
     PepperstoneSource,
+    TiingoSource,
     YFinanceSource,
 )
 
 __all__ = [
     "DataSource",
     "BarCache",
+    "ConstituentCalendar",
     "MultiTimeframeView",
     "TimeframeSeries",
     "YFinanceSource",
@@ -23,4 +26,5 @@ __all__ = [
     "CTraderSource",
     "PepperstoneSource",
     "InMemorySource",
+    "TiingoSource",
 ]

@@ -14,12 +14,14 @@ for highly-leveraged CFD books use with care.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..core import Symbol, Timeframe
 from ..data import MultiTimeframeView
 from ..execution import Account, CostModel, SimulatedVenue
+from ..indicators import Indicator
 from .engine import Backtest, _as_utc
 from .result import BacktestResult
 
@@ -32,6 +34,8 @@ class _LegState:
     venue: SimulatedVenue
     view: MultiTimeframeView
     warm_needed: dict[Timeframe, int]
+    tf_to_indicators: dict[Timeframe, list[Indicator]]
+    closed_counts: dict[Timeframe, int]
     bars: list                # pre-fetched base bars (lead-in + trading window)
     start: datetime           # trading-window start (bars before this are Lead-in)
     ref_feeds: list           # [[ref_view, bars, pointer], ...]
@@ -137,7 +141,28 @@ class PortfolioBacktest:
 
             if not ls.trading:
                 ls.trading = True
+                # Precompute all indicators from lead-in history, mirroring engine.py.
+                for tf, inds in ls.tf_to_indicators.items():
+                    closed = ls.view[tf].closed()
+                    for ind in inds:
+                        ind.precompute(closed)
+                    ls.closed_counts[tf] = len(closed)
                 ls.strategy.on_start()
+            else:
+                # Incremental indicator updates, mirroring engine.py.
+                for tf, inds in ls.tf_to_indicators.items():
+                    series = ls.view[tf]
+                    new_count = len(series.closed())
+                    if new_count > ls.closed_counts[tf]:
+                        closed = series.closed()
+                        for ind in inds:
+                            ind.on_bar_closed(closed)
+                        ls.closed_counts[tf] = new_count
+                    elif series.forming is not None:
+                        bfc = series.bars_for_compute()
+                        for ind in inds:
+                            if ind.mode == "latest":
+                                ind.on_forming_bar(bfc)
 
             ls.strategy._current_bar = bar
             ls.strategy.on_bar(bar)
@@ -207,13 +232,20 @@ class PortfolioBacktest:
         for ind in strat.registered_indicators:
             warm_needed[ind.timeframe] = max(warm_needed.get(ind.timeframe, 0), ind.lookback)
 
+        tf_to_indicators: dict[Timeframe, list[Indicator]] = defaultdict(list)
+        for ind in strat.registered_indicators:
+            tf_to_indicators[ind.timeframe].append(ind)
+
         groups = [(strat.registered_indicators, base, instrument.session)]
         lead_start = bt._lead_in_start(start, groups)
         bars = [b for b in bt.source.history(instrument, base, lead_start, end) if b.timestamp <= end]
 
         return _LegState(
             strategy=strat, venue=venue, view=view,
-            warm_needed=warm_needed, bars=bars, start=start,
+            warm_needed=warm_needed,
+            tf_to_indicators=dict(tf_to_indicators),
+            closed_counts={tf: 0 for tf in tf_to_indicators},
+            bars=bars, start=start,
             ref_feeds=ref_feeds,
         )
 

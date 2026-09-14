@@ -4,6 +4,7 @@ from .binance_futures_source import BinanceFuturesSource
 from .binance_source import BinanceSource
 from .ctrader_source import CTraderSource, PepperstoneSource
 from .memory_source import InMemorySource
+from .tiingo_source import TiingoSource
 from .yfinance_source import YFinanceSource
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "CTraderSource",
     "PepperstoneSource",
     "InMemorySource",
+    "TiingoSource",
 ]

@@ -308,8 +308,12 @@ with st.form("run"):
     )
     universe = c1.selectbox(
         "Symbols",
-        [_SINGLE, *universes.universe_names()],
-        help="Run one symbol (typed below) or a whole ticker list from tickers/*.json.",
+        [_SINGLE, *universes.universe_names(), *universes.calendar_universe_names()],
+        help=(
+            "Run one symbol (typed below), a static ticker list from tickers/*.json, "
+            "or a calendar universe (e.g. sp500) that uses point-in-time membership "
+            "so each stock is only traded while it was actually in the index."
+        ),
     )
     ticker = c1.text_input("Symbol", value=defaults.symbol.ticker, help=f"Used when Symbols = {_SINGLE}.")
     cash = c1.number_input(
@@ -350,6 +354,33 @@ if run:
         review.write_result(result.to_dict(), rid)
         review.save_last_rid(rid)
         st.session_state.update(result=result, rid=rid, ai=entry.is_ai_generated, mode="single")
+        st.session_state.pop("batch", None)
+    elif universes.is_calendar_universe(universe):
+        from hermes.backtest import UniverseBacktest
+        from hermes.webui.sources import build_source as _build_source
+
+        cal = universes.load_calendar(universe)
+        defaults = discovery.default_config(entry)
+        source = _build_source(source_name)
+
+        ub = UniverseBacktest(
+            strategy_factory=lambda: entry.build_backtest().strategy,
+            source=source,
+            calendar=cal,
+            timeframes=defaults.timeframes,
+            start=start_dt,
+            end=end_dt,
+            starting_cash=cash,
+            params=param_values,
+        )
+        try:
+            with st.spinner(f"Running {universe} universe (first run fetches data from {source_name})…"):
+                universe_result = ub.run()
+        except Exception as exc:
+            st.error(f"Universe backtest failed: {exc}")
+            st.stop()
+        st.session_state.update(universe_result=universe_result, mode="universe")
+        st.session_state.pop("result", None)
         st.session_state.pop("batch", None)
     else:
         src_override, tickers = universes.load_universe(universe)
@@ -397,6 +428,30 @@ if mode == "batch" and batch is not None:
         )
     else:
         result = batch.results[view]
+    rid = review.run_id(result.to_dict())
+    review.write_result(result.to_dict(), rid)
+    st.session_state["rid"] = rid
+    _show_split_or_full(result)
+
+elif mode == "universe" and st.session_state.get("universe_result") is not None:
+    ur = st.session_state["universe_result"]
+    pr = ur.portfolio_result
+
+    st.subheader("S&P 500 universe — portfolio summary")
+    a = st.columns(4)
+    a[0].metric("Universe size", ur.universe_size, help="Distinct tickers ever in the index during the period")
+    a[1].metric("Legs with trades", sum(1 for rows in pr.per_symbol.values() if rows))
+    a[2].metric("Total trades", sum(len(v) for v in pr.per_symbol.values()))
+    a[3].metric("Symbols (no data)", sum(1 for rows in pr.per_symbol.values() if not rows))
+
+    st.dataframe(pr.summary_rows(), use_container_width=True, hide_index=True)
+
+    st.divider()
+    result = pr.result
+    st.caption(
+        "Equity curve and metrics below reflect the true shared-capital portfolio — "
+        "each leg's window is clipped to its point-in-time S&P 500 membership."
+    )
     rid = review.run_id(result.to_dict())
     review.write_result(result.to_dict(), rid)
     st.session_state["rid"] = rid

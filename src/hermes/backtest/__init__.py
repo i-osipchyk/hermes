@@ -15,6 +15,7 @@ from .validation import (
     StatValidation,
     validate,
 )
+from .universe import UniverseBacktest, UniverseResult
 from .walk_forward import WalkForward, WalkForwardResult, WalkForwardWindow, split_isoos
 
 __all__ = [
@@ -44,4 +45,6 @@ __all__ = [
     "RegimeAnalysis",
     "RegimeStats",
     "regime_analysis",
+    "UniverseBacktest",
+    "UniverseResult",
 ]
