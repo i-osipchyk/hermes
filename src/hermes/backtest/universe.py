@@ -116,6 +116,8 @@ class UniverseBacktest:
     starting_cash: float = 100_000.0
     cost_model: CostModel | None = None
     params: dict[str, object] = field(default_factory=dict)
+    unconstrained: bool = False  # skip capital check — orders never rejected for insufficient funds
+    sizer: object | None = None  # backtest-level sizer applied to every leg
 
     def run(self) -> UniverseResult:
         """Build and run the bias-free portfolio backtest.
@@ -148,6 +150,7 @@ class UniverseBacktest:
                     end=leg_end,
                     cost_model=self.cost_model,
                     params=dict(self.params),
+                    sizer=self.sizer,
                 )
             )
             windows[ticker] = window
@@ -159,7 +162,8 @@ class UniverseBacktest:
                 "one ticker."
             )
 
-        portfolio = PortfolioBacktest(legs=legs, starting_cash=self.starting_cash)
+        portfolio = PortfolioBacktest(legs=legs, starting_cash=self.starting_cash,
+                                      unconstrained=self.unconstrained)
         portfolio_result = portfolio.run()
 
         return UniverseResult(
