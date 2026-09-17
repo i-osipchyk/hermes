@@ -4,14 +4,21 @@ It can only *block* an already-formed candidate trade — never invent, size, or
 adjust one. Responsibilities:
   * assemble look-ahead-safe TEXT context (candlestick windows per Timeframe,
     indicator values, trade params, Instrument metadata) into the author's prompt;
+  * call optional ContextEnrichers (PIT fundamentals, filings, news) and append
+    their text to the assembled context;
   * route through the DecisionCache so backtests are reproducible;
   * call the pluggable AIProvider (Claude by default) on cache miss.
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .cache import DecisionCache
 from .provider import AdvisorDecision, AIProvider
+
+if TYPE_CHECKING:
+    from .enrichers import ContextEnricher
 
 
 class AIAdvisor:
@@ -21,10 +28,12 @@ class AIAdvisor:
         *,
         system_prompt: str = "You are a disciplined trading risk filter.",
         cache: DecisionCache | None = None,
+        enrichers: list[ContextEnricher] | None = None,
     ) -> None:
         self.provider = provider
         self.system_prompt = system_prompt
         self.cache = cache or DecisionCache()
+        self.enrichers: list[ContextEnricher] = enrichers or []
 
     def evaluate(self, strategy, order, prompt: str) -> AdvisorDecision:
         """Confirm/veto ``order`` for ``strategy``. ``prompt`` is the author's
@@ -84,4 +93,28 @@ class AIAdvisor:
                 vals = strategy.indicator_value(ind)
                 pretty = ", ".join(f"{k}={v}" for k, v in vals.items())
                 lines.append(f"  {type(ind).__name__}@{ind.timeframe}: {pretty}")
+
+        if self.enrichers:
+            ticker = inst.symbol.ticker
+            as_of = self._as_of(strategy)
+            for enricher in self.enrichers:
+                try:
+                    block = enricher.enrich(ticker, as_of)
+                except Exception as exc:
+                    block = f"[enricher {type(enricher).__name__} failed: {exc}]"
+                if block:
+                    lines.append("")
+                    lines.append(block)
+
         return "\n".join(lines)
+
+    @staticmethod
+    def _as_of(strategy) -> "date":
+        """Extract the current bar date from the strategy's view (look-ahead-safe)."""
+        from datetime import date
+        view = strategy._view
+        base_tf = min(view.series.keys())
+        bars = view[base_tf].bars_for_compute()
+        if bars:
+            return bars[-1].timestamp.date()
+        return date.today()

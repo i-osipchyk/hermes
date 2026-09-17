@@ -10,7 +10,16 @@ from __future__ import annotations
 
 __version__ = "0.0.1"
 
-from .ai import AdvisorDecision, AIAdvisor, AIProvider, ClaudeProvider
+from .ai import (
+    AdvisorDecision,
+    AIAdvisor,
+    AIProvider,
+    ClaudeProvider,
+    ContextEnricher,
+    EDGARFilingEnricher,
+    PolygonNewsEnricher,
+    YFinanceFundamentalsEnricher,
+)
 from .backtest import (
     Backtest,
     BacktestResult,
@@ -127,6 +136,10 @@ __all__ = [
     "AIProvider",
     "AdvisorDecision",
     "ClaudeProvider",
+    "ContextEnricher",
+    "YFinanceFundamentalsEnricher",
+    "EDGARFilingEnricher",
+    "PolygonNewsEnricher",
     # backtest
     "Backtest",
     "BacktestResult",

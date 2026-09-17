@@ -3,6 +3,7 @@
 from .advisor import AIAdvisor
 from .cache import DecisionCache
 from .claude import ClaudeProvider
+from .enrichers import ContextEnricher, EDGARFilingEnricher, PolygonNewsEnricher, YFinanceFundamentalsEnricher
 from .provider import AdvisorDecision, AIProvider
 
 __all__ = [
@@ -11,4 +12,8 @@ __all__ = [
     "AdvisorDecision",
     "ClaudeProvider",
     "DecisionCache",
+    "ContextEnricher",
+    "YFinanceFundamentalsEnricher",
+    "EDGARFilingEnricher",
+    "PolygonNewsEnricher",
 ]
