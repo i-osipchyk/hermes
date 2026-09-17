@@ -39,14 +39,20 @@ class BatchResult:
         return rows
 
     def combined_equity_curve(self) -> list[tuple]:
-        """The basket as one **shared, compounding** portfolio.
+        """The basket as one shared portfolio — absolute P&L aggregation.
 
-        One capital pool. Each closed trade's return relative to the equity it was
-        risked against (``net_pnl / equity_at_entry`` — for risk-based sizing this is
-        R-multiple × risk%, invariant to how much capital the sleeve had) is applied to
-        the running pool in **exit-time order**. So a win on one symbol grows the capital
-        available to the next trade on any symbol: 100 → risk 1%, +2R → 102 → risk 1.02,
-        +2R → 104.04.
+        Sums the net P&L of every closed trade across all sleeves in exit-time order and
+        applies it to a single running equity that starts at the sum of all sleeve starting
+        equities (i.e. the original ``starting_cash`` passed to ``run_universe``).
+
+        Using ``equity += net_pnl`` (rather than fractional compounding) is correct for
+        any position-sizing scheme: with fixed-notional sizing (``NotionalCash``) the
+        position size is independent of equity, so only absolute P&L is meaningful.
+        Fractional compounding (``equity *= 1 + net_pnl / sleeve_equity``) was the
+        previous approach; it silently explodes when multiple trades with large gains
+        exit simultaneously because the denominator (sleeve equity at entry) can be far
+        smaller than the combined pool, producing multi-hundred-percent per-trade fractions
+        that then compound on top of each other.
         """
         events: list[tuple] = []
         start_ts = None
@@ -60,16 +66,14 @@ class BatchResult:
             for t in r.trades:
                 if t.exit_time is None or t.net_pnl is None:
                     continue
-                eq = _equity_at(r.equity_curve, t.entry_time)
-                if eq > 0:
-                    events.append((t.exit_time, t.net_pnl / eq))
+                events.append((t.exit_time, t.net_pnl))
         if start_ts is None:
             return []
         events.sort(key=lambda e: e[0])
         equity = total_start
         out = [(start_ts, equity)]
-        for ts, frac in events:
-            equity *= 1 + frac
+        for ts, net_pnl in events:
+            equity += net_pnl
             out.append((ts, equity))
         return out
 
@@ -112,18 +116,6 @@ def run_batch(
     if progress:
         progress(total, total)
     return out
-
-
-def _equity_at(curve: list[tuple], ts) -> float:
-    """Equity in ``curve`` (sorted by time) at-or-before ``ts`` — the equity a trade
-    entered at that time was sized against. Falls back to the first value."""
-    val = curve[0][1]
-    for t, e in curve:
-        if t <= ts:
-            val = e
-        else:
-            break
-    return val
 
 
 def _pct(x) -> float | None:
