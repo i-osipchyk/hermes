@@ -5,11 +5,9 @@ All legs share a single :class:`~hermes.execution.Account`; the simulation clock
 synchronised so bar-by-bar margin is competed for in real time — a win on one symbol
 grows the capital available to the next trade on any other.
 
-**Limitation:** :class:`~hermes.execution.SimulatedVenue`'s margin check uses only its
-own leg's ``used_margin()``. The shared ``account.cash`` is always correct (every fill
-credits/debits it), but cross-leg reserved margin is not summed during the
-``_can_afford`` gate. For unleveraged or lightly-leveraged strategies this is immaterial;
-for highly-leveraged CFD books use with care.
+Each leg's :class:`~hermes.execution.SimulatedVenue` is wired with a cross-leg margin
+callback so the ``_can_afford`` gate accounts for all other legs' open notional.
+The shared ``account.cash`` is always correct (every fill credits/debits it).
 """
 
 from __future__ import annotations
@@ -39,6 +37,8 @@ class _LegState:
     bars: list                # pre-fetched base bars (lead-in + trading window)
     start: datetime           # trading-window start (bars before this are Lead-in)
     ref_feeds: list           # [[ref_view, bars, pointer], ...]
+    ref_tf_indicators: list   # [dict[Timeframe, list[Indicator]], ...] — one per reference
+    ref_closed_counts: list   # [dict[Timeframe, int], ...] — one per reference
     trading: bool = False
 
 
@@ -95,13 +95,20 @@ class PortfolioBacktest:
 
     legs: list[Backtest]
     starting_cash: float = 10_000.0
+    unconstrained: bool = False  # skip capital check — orders never rejected for insufficient funds
 
     def run(self) -> PortfolioResult:
         if not self.legs:
             raise ValueError("PortfolioBacktest requires at least one leg.")
 
         account = Account(self.starting_cash)
-        leg_states: list[_LegState] = [self._wire(leg, account) for leg in self.legs]
+        leg_states: list[_LegState] = [self._wire(leg, account, self.unconstrained) for leg in self.legs]
+
+        # Give each venue a cross-leg margin view so _can_afford rejects orders that
+        # would exceed the shared capital pool.
+        for i, ls in enumerate(leg_states):
+            others = [lx.venue for j, lx in enumerate(leg_states) if j != i]
+            ls.venue._external_margin = lambda vs=others: sum(v.used_margin() for v in vs)
 
         # Unified sorted event stream: (timestamp, leg_index, bar).
         # Ties broken by leg order so deterministic.
@@ -118,12 +125,23 @@ class PortfolioBacktest:
             ls = leg_states[idx]
 
             # Advance reference feeds for this leg up to now (no look-ahead).
-            for feed in ls.ref_feeds:
+            # Also update reference indicators for any newly closed bars.
+            for i, feed in enumerate(ls.ref_feeds):
                 rv, rb, ptr = feed
                 while ptr < len(rb) and rb[ptr].timestamp <= ts:
                     rv.push(rb[ptr])
                     ptr += 1
                 feed[2] = ptr
+                if ls.trading:
+                    rtf = ls.ref_tf_indicators[i]
+                    rc = ls.ref_closed_counts[i]
+                    for tf, inds in rtf.items():
+                        new_count = len(rv[tf].closed())
+                        if new_count > rc.get(tf, 0):
+                            closed = rv[tf].closed()
+                            for ind in inds:
+                                ind.on_bar_closed(closed)
+                            rc[tf] = new_count
 
             prev_closed = prev_closed_counts[idx]
             ls.venue.on_base_bar(bar)
@@ -147,6 +165,17 @@ class PortfolioBacktest:
                     for ind in inds:
                         ind.precompute(closed)
                     ls.closed_counts[tf] = len(closed)
+                # Precompute reference indicators, mirroring engine.py.
+                for i, feed in enumerate(ls.ref_feeds):
+                    rv, rb, ptr = feed
+                    rtf = ls.ref_tf_indicators[i]
+                    rc = ls.ref_closed_counts[i]
+                    for tf, inds in rtf.items():
+                        closed = rv[tf].closed()
+                        for ind in inds:
+                            ind.precompute(closed)
+                        rc[tf] = len(closed)
+                ls.strategy._current_bar = bar
                 ls.strategy.on_start()
             else:
                 # Incremental indicator updates, mirroring engine.py.
@@ -184,12 +213,17 @@ class PortfolioBacktest:
             (len(ls.strategy.declared_parameters()) for ls in leg_states),
             default=0,
         )
-        result = BacktestResult.compute(equity_curve, all_trades, num_params=num_params)
+        # Resample to one point per calendar day: multiple legs share the same
+        # date, so the raw curve has N-stocks entries per day. Keeping only the
+        # last value per day restores correct per-period return spacing for
+        # Sharpe, VaR, drawdown, and all other time-series metrics.
+        daily_curve = _last_per_day(equity_curve)
+        result = BacktestResult.compute(daily_curve, all_trades, num_params=num_params)
         return PortfolioResult(result=result, per_symbol=per_symbol)
 
     # --- internal wiring -------------------------------------------------------
 
-    def _wire(self, bt: Backtest, account: Account) -> _LegState:
+    def _wire(self, bt: Backtest, account: Account, unconstrained: bool = False) -> _LegState:
         start = _as_utc(bt.start)
         end = _as_utc(bt.end)
         instrument = bt.source.get_instrument(bt.symbol)
@@ -209,15 +243,17 @@ class PortfolioBacktest:
         view = MultiTimeframeView(instrument, base, higher)
 
         cost_model = bt.cost_model or CostModel.default_for(instrument)
-        venue = SimulatedVenue(instrument, account, cost_model)
+        venue = SimulatedVenue(instrument, account, cost_model, unconstrained=unconstrained)
 
         strat.base_timeframe = base
         strat.venue = venue
         strat.advisor = bt.advisor
+        strat.sizer = bt.sizer
         strat._view = view
 
         # Reference feeds (observe-only, not traded).
-        ref_feeds = []
+        # Resolve references first so their indicators contribute to the lead-in.
+        ref_resolved = []  # (ref, ref_view, ref_inst, ref_source, ref_base)
         for ref in strat.references:
             ref_source = ref.source or bt.source
             ref_inst = ref_source.get_instrument(Symbol(ref.symbol, ref_source.name))
@@ -225,8 +261,14 @@ class PortfolioBacktest:
             ref_base = min(ref_tfs)
             ref_view = MultiTimeframeView(ref_inst, ref_base, sorted(set(ref_tfs) - {ref_base}))
             ref._view = ref_view
-            rb = [b for b in ref_source.history(ref_inst, ref_base, start, end) if b.timestamp <= end]
-            ref_feeds.append([ref_view, rb, 0])
+            ref_resolved.append((ref, ref_view, ref_inst, ref_source, ref_base))
+
+        ref_tf_indicators: list[dict] = []
+        for ref, *_ in ref_resolved:
+            rtf: dict = defaultdict(list)
+            for ind in ref.indicators:
+                rtf[ind.timeframe].append(ind)
+            ref_tf_indicators.append(dict(rtf))
 
         warm_needed: dict[Timeframe, int] = {}
         for ind in strat.registered_indicators:
@@ -236,9 +278,17 @@ class PortfolioBacktest:
         for ind in strat.registered_indicators:
             tf_to_indicators[ind.timeframe].append(ind)
 
+        # Include reference indicator groups so their lookback extends the lead-in.
         groups = [(strat.registered_indicators, base, instrument.session)]
+        groups += [(r.indicators, rb, ri.session) for r, _v, ri, _s, rb in ref_resolved]
         lead_start = bt._lead_in_start(start, groups)
         bars = [b for b in bt.source.history(instrument, base, lead_start, end) if b.timestamp <= end]
+
+        # Fetch reference bars from lead_start so indicators can warm up over the lead-in.
+        ref_feeds = []
+        for _ref, ref_view, ref_inst, ref_source, ref_base in ref_resolved:
+            rb = [b for b in ref_source.history(ref_inst, ref_base, lead_start, end) if b.timestamp <= end]
+            ref_feeds.append([ref_view, rb, 0])
 
         return _LegState(
             strategy=strat, venue=venue, view=view,
@@ -247,7 +297,25 @@ class PortfolioBacktest:
             closed_counts={tf: 0 for tf in tf_to_indicators},
             bars=bars, start=start,
             ref_feeds=ref_feeds,
+            ref_tf_indicators=ref_tf_indicators,
+            ref_closed_counts=[{} for _ in ref_resolved],
         )
+
+
+def _last_per_day(
+    curve: list[tuple[datetime, float]],
+) -> list[tuple[datetime, float]]:
+    """Resample an equity curve to one point per calendar day (last value wins).
+
+    PortfolioBacktest appends one equity entry per leg bar, so N stocks on the
+    same date produce N same-timestamp entries.  Keeping only the last value per
+    day restores correct per-period return spacing for Sharpe, VaR, drawdown,
+    and every other time-series metric.
+    """
+    by_day: dict = {}
+    for ts, eq in curve:
+        by_day[ts.date()] = (ts, eq)
+    return list(by_day.values())
 
 
 def _warm(view: MultiTimeframeView, warm_needed: dict) -> bool:
