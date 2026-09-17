@@ -7,6 +7,9 @@ absolute.
 
 from __future__ import annotations
 
+import dotenv
+dotenv.load_dotenv()
+
 from datetime import UTC, datetime, time
 
 import plotly.graph_objects as go
@@ -440,6 +443,7 @@ if run:
             else defaults.source
         )
 
+        _template_bt = entry.build_backtest()
         ub = UniverseBacktest(
             strategy_factory=lambda: entry.build_backtest().strategy,
             source=source,
@@ -451,6 +455,7 @@ if run:
             params=param_values,
             unconstrained=unconstrained,
             sizer=sizer,
+            advisor=_template_bt.advisor,
         )
         try:
             with st.spinner(f"Running {universe} universe (first run fetches data from {source_name})…"):
