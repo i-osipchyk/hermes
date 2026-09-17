@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from .provider import AdvisorDecision, AIProvider
 
-# Default to the latest capable model; override via constructor.
-DEFAULT_MODEL = "claude-opus-4-8"
+# Default to the latest capable model; override via MODEL env var or constructor.
+import os
+DEFAULT_MODEL = os.getenv("MODEL", "claude-opus-4-8")
 
 _DECISION_TOOL = {
     "name": "record_decision",
@@ -29,9 +30,9 @@ _DECISION_TOOL = {
 
 
 class ClaudeProvider(AIProvider):
-    def __init__(self, model_id: str = DEFAULT_MODEL, max_tokens: int = 1024) -> None:
+    def __init__(self, model_id: str = DEFAULT_MODEL, max_tokens: int | None = None) -> None:
         self.model_id = model_id
-        self.max_tokens = max_tokens
+        self.max_tokens = max_tokens or int(os.getenv("MAX_TOKENS", "1024"))
         self._client = None  # lazy: import anthropic on first use
 
     def _get_client(self):
@@ -51,7 +52,8 @@ class ClaudeProvider(AIProvider):
         response = client.messages.create(
             model=self.model_id,
             max_tokens=self.max_tokens,
-            temperature=0,
+            # temperature omitted: not allowed when tool_choice forces a specific tool.
+            # Reproducibility is guaranteed by the DecisionCache regardless.
             # Prompt-cache the static system prompt to cut cost across many calls.
             system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
             tools=[_DECISION_TOOL],
