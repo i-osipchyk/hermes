@@ -88,6 +88,8 @@ def configured_backtest(
     starting_cash: float,
     source_name: str | None = None,
     params: dict | None = None,
+    unconstrained: bool = False,
+    sizer=None,
 ) -> Backtest:
     """Build a fresh Backtest (new Strategy instance) with the form's overrides —
     source, ticker, dates, cash, and strategy Parameter overrides."""
@@ -97,15 +99,18 @@ def configured_backtest(
     source = (
         build_source(source_name) if source_name and source_name != bt.source.name else bt.source
     )
-    return replace(
-        bt,
+    kw = dict(
         source=source,
         symbol=Symbol(ticker, source.name),
         start=start,
         end=end,
         starting_cash=starting_cash,
         params=params or {},
+        unconstrained=unconstrained,
     )
+    if sizer is not None:
+        kw["sizer"] = sizer
+    return replace(bt, **kw)
 
 
 def run_universe(
@@ -117,6 +122,8 @@ def run_universe(
     end: datetime,
     starting_cash: float,
     params: dict | None = None,
+    unconstrained: bool = False,
+    sizer=None,
     progress=None,
 ):
     """Run the strategy independently on each ticker and collect a BatchResult.
@@ -132,6 +139,7 @@ def run_universe(
         return configured_backtest(
             entry, source_name=source_name, ticker=ticker,
             start=start, end=end, starting_cash=per_ticker, params=params,
+            unconstrained=unconstrained, sizer=sizer,
         )
 
     return run_batch(tickers, build, progress=progress)
