@@ -150,6 +150,27 @@ class CostModel:
         )
 
     @classmethod
+    def etoro_stock(cls) -> CostModel:
+        """eToro fees for real (unleveraged) stocks and ETFs backed by Yahoo Finance data.
+
+        eToro charges:
+        - $0 commission for real stock/ETF trades.
+        - Market bid-ask spread (the main cost). Yahoo Finance uses LAST prices so the
+          spread is split half each side: a 1-tick spread ($0.01 for most US stocks)
+          costs ~$0.005 per share on entry and ~$0.005 on exit.
+        - No overnight financing for unleveraged, real-asset positions.
+
+        Slippage is left at zero because the spread already captures fill friction.
+        Scale the spread via ``CostModel.scaled()`` for illiquid or wide-spread names.
+        """
+        return cls(
+            commission=PerShareCommission(per_share=0.0),
+            spread=SpreadModel(points=0.01),   # 1-tick bid-ask spread ($0.01 for US equities)
+            slippage=SlippageModel(ticks=0.0),
+            financing=FinancingModel(annual_rate=0.0),
+        )
+
+    @classmethod
     def default_for(cls, instrument: Instrument) -> CostModel:
         """Sensible per-asset-class defaults (all overridable)."""
         ac = instrument.asset_class
