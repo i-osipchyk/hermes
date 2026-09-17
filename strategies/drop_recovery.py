@@ -50,10 +50,6 @@ class DropRecovery(Strategy):
             "max_hold_days", 20, bounds=(5, 100),
             description="Trading days before time-based exit at market",
         ))
-        self.risk_pct = self.param(Parameter(
-            "risk_pct", 0.01, bounds=(0.001, 0.05),
-            description="Equity fraction risked per trade (drives position size)",
-        ))
         self.cooldown_days = self.param(Parameter(
             "cooldown_days", 20, bounds=(0, 60),
             description="Trading days to skip re-entry after a stop-loss",
@@ -101,7 +97,7 @@ class DropRecovery(Strategy):
         # Entry fills at next bar's open; SL/TP anchored to today's close as proxy.
         entry_ref = bar.close
         self.buy(
-            RiskPercent(self.risk_pct),
+            self.sizer or RiskPercent(0.01),
             stop_loss=entry_ref * (1 - self.sl_pct),
             take_profit=entry_ref * (1 + self.tp_pct),
             tag="drop_recovery",

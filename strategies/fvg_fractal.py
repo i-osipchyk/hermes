@@ -84,9 +84,6 @@ class FvgFractalStrategy(Strategy):
         self._max_renewals = self.param(
             Parameter("max_renewals", 2, bounds=(0, 5), description="Max TP renewals")
         )
-        self._risk_pct = self.param(
-            Parameter("risk_pct", 0.01, bounds=(0.001, 0.05), description="Risk per trade")
-        )
         self._ema_period = self.param(
             Parameter("ema_period", 20, bounds=(0, 500), description="Trend EMA period (0 = off)")
         )
@@ -237,7 +234,7 @@ class FvgFractalStrategy(Strategy):
     def _place_order(self, rec: _FVGRecord) -> None:
         if rec.bullish:
             rec.order = self.buy(
-                RiskPercent(self._risk_pct),
+                self.sizer or RiskPercent(0.01),
                 type=OrderType.LIMIT,
                 limit=rec.entry,
                 stop_loss=rec.sl,
@@ -246,7 +243,7 @@ class FvgFractalStrategy(Strategy):
             )
         else:
             rec.order = self.sell(
-                RiskPercent(self._risk_pct),
+                self.sizer or RiskPercent(0.01),
                 type=OrderType.LIMIT,
                 limit=rec.entry,
                 stop_loss=rec.sl,

@@ -27,7 +27,7 @@ class SmaDemo(Strategy):
         if None in (fast, slow, trend):
             return
         if fast > slow and bar.close > trend and self.venue.position().is_flat:
-            self.buy(RiskPercent(0.01), stop_loss=bar.close * 0.98, take_profit=bar.close * 1.04)
+            self.buy(self.sizer or RiskPercent(0.01), stop_loss=bar.close * 0.98, take_profit=bar.close * 1.04)
         elif fast < slow and not self.venue.position().is_flat:
             for trade in self.venue.open_trades():
                 self.close(trade)
