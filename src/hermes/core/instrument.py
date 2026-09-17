@@ -144,7 +144,14 @@ class Instrument(ABC):
 class Stock(Instrument):
     """An equity (yfinance). Split-adjusted prices; dividends as cash on ex-date."""
 
-    def __init__(self, symbol: Symbol, *, session: SessionCalendar, tick_size: float = 0.01):
+    def __init__(
+        self,
+        symbol: Symbol,
+        *,
+        session: SessionCalendar,
+        tick_size: float = 0.01,
+        shortable: bool = False,
+    ):
         super().__init__(
             symbol,
             quote_currency="USD",
@@ -152,6 +159,7 @@ class Stock(Instrument):
             session=session,
             price_basis=PriceBasis.LAST,
         )
+        self._shortable = shortable
 
     @property
     def asset_class(self) -> AssetClass:
@@ -159,7 +167,7 @@ class Stock(Instrument):
 
     @property
     def can_short(self) -> bool:
-        return False  # cash account default; margin shorting is a later capability
+        return self._shortable
 
     def contract_size(self) -> float:
         return 1.0

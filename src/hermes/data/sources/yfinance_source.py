@@ -32,12 +32,18 @@ _US_SESSION = SessionCalendar(
 class YFinanceSource(DataSource):
     name = "yfinance"
 
-    def __init__(self, cache: BarCache | None = None, session: SessionCalendar = _US_SESSION):
+    def __init__(
+        self,
+        cache: BarCache | None = None,
+        session: SessionCalendar = _US_SESSION,
+        shortable: bool = False,
+    ):
         self.cache = cache or BarCache()
         self.session = session
+        self.shortable = shortable
 
     def get_instrument(self, symbol: Symbol) -> Stock:
-        return Stock(symbol, session=self.session)
+        return Stock(symbol, session=self.session, shortable=self.shortable)
 
     def history(
         self, instrument: Instrument, timeframe: Timeframe, start: datetime, end: datetime
