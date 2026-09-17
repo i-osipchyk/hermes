@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from ..core import Bar, Instrument, Timeframe
-from ..execution import Order, OrderType, Side, Trade
+from ..execution import Order, OrderStatus, OrderType, Side, Trade
 from ..indicators import Indicator
 from .parameter import Parameter
 from .reference import Reference
@@ -219,7 +219,12 @@ class Strategy(ABC):
         Returns True (approve / no advisor configured) or False (veto). The Advisor
         assembles look-ahead-safe context from the current view; in backtest the
         decision is served from the deterministic cache.
+
+        Returns False immediately (no AI call) if the order was already rejected by
+        the venue (e.g. insufficient margin) — no point evaluating an unfillable order.
         """
+        if order.status == OrderStatus.REJECTED:
+            return False
         if getattr(self, "advisor", None) is None:
             return True
         decision = self.advisor.evaluate(self, order, prompt)
