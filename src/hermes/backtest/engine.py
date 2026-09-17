@@ -28,7 +28,7 @@ from ..core import Symbol, Timeframe
 from ..data import DataSource, MultiTimeframeView
 from ..execution import Account, CostModel, SimulatedVenue
 from ..indicators import Indicator
-from ..strategy import Strategy
+from ..strategy import Sizer, Strategy
 from .result import BacktestResult, BenchmarkStats, _compute_benchmark_stats
 from .validation import validate as _validate
 
@@ -66,6 +66,8 @@ class Backtest:
     advisor: AIAdvisor | None = None       # optional AI confirm/veto gate
     params: dict[str, object] = field(default_factory=dict)
     validate: bool = False                 # run StatValidation after the backtest
+    unconstrained: bool = False            # skip capital check — orders never rejected for insufficient funds
+    sizer: Sizer | None = None             # backtest-level sizer; overrides the strategy's own sizing when set
 
     def run(self) -> BacktestResult:
         start = _as_utc(self.start)
@@ -90,11 +92,13 @@ class Backtest:
         account = Account(self.starting_cash)
         cost_model = self.cost_model or CostModel.default_for(instrument)
         magnifier_fn = self._make_magnifier(instrument) if self.magnifier else None
-        venue = SimulatedVenue(instrument, account, cost_model, magnifier_bars=magnifier_fn)
+        venue = SimulatedVenue(instrument, account, cost_model,
+                               magnifier_bars=magnifier_fn, unconstrained=self.unconstrained)
 
         strat.base_timeframe = base
         strat.venue = venue
         strat.advisor = self.advisor
+        strat.sizer = self.sizer
         strat._view = view
 
         # --- build timeframe → indicator index for efficient per-bar updates ---
@@ -199,6 +203,7 @@ class Backtest:
                         for ind in inds:
                             ind.precompute(closed)
                         ref_closed_counts[i][tf] = len(closed)
+                strat._current_bar = bar
                 strat.on_start()
                 first_close = bar.close
             else:

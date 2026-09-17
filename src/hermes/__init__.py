@@ -62,6 +62,7 @@ from .indicators import (
 )
 from .skilltools import install_skills
 from .strategy import (
+    EquityFraction,
     NotionalCash,
     Parameter,
     Reference,
@@ -112,6 +113,7 @@ __all__ = [
     "Reference",
     "Units",
     "NotionalCash",
+    "EquityFraction",
     "RiskCash",
     "RiskPercent",
     # execution

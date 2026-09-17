@@ -48,6 +48,7 @@ class Strategy(ABC):
     base_timeframe: Timeframe
     venue: object          # ExecutionVenue
     advisor: object | None  # AIAdvisor or None
+    sizer: object | None    # Sizer set on the Backtest config; None means strategy decides
 
     def __init__(self) -> None:
         self._indicators: list[Indicator] = []
@@ -58,6 +59,7 @@ class Strategy(ABC):
         self._current_bar: Bar | None = None
         self.venue = None
         self.advisor = None
+        self.sizer = None
 
     # --- data access (inside on_bar) ------------------------------------------
 
@@ -185,16 +187,17 @@ class Strategy(ABC):
         self.venue.modify_trade(trade, stop_loss=stop_loss, take_profit=take_profit)
 
     def _order(self, side, size, type, limit, stop, stop_loss, take_profit, tag) -> Order:
-        if isinstance(size, Sizer):
+        effective_size = self.sizer if self.sizer is not None else size
+        if isinstance(effective_size, Sizer):
             ctx = SizingContext(
                 instrument=self.instrument,
                 price=self.price,
                 equity=self.venue.equity(),
                 stop_price=stop_loss,
             )
-            resolved = size.resolve(ctx)
+            resolved = effective_size.resolve(ctx)
         else:
-            resolved = self.instrument.to_native_units(float(size))
+            resolved = self.instrument.to_native_units(float(effective_size))
         order = Order(
             instrument=self.instrument,
             side=side,

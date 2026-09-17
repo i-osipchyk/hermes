@@ -71,3 +71,21 @@ class RiskPercent(Sizer):
 
     def resolve(self, ctx: SizingContext) -> float:
         return _risk_units(ctx, ctx.equity * self.pct_of_equity)
+
+
+@dataclass(frozen=True, slots=True)
+class EquityFraction(Sizer):
+    """Invest a fixed fraction of current equity per trade (no stop required).
+
+    e.g. ``EquityFraction(0.95)`` invests 95% of current equity.
+    Unlike ``RiskPercent``, this does not require a stop_loss.
+    """
+
+    fraction: float  # e.g. 0.95 for 95%
+
+    def resolve(self, ctx: SizingContext) -> float:
+        notional = ctx.equity * self.fraction
+        per_unit = ctx.price * ctx.instrument.contract_size()
+        if per_unit <= 0:
+            return 0.0
+        return ctx.instrument.to_native_units(notional / per_unit)
