@@ -35,11 +35,13 @@ class SimulatedVenue(ExecutionVenue):
         cost_model: CostModel,
         *,
         magnifier_bars: Callable[[Bar], list[Bar] | None] | None = None,
+        unconstrained: bool = False,
     ) -> None:
         self.instrument = instrument
         self.account = account
         self.cost_model = cost_model
         self._magnifier = magnifier_bars
+        self._unconstrained = unconstrained
 
         self._working: list[Order] = []        # market + resting limit/stop entries
         self._pending_closes: list[Trade] = []  # exits decided last bar
@@ -47,6 +49,8 @@ class SimulatedVenue(ExecutionVenue):
         self._closed: list[Trade] = []
         self._last_bar: Bar | None = None
         self._last_day: object | None = None
+        # Set by PortfolioBacktest to account for other legs' margin reservations.
+        self._external_margin: Callable[[], float] | None = None
 
     # --- engine hook -----------------------------------------------------------
 
@@ -70,11 +74,17 @@ class SimulatedVenue(ExecutionVenue):
                 self._close_trade(trade, raw_price, reason, bar.timestamp)
 
         # 4. Working orders: market entries fill at open; limit/stop when touched.
+        #    SL/TP is also evaluated on the fill bar so a trade can be stopped out
+        #    or take-profited on the same bar it was entered.
         for order in list(self._working):
             fill = self._try_fill_entry(order, bar)
             if fill is not None:
-                self._open_trade(order, fill, bar.timestamp)
+                trade = self._open_trade(order, fill, bar.timestamp)
                 self._working.remove(order)
+                hit = self._check_exit(trade, bar)
+                if hit is not None:
+                    raw_price, reason = hit
+                    self._close_trade(trade, raw_price, reason, bar.timestamp)
 
         self._last_bar = bar
 
@@ -140,8 +150,11 @@ class SimulatedVenue(ExecutionVenue):
         if side is Side.SELL and not self.instrument.can_short and not self._open:
             # Selling with no long position on a non-shortable instrument.
             return False
+        if self._unconstrained:
+            return True
         req = Account.margin_required(self.instrument, price, size)
-        return req <= self.account.free_margin(self.used_margin(), self.unrealised_pnl()) + 1e-9
+        external = self._external_margin() if self._external_margin else 0.0
+        return req <= self.account.free_margin(self.used_margin() + external, self.unrealised_pnl()) + 1e-9
 
     def _try_fill_entry(self, order: Order, bar: Bar) -> float | None:
         """Return the RAW fill price if this bar fills the order, else None."""
@@ -161,7 +174,7 @@ class SimulatedVenue(ExecutionVenue):
                 return min(sp, bar.open)   # gap down fills worse
         return None
 
-    def _open_trade(self, order: Order, raw_price: float, ts: datetime) -> None:
+    def _open_trade(self, order: Order, raw_price: float, ts: datetime) -> Trade:
         # A resting limit entry fills as a maker; market/stop entries are takers.
         liq = Liquidity.MAKER if order.type is OrderType.LIMIT else Liquidity.TAKER
         fill_price = self.cost_model.fill_price(self.instrument, order.side, raw_price, liq)
@@ -183,6 +196,7 @@ class SimulatedVenue(ExecutionVenue):
         order.filled_at = ts
         order.fill_price = fill_price
         self._open.append(trade)
+        return trade
 
     def _check_exit(self, trade: Trade, bar: Bar) -> tuple[float, str] | None:
         long = trade.side is Side.BUY
