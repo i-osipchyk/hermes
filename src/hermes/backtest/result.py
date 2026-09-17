@@ -27,6 +27,7 @@ class Metrics:
     max_drawdown: float | None = None
     win_rate: float | None = None
     profit_factor: float | None = None
+    pnl_ratio: float | None = None
     num_trades: int = 0
     num_params: int = 0
     parameter_adjusted_sharpe: float | None = None
@@ -208,6 +209,13 @@ def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:
         gross_win = sum(t.net_pnl for t in wins)
         gross_loss = abs(sum(t.net_pnl for t in losses))
         m.profit_factor = (gross_win / gross_loss) if gross_loss > 0 else math.inf
+
+        # PnL ratio: avg winning trade / avg losing trade (payoff ratio)
+        if wins and losses:
+            avg_win = gross_win / len(wins)
+            avg_loss = gross_loss / len(losses)
+            if avg_loss > 0:
+                m.pnl_ratio = avg_win / avg_loss
 
         # Exposure: fraction of equity curve bars with an open position
         if equity_curve:

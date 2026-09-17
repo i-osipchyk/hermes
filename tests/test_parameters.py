@@ -175,6 +175,42 @@ def test_parameter_adjusted_sharpe_penalised():
     assert m_penalised.parameter_adjusted_sharpe == m_penalised.sharpe
 
 
+def test_pnl_ratio():
+    """pnl_ratio = avg_win / avg_loss; None when no wins or no losses."""
+    from hermes.backtest.result import _metrics
+    from hermes.execution.trade import Trade
+
+    instrument = _btc()
+
+    def _trade(pnl):
+        return Trade(
+            instrument=instrument,
+            side="BUY",
+            size=1.0,
+            entry_price=100.0,
+            entry_time=T0,
+            exit_price=100.0 + pnl,
+            exit_time=T0 + timedelta(hours=1),
+            exit_reason="tp" if pnl > 0 else "sl",
+            gross_pnl=pnl,
+            costs=0.0,
+        )
+
+    # 2 wins (+20, +10 → avg 15) and 1 loss (-5 → avg 5): ratio = 3.0
+    trades = [_trade(20.0), _trade(10.0), _trade(-5.0)]
+    curve = [(T0, 10_000.0), (T0 + timedelta(hours=2), 10_025.0)]
+    m = _metrics(curve, trades)
+    assert m.pnl_ratio == pytest.approx(3.0)
+
+    # All wins — no losses, pnl_ratio stays None
+    m_no_loss = _metrics(curve, [_trade(10.0), _trade(5.0)])
+    assert m_no_loss.pnl_ratio is None
+
+    # No trades — pnl_ratio stays None
+    m_empty = _metrics(curve, [])
+    assert m_empty.pnl_ratio is None
+
+
 def test_num_params_carried_through_engine():
     """The engine counts declared Parameters and sets metrics.num_params."""
     strat = Configurable()  # declares 1 Parameter ("threshold")

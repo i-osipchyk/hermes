@@ -124,22 +124,21 @@ def run_universe(
     params: dict | None = None,
     unconstrained: bool = False,
     sizer=None,
-    progress=None,
 ):
-    """Run the strategy independently on each ticker and collect a BatchResult.
+    """Run the strategy across all tickers as a single shared-capital portfolio.
 
-    ``starting_cash`` is the total for the whole batch — it is split equally across the
-    tickers, so each sleeve is funded with ``starting_cash / len(tickers)`` and the
-    combined portfolio starts at ``starting_cash``."""
-    from ..backtest import run_batch
+    All legs draw from one ``starting_cash`` pool via :class:`PortfolioBacktest` —
+    identical to how calendar universes (e.g. sp500) are run."""
+    from ..backtest.portfolio import PortfolioBacktest
+    from ..backtest.universe import UniverseResult
 
-    per_ticker = starting_cash / len(tickers) if tickers else starting_cash
-
-    def build(ticker: str):
-        return configured_backtest(
+    legs = [
+        configured_backtest(
             entry, source_name=source_name, ticker=ticker,
-            start=start, end=end, starting_cash=per_ticker, params=params,
-            unconstrained=unconstrained, sizer=sizer,
+            start=start, end=end, starting_cash=starting_cash,
+            params=params, unconstrained=unconstrained, sizer=sizer,
         )
-
-    return run_batch(tickers, build, progress=progress)
+        for ticker in tickers
+    ]
+    pr = PortfolioBacktest(legs=legs, starting_cash=starting_cash, unconstrained=unconstrained).run()
+    return UniverseResult(portfolio_result=pr, universe_size=len(tickers))

@@ -155,6 +155,8 @@ def _show_metrics(result):
     r4[1].metric("Exposure", _fmt_pct(m.exposure_pct), help="Fraction of bars with an open position")
     r4[2].metric("Turnover (ann.)", _fmt_num(m.turnover), help="Total traded notional / avg equity, annualised")
     r4[3].metric("Avg drawdown", _fmt_pct(m.avg_drawdown), help="Mean depth across all drawdown episodes")
+    r5 = st.columns(4)
+    r5[0].metric("PnL ratio", _fmt_num(m.pnl_ratio), help="Avg win / avg loss per trade (payoff ratio)")
 
 
 def _show_trades(result):
@@ -461,16 +463,19 @@ if run:
         st.session_state.pop("batch", None)
     else:
         src_override, tickers = universes.load_universe(universe)
-        bar = st.progress(0.0, f"Running {universe} ({len(tickers)} symbols)…")
-        batch = discovery.run_universe(
-            entry, tickers=tickers, source_name=src_override or source_name,
-            start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
-            unconstrained=unconstrained, sizer=sizer,
-            progress=lambda done, total: bar.progress(done / max(total, 1), f"Backtesting {done}/{total}…"),
-        )
-        bar.empty()
-        st.session_state.update(batch=batch, mode="batch")
+        try:
+            with st.spinner(f"Running {universe} ({len(tickers)} symbols)…"):
+                universe_result = discovery.run_universe(
+                    entry, tickers=tickers, source_name=src_override or source_name,
+                    start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
+                    unconstrained=unconstrained, sizer=sizer,
+                )
+        except Exception as exc:
+            st.error(f"Universe backtest failed: {exc}")
+            st.stop()
+        st.session_state.update(universe_result=universe_result, mode="universe")
         st.session_state.pop("result", None)
+        st.session_state.pop("batch", None)
 
 # --- results ---------------------------------------------------------------
 
@@ -515,7 +520,8 @@ elif mode == "universe" and st.session_state.get("universe_result") is not None:
     ur = st.session_state["universe_result"]
     pr = ur.portfolio_result
 
-    st.subheader("S&P 500 universe — portfolio summary")
+    _universe_label = st.session_state.get("universe", "universe")
+    st.subheader(f"{_universe_label} — portfolio summary")
     a = st.columns(4)
     a[0].metric("Universe size", ur.universe_size, help="Distinct tickers ever in the index during the period")
     a[1].metric("Legs with trades", sum(1 for rows in pr.per_symbol.values() if rows))
