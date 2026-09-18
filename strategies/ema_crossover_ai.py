@@ -17,7 +17,7 @@ AI goal: filter out golden crosses in companies whose fundamentals do not suppor
 
 Sizing: Defaults to ``EquityFraction(0.95)`` when no sizer is set on the Backtest.
 
-# Parameters: 2  (≤ 3 recommended; more reduces parameter_adjusted_sharpe)
+# Parameters: 3  (≤ 3 recommended; more reduces parameter_adjusted_sharpe)
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ GENERATED_BY = "hermes-strategy"
 
 D1 = Timeframe.parse("1D")
 
+# Parameters: 3  (≤ 3 recommended; more reduces parameter_adjusted_sharpe)
 # TODO: replace this placeholder with a real task description for the model.
 _AI_PROMPT = """\
 Strategy: EMA Crossover (8 EMA / 32 EMA, daily bars, long-only)
@@ -97,12 +98,20 @@ class EmaCrossoverAI(Strategy):
                 description="Period of the slow EMA",
             )
         )
+        self._min_confidence = self.param(
+            Parameter(
+                "min_confidence", 0.0, bounds=(0.0, 1.0),
+                description="Minimum AI confidence to approve a trade (0 = pass all approvals)",
+            )
+        )
         self.short_ema = self.use(EMA(D1, short_len))
         self.long_ema = self.use(EMA(D1, long_len))
         self._prev_short: float | None = None
         self._prev_long: float | None = None
 
     def on_start(self) -> None:
+        if self.advisor is not None:
+            self.advisor.min_confidence = self._min_confidence
         short = self.indicator_value(self.short_ema)["value"]
         long  = self.indicator_value(self.long_ema)["value"]
         if None in (short, long):
@@ -179,6 +188,7 @@ def build_backtest(**overrides) -> Backtest:
                 EDGARFilingEnricher(),             # PIT 10-K Items 1, 1A, 7 — no API key
                 PolygonNewsEnricher(days_back=30), # requires POLYGON_API_KEY
             ],
+            min_confidence=0.0,
         ),
         **overrides,
     )
