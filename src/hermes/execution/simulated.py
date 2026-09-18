@@ -144,6 +144,14 @@ class SimulatedVenue(ExecutionVenue):
             Account.margin_required(self.instrument, t.entry_price, t.size) for t in self._open
         )
 
+    def pending_margin(self) -> float:
+        """Margin reserved for working (not yet filled) entry orders."""
+        total = 0.0
+        for o in self._working:
+            ref = o.limit_price or o.stop_price or (self._last_bar.close if self._last_bar else 0.0)
+            total += Account.margin_required(self.instrument, ref, o.size)
+        return total
+
     # --- internals -------------------------------------------------------------
 
     def _can_afford(self, side: Side, size: float, price: float) -> bool:
@@ -154,7 +162,8 @@ class SimulatedVenue(ExecutionVenue):
             return True
         req = Account.margin_required(self.instrument, price, size)
         external = self._external_margin() if self._external_margin else 0.0
-        return req <= self.account.free_margin(self.used_margin() + external, self.unrealised_pnl()) + 1e-9
+        reserved = self.used_margin() + self.pending_margin()
+        return req <= self.account.free_margin(reserved + external, self.unrealised_pnl()) + 1e-9
 
     def _try_fill_entry(self, order: Order, bar: Bar) -> float | None:
         """Return the RAW fill price if this bar fills the order, else None."""

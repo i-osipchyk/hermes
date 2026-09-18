@@ -108,7 +108,7 @@ class PortfolioBacktest:
         # would exceed the shared capital pool.
         for i, ls in enumerate(leg_states):
             others = [lx.venue for j, lx in enumerate(leg_states) if j != i]
-            ls.venue._external_margin = lambda vs=others: sum(v.used_margin() for v in vs)
+            ls.venue._external_margin = lambda vs=others: sum(v.used_margin() + v.pending_margin() for v in vs)
 
         # Unified sorted event stream: (timestamp, leg_index, bar).
         # Ties broken by leg order so deterministic.
