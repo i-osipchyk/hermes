@@ -48,18 +48,36 @@ class ClaudeProvider(AIProvider):
         return self._client
 
     def decide(self, system_prompt: str, user_prompt: str) -> AdvisorDecision:
+        import anthropic
         client = self._get_client()
-        response = client.messages.create(
-            model=self.model_id,
-            max_tokens=self.max_tokens,
-            # temperature omitted: not allowed when tool_choice forces a specific tool.
-            # Reproducibility is guaranteed by the DecisionCache regardless.
-            # Prompt-cache the static system prompt to cut cost across many calls.
-            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-            tools=[_DECISION_TOOL],
-            tool_choice={"type": "tool", "name": "record_decision"},
-            messages=[{"role": "user", "content": user_prompt}],
-        )
+        try:
+            response = client.messages.create(
+                model=self.model_id,
+                max_tokens=self.max_tokens,
+                # temperature omitted: not allowed when tool_choice forces a specific tool.
+                # Reproducibility is guaranteed by the DecisionCache regardless.
+                # Prompt-cache the static system prompt to cut cost across many calls.
+                system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                tools=[_DECISION_TOOL],
+                tool_choice={"type": "tool", "name": "record_decision"},
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+        except anthropic.APIStatusError as e:
+            import warnings
+            warnings.warn(
+                f"ClaudeProvider: API error {e.status_code} — approving trade by default. {e.message}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return AdvisorDecision(True, 0.0, f"API error {e.status_code}: {e.message}", self.model_id, is_error=True)
+        except anthropic.APIConnectionError as e:
+            import warnings
+            warnings.warn(
+                f"ClaudeProvider: connection error — approving trade by default. {e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return AdvisorDecision(True, 0.0, f"connection error: {e}", self.model_id, is_error=True)
         for block in response.content:
             if getattr(block, "type", None) == "tool_use" and block.name == "record_decision":
                 data = block.input

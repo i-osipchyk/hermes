@@ -29,22 +29,42 @@ class AIAdvisor:
         system_prompt: str = "You are a disciplined trading risk filter.",
         cache: DecisionCache | None = None,
         enrichers: list[ContextEnricher] | None = None,
+        min_confidence: float = 0.0,
     ) -> None:
         self.provider = provider
         self.system_prompt = system_prompt
         self.cache = cache or DecisionCache()
         self.enrichers: list[ContextEnricher] = enrichers or []
+        self.min_confidence = min_confidence
 
     def evaluate(self, strategy, order, prompt: str) -> AdvisorDecision:
         """Confirm/veto ``order`` for ``strategy``. ``prompt`` is the author's
-        template; context is appended from the strategy's current view."""
+        template; context is appended from the strategy's current view.
+
+        If ``min_confidence`` is set, an AI approval is downgraded to a veto
+        when the model's confidence falls below the threshold. The raw decision
+        is still cached at its original confidence so re-runs with a different
+        threshold are free (cache hit, threshold applied fresh each time).
+        """
         user_prompt = self._assemble_context(strategy, order, prompt)
         key = self.cache.key(self.provider.model_id, self.system_prompt, user_prompt)
         cached = self.cache.get(key)
         if cached is not None:
-            return cached
+            return self._apply_threshold(cached)
         decision = self.provider.decide(self.system_prompt, user_prompt)
-        self.cache.put(key, decision)
+        if not decision.is_error:
+            self.cache.put(key, decision)
+        return self._apply_threshold(decision)
+
+    def _apply_threshold(self, decision: AdvisorDecision) -> AdvisorDecision:
+        """Downgrade an approval to a veto if confidence < min_confidence."""
+        if decision.approved and self.min_confidence > 0.0 and decision.confidence < self.min_confidence:
+            return AdvisorDecision(
+                approved=False,
+                confidence=decision.confidence,
+                reason=f"confidence {decision.confidence:.0%} below threshold {self.min_confidence:.0%}: {decision.reason}",
+                model_id=decision.model_id,
+            )
         return decision
 
     def _assemble_context(self, strategy, order, prompt: str, *, window: int = 30) -> str:

@@ -19,6 +19,7 @@ class AdvisorDecision:
     confidence: float          # 0..1
     reason: str
     model_id: str              # recorded so backtest/live divergence is detectable
+    is_error: bool = False     # True when the decision is a fail-open due to a provider error; never cached
 
 
 class AIProvider(ABC):
