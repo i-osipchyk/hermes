@@ -119,6 +119,7 @@ class UniverseBacktest:
     unconstrained: bool = False  # skip capital check — orders never rejected for insufficient funds
     sizer: object | None = None  # backtest-level sizer applied to every leg
     advisor: object | None = None  # optional AIAdvisor wired to every leg
+    progress_callback: object | None = None  # Callable[[int, int], None] | None — forwarded to PortfolioBacktest
 
     def run(self) -> UniverseResult:
         """Build and run the bias-free portfolio backtest.
@@ -165,7 +166,8 @@ class UniverseBacktest:
             )
 
         portfolio = PortfolioBacktest(legs=legs, starting_cash=self.starting_cash,
-                                      unconstrained=self.unconstrained)
+                                      unconstrained=self.unconstrained,
+                                      progress_callback=self.progress_callback)
         portfolio_result = portfolio.run()
 
         return UniverseResult(

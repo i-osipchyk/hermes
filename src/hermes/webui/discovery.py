@@ -124,6 +124,7 @@ def run_universe(
     params: dict | None = None,
     unconstrained: bool = False,
     sizer=None,
+    progress_callback=None,
 ):
     """Run the strategy across all tickers as a single shared-capital portfolio.
 
@@ -140,5 +141,6 @@ def run_universe(
         )
         for ticker in tickers
     ]
-    pr = PortfolioBacktest(legs=legs, starting_cash=starting_cash, unconstrained=unconstrained).run()
+    pr = PortfolioBacktest(legs=legs, starting_cash=starting_cash, unconstrained=unconstrained,
+                           progress_callback=progress_callback).run()
     return UniverseResult(portfolio_result=pr, universe_size=len(tickers))

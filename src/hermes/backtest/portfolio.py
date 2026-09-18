@@ -96,6 +96,7 @@ class PortfolioBacktest:
     legs: list[Backtest]
     starting_cash: float = 10_000.0
     unconstrained: bool = False  # skip capital check — orders never rejected for insufficient funds
+    progress_callback: object | None = None  # Callable[[int, int], None] | None — called as (done, total)
 
     def run(self) -> PortfolioResult:
         if not self.legs:
@@ -121,7 +122,11 @@ class PortfolioBacktest:
         equity_curve: list[tuple[datetime, float]] = []
         prev_closed_counts = [0] * len(leg_states)
 
-        for ts, idx, bar in events:
+        _total_events = len(events)
+        _cb = self.progress_callback
+        for _ev_idx, (ts, idx, bar) in enumerate(events):
+            if _cb and _ev_idx % 1000 == 0:
+                _cb(_ev_idx, _total_events)
             ls = leg_states[idx]
 
             # Advance reference feeds for this leg up to now (no look-ahead).
@@ -199,6 +204,9 @@ class PortfolioBacktest:
             # Portfolio equity = shared cash + unrealised PnL across ALL venues.
             total_unrealised = sum(lx.venue.unrealised_pnl() for lx in leg_states)
             equity_curve.append((ts, account.cash + total_unrealised))
+
+        if _cb:
+            _cb(_total_events, _total_events)
 
         for ls in leg_states:
             ls.strategy.on_stop()

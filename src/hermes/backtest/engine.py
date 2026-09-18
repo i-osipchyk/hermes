@@ -68,6 +68,7 @@ class Backtest:
     validate: bool = False                 # run StatValidation after the backtest
     unconstrained: bool = False            # skip capital check — orders never rejected for insufficient funds
     sizer: Sizer | None = None             # backtest-level sizer; overrides the strategy's own sizing when set
+    progress_callback: object | None = None  # Callable[[int, int], None] | None — called as (done, total)
 
     def run(self) -> BacktestResult:
         start = _as_utc(self.start)
@@ -147,7 +148,11 @@ class Backtest:
             {tf: 0 for tf in rtf} for rtf in ref_tf_indicators
         ]
 
-        for bar in bars:
+        _total_bars = len(bars)
+        _cb = self.progress_callback
+        for _bar_idx, bar in enumerate(bars):
+            if _cb and _bar_idx % 250 == 0:
+                _cb(_bar_idx, _total_bars)
             t = bar.timestamp
 
             # Advance reference feeds up to now — no look-ahead.
@@ -230,6 +235,8 @@ class Backtest:
                 bh_eq = self.starting_cash * (bar.close / first_close)
                 benchmark_equity_curve.append((t, bh_eq))
 
+        if _cb:
+            _cb(_total_bars, _total_bars)
         strat.on_stop()
         num_params = len(strat.declared_parameters())
         result = BacktestResult.compute(equity_curve, venue.closed_trades, num_params=num_params)

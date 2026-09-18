@@ -22,6 +22,30 @@ from hermes.webui import discovery, review, run_cache as _rc, sources, universes
 st.set_page_config(page_title="Hermes Backtester", layout="wide")
 st.title("Hermes — backtesting")
 
+
+def _make_progress_cb(bar_widget, text_widget, label: str):
+    """Return a callback(done, total) that updates a Streamlit progress bar + ETA caption."""
+    import time
+    _state: dict = {"start": None}
+
+    def cb(done: int, total: int) -> None:
+        if total == 0:
+            return
+        if _state["start"] is None:
+            _state["start"] = time.monotonic()
+        frac = min(done / total, 1.0)
+        bar_widget.progress(frac)
+        elapsed = time.monotonic() - _state["start"]
+        if 0 < frac < 1.0 and elapsed > 0.5:
+            eta = elapsed / frac * (1.0 - frac)
+            text_widget.caption(
+                f"{label} — {done:,} / {total:,}  |  elapsed {elapsed:.0f}s  eta {eta:.0f}s"
+            )
+        elif frac >= 1.0:
+            text_widget.caption(f"{label} — done in {elapsed:.1f}s")
+
+    return cb
+
 _SINGLE = "— single symbol —"
 
 
@@ -469,8 +493,12 @@ if run or st.session_state.pop("_auto_run", False):
                 unconstrained=unconstrained, sizer=sizer,
             )
             try:
-                with st.spinner("Running backtest… (first run may fetch data)"):
-                    result = bt.run()
+                _prog = st.progress(0.0)
+                _prog_txt = st.empty()
+                bt.progress_callback = _make_progress_cb(_prog, _prog_txt, ticker)
+                result = bt.run()
+                _prog.empty()
+                _prog_txt.empty()
             except Exception as exc:
                 st.error(f"Backtest failed on source `{source_name}` / `{ticker}`: {exc}")
                 st.stop()
@@ -533,8 +561,12 @@ if run or st.session_state.pop("_auto_run", False):
                 advisor=_template_bt.advisor,
             )
             try:
-                with st.spinner(f"Running {universe} universe (first run fetches data from {source_name})…"):
-                    universe_result = ub.run()
+                _prog = st.progress(0.0)
+                _prog_txt = st.empty()
+                ub.progress_callback = _make_progress_cb(_prog, _prog_txt, f"{universe} universe")
+                universe_result = ub.run()
+                _prog.empty()
+                _prog_txt.empty()
             except Exception as exc:
                 st.error(f"Universe backtest failed: {exc}")
                 st.stop()
@@ -578,12 +610,16 @@ if run or st.session_state.pop("_auto_run", False):
             st.session_state.pop("batch", None)
         else:
             try:
-                with st.spinner(f"Running {universe} ({len(tickers)} symbols)…"):
-                    universe_result = discovery.run_universe(
-                        entry, tickers=tickers, source_name=src_override or source_name,
-                        start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
-                        unconstrained=unconstrained, sizer=sizer,
-                    )
+                _prog = st.progress(0.0)
+                _prog_txt = st.empty()
+                universe_result = discovery.run_universe(
+                    entry, tickers=tickers, source_name=src_override or source_name,
+                    start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
+                    unconstrained=unconstrained, sizer=sizer,
+                    progress_callback=_make_progress_cb(_prog, _prog_txt, f"{universe} ({len(tickers)} symbols)"),
+                )
+                _prog.empty()
+                _prog_txt.empty()
             except Exception as exc:
                 st.error(f"Universe backtest failed: {exc}")
                 st.stop()
