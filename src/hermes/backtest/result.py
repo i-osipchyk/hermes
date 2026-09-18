@@ -112,7 +112,7 @@ class BacktestResult:
 
 
 def _trade_dict(t: Trade) -> dict:
-    return {
+    d = {
         "symbol": str(t.instrument.symbol),
         "side": t.side.value,
         "size": t.size,
@@ -127,6 +127,16 @@ def _trade_dict(t: Trade) -> dict:
         "costs": t.costs,
         "net_pnl": t.net_pnl,
     }
+    if t.ai_decision is not None:
+        ai = t.ai_decision
+        d["ai_decision"] = {
+            "approved": ai.approved,
+            "confidence": ai.confidence,
+            "reason": ai.reason,
+            "model_id": ai.model_id,
+            "prompt": ai.prompt,
+        }
+    return d
 
 
 def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:

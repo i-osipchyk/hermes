@@ -200,6 +200,7 @@ class SimulatedVenue(ExecutionVenue):
             stop_loss=order.stop_loss,
             take_profit=order.take_profit,
             costs=commission,
+            ai_decision=order.ai_decision,
         )
         order.status = OrderStatus.FILLED
         order.filled_at = ts

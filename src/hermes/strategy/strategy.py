@@ -228,4 +228,5 @@ class Strategy(ABC):
         if getattr(self, "advisor", None) is None:
             return True
         decision = self.advisor.evaluate(self, order, prompt)
+        order.ai_decision = decision
         return decision.approved

@@ -57,3 +57,4 @@ class Order:
     filled_at: datetime | None = None
     fill_price: float | None = None
     tag: str | None = None           # author label, surfaced in the blotter
+    ai_decision: object | None = None  # AdvisorDecision if the AI gate was consulted
