@@ -17,7 +17,7 @@ import streamlit as st
 
 from hermes.backtest import BacktestResult
 from hermes.strategy import EquityFraction, NotionalCash, RiskCash, RiskPercent, Units
-from hermes.webui import discovery, review, sources, universes
+from hermes.webui import discovery, review, run_cache as _rc, sources, universes
 
 st.set_page_config(page_title="Hermes Backtester", layout="wide")
 st.title("Hermes — backtesting")
@@ -411,76 +411,211 @@ with st.form("run"):
 
     run = st.form_submit_button("Run backtest", type="primary")
 
-if run:
+# Compute cache key from current widget values (available after first render).
+_shash = _rc.strategy_hash(entry.path)
+_sizer_repr = repr(sizer)
+_ck = _rc.cache_key(
+    strategy=entry.name,
+    strategy_hash=_shash,
+    source=source_name,
+    ticker=ticker if single_mode else None,
+    universe=None if single_mode else universe,
+    start=datetime.combine(start, time(), tzinfo=UTC).isoformat(),
+    end=datetime.combine(end, time(), tzinfo=UTC).isoformat(),
+    params=param_values,
+    sizer=_sizer_repr,
+    unconstrained=unconstrained,
+)
+st.session_state["_ck"] = _ck
+
+# --- Cache banner (always rendered so the button is always clickable) ------
+
+_pre_hit = _rc.load_run(_ck) is not None
+if not single_mode:
+    _pre_hit = _pre_hit and _rc.load_universe_meta(_ck) is not None
+
+if _pre_hit:
+    _pre_meta = _rc.load_run(_ck)[1]
+    st.info(
+        f"⚡ Cached result from {_pre_meta.created_at[:10]} — "
+        "edit params or click **Clear & re-run** to refresh."
+    )
+    if st.button("Clear & re-run", key="clear_rerun"):
+        _rc.delete_run(_ck)
+        st.session_state["_auto_run"] = True
+        st.rerun()
+
+if run or st.session_state.pop("_auto_run", False):
     start_dt = datetime.combine(start, time(), tzinfo=UTC)
     end_dt = datetime.combine(end, time(), tzinfo=UTC)
     if universe == _SINGLE:
-        bt = discovery.configured_backtest(
-            entry, source_name=source_name, ticker=ticker,
-            start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
-            unconstrained=unconstrained, sizer=sizer,
-        )
-        try:
-            with st.spinner("Running backtest… (first run may fetch data)"):
-                result = bt.run()
-        except Exception as exc:
-            st.error(f"Backtest failed on source `{source_name}` / `{ticker}`: {exc}")
-            st.stop()
-        rid = review.run_id(result.to_dict())
-        review.write_result(result.to_dict(), rid)
-        review.save_last_rid(rid)
-        st.session_state.update(result=result, rid=rid, ai=entry.is_ai_generated, mode="single")
-        st.session_state.pop("batch", None)
+        _cached = _rc.load_run(_ck)
+        if _cached:
+            _cached_dict, _cached_meta = _cached
+            result = review.load_result(review.run_id(_cached_dict))
+            if result is None:
+                rid = review.run_id(_cached_dict)
+                review.write_result(_cached_dict, rid)
+                result = review.load_result(rid)
+            else:
+                rid = review.run_id(_cached_dict)
+            review.save_last_rid(rid)
+            st.session_state.update(result=result, rid=rid, ai=entry.is_ai_generated, mode="single")
+            st.session_state.pop("batch", None)
+        else:
+            bt = discovery.configured_backtest(
+                entry, source_name=source_name, ticker=ticker,
+                start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
+                unconstrained=unconstrained, sizer=sizer,
+            )
+            try:
+                with st.spinner("Running backtest… (first run may fetch data)"):
+                    result = bt.run()
+            except Exception as exc:
+                st.error(f"Backtest failed on source `{source_name}` / `{ticker}`: {exc}")
+                st.stop()
+            result_dict = result.to_dict()
+            rid = review.run_id(result_dict)
+            review.write_result(result_dict, rid)
+            review.save_last_rid(rid)
+            _rc.save_run(
+                _ck,
+                result_dict,
+                _rc.RunMeta(
+                    strategy=entry.name,
+                    strategy_hash=_shash,
+                    source=source_name,
+                    ticker=ticker,
+                    universe=None,
+                    start=start_dt.isoformat(),
+                    end=end_dt.isoformat(),
+                    params=param_values,
+                    sizer=_sizer_repr,
+                    unconstrained=unconstrained,
+                    created_at=datetime.now(UTC).isoformat(),
+                ),
+            )
+            st.session_state.update(result=result, rid=rid, ai=entry.is_ai_generated, mode="single")
+            st.session_state.pop("batch", None)
     elif universes.is_calendar_universe(universe):
-        from hermes.backtest import UniverseBacktest
-        from hermes.webui.sources import build_source as _build_source
+        _cached = _rc.load_run(_ck)
+        _uni_meta = _rc.load_universe_meta(_ck) if _cached else None
+        if _cached and _uni_meta:
+            _cached_dict, _ = _cached
+            universe_result = _rc.restore_universe_result(_cached_dict, _uni_meta)
+            st.session_state.update(universe_result=universe_result, mode="universe")
+            st.session_state.pop("result", None)
+            st.session_state.pop("batch", None)
+        else:
+            from hermes.backtest import UniverseBacktest
+            from hermes.webui.sources import build_source as _build_source
 
-        cal = universes.load_calendar(universe)
-        defaults = discovery.default_config(entry)
-        source = (
-            _build_source(source_name)
-            if source_name and source_name != defaults.source.name
-            else defaults.source
-        )
+            cal = universes.load_calendar(universe)
+            defaults = discovery.default_config(entry)
+            source = (
+                _build_source(source_name)
+                if source_name and source_name != defaults.source.name
+                else defaults.source
+            )
 
-        _template_bt = entry.build_backtest()
-        ub = UniverseBacktest(
-            strategy_factory=lambda: entry.build_backtest().strategy,
-            source=source,
-            calendar=cal,
-            timeframes=defaults.timeframes,
-            start=start_dt,
-            end=end_dt,
-            starting_cash=cash,
-            params=param_values,
-            unconstrained=unconstrained,
-            sizer=sizer,
-            advisor=_template_bt.advisor,
-        )
-        try:
-            with st.spinner(f"Running {universe} universe (first run fetches data from {source_name})…"):
-                universe_result = ub.run()
-        except Exception as exc:
-            st.error(f"Universe backtest failed: {exc}")
-            st.stop()
-        st.session_state.update(universe_result=universe_result, mode="universe")
-        st.session_state.pop("result", None)
-        st.session_state.pop("batch", None)
+            _template_bt = entry.build_backtest()
+            ub = UniverseBacktest(
+                strategy_factory=lambda: entry.build_backtest().strategy,
+                source=source,
+                calendar=cal,
+                timeframes=defaults.timeframes,
+                start=start_dt,
+                end=end_dt,
+                starting_cash=cash,
+                params=param_values,
+                unconstrained=unconstrained,
+                sizer=sizer,
+                advisor=_template_bt.advisor,
+            )
+            try:
+                with st.spinner(f"Running {universe} universe (first run fetches data from {source_name})…"):
+                    universe_result = ub.run()
+            except Exception as exc:
+                st.error(f"Universe backtest failed: {exc}")
+                st.stop()
+            pr = universe_result.portfolio_result
+            result_dict = pr.result.to_dict()
+            _rc.save_run(
+                _ck,
+                result_dict,
+                _rc.RunMeta(
+                    strategy=entry.name,
+                    strategy_hash=_shash,
+                    source=source_name,
+                    ticker=None,
+                    universe=universe,
+                    start=start_dt.isoformat(),
+                    end=end_dt.isoformat(),
+                    params=param_values,
+                    sizer=_sizer_repr,
+                    unconstrained=unconstrained,
+                    created_at=datetime.now(UTC).isoformat(),
+                ),
+            )
+            _rc.save_universe_meta(
+                _ck,
+                universe_size=universe_result.universe_size,
+                summary_rows=pr.summary_rows(),
+                per_symbol_counts={k: len(v) for k, v in pr.per_symbol.items()},
+            )
+            st.session_state.update(universe_result=universe_result, mode="universe")
+            st.session_state.pop("result", None)
+            st.session_state.pop("batch", None)
     else:
         src_override, tickers = universes.load_universe(universe)
-        try:
-            with st.spinner(f"Running {universe} ({len(tickers)} symbols)…"):
-                universe_result = discovery.run_universe(
-                    entry, tickers=tickers, source_name=src_override or source_name,
-                    start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
-                    unconstrained=unconstrained, sizer=sizer,
-                )
-        except Exception as exc:
-            st.error(f"Universe backtest failed: {exc}")
-            st.stop()
-        st.session_state.update(universe_result=universe_result, mode="universe")
-        st.session_state.pop("result", None)
-        st.session_state.pop("batch", None)
+        _cached = _rc.load_run(_ck)
+        _uni_meta = _rc.load_universe_meta(_ck) if _cached else None
+        if _cached and _uni_meta:
+            _cached_dict, _ = _cached
+            universe_result = _rc.restore_universe_result(_cached_dict, _uni_meta)
+            st.session_state.update(universe_result=universe_result, mode="universe")
+            st.session_state.pop("result", None)
+            st.session_state.pop("batch", None)
+        else:
+            try:
+                with st.spinner(f"Running {universe} ({len(tickers)} symbols)…"):
+                    universe_result = discovery.run_universe(
+                        entry, tickers=tickers, source_name=src_override or source_name,
+                        start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
+                        unconstrained=unconstrained, sizer=sizer,
+                    )
+            except Exception as exc:
+                st.error(f"Universe backtest failed: {exc}")
+                st.stop()
+            pr = universe_result.portfolio_result
+            result_dict = pr.result.to_dict()
+            _rc.save_run(
+                _ck,
+                result_dict,
+                _rc.RunMeta(
+                    strategy=entry.name,
+                    strategy_hash=_shash,
+                    source=source_name,
+                    ticker=None,
+                    universe=universe,
+                    start=start_dt.isoformat(),
+                    end=end_dt.isoformat(),
+                    params=param_values,
+                    sizer=_sizer_repr,
+                    unconstrained=unconstrained,
+                    created_at=datetime.now(UTC).isoformat(),
+                ),
+            )
+            _rc.save_universe_meta(
+                _ck,
+                universe_size=universe_result.universe_size,
+                summary_rows=pr.summary_rows(),
+                per_symbol_counts={k: len(v) for k, v in pr.per_symbol.items()},
+            )
+
+            st.session_state.update(universe_result=universe_result, mode="universe")
+            st.session_state.pop("result", None)
+            st.session_state.pop("batch", None)
 
 # --- results ---------------------------------------------------------------
 
@@ -558,6 +693,14 @@ else:
         st.info("Showing results from the last run — re-run the backtest above to refresh.")
 
     _show_split_or_full(result)
+
+# --- Cache controls (single-mode only) ------------------------------------
+
+_ck_current = st.session_state.get("_ck")
+if _ck_current and mode in ("single", "universe") and _rc.load_run(_ck_current) is not None:
+    if st.button("Clear this run from cache", key="clear_cache_btn"):
+        _rc.delete_run(_ck_current)
+        st.success("Run cleared from cache.")
 
 # --- Claude review ---------------------------------------------------------
 
