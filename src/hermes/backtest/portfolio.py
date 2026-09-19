@@ -217,6 +217,7 @@ class PortfolioBacktest:
             per_symbol[str(leg.symbol)] = ls.venue.closed_trades
 
         all_trades = [t for trades in per_symbol.values() for t in trades]
+        all_vetoed = [o for ls in leg_states for o in ls.venue.vetoed_orders]
         num_params = max(
             (len(ls.strategy.declared_parameters()) for ls in leg_states),
             default=0,
@@ -226,7 +227,10 @@ class PortfolioBacktest:
         # last value per day restores correct per-period return spacing for
         # Sharpe, VaR, drawdown, and all other time-series metrics.
         daily_curve = _last_per_day(equity_curve)
-        result = BacktestResult.compute(daily_curve, all_trades, num_params=num_params)
+        result = BacktestResult.compute(
+            daily_curve, all_trades, num_params=num_params,
+            vetoed_signals=all_vetoed,
+        )
         return PortfolioResult(result=result, per_symbol=per_symbol)
 
     # --- internal wiring -------------------------------------------------------

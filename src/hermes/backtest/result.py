@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from ..execution import Trade
+from ..execution.order import Order
 
 if TYPE_CHECKING:
     from .validation import StatValidation
@@ -71,16 +72,24 @@ BenchmarkComparison = BenchmarkStats
 class BacktestResult:
     equity_curve: list[tuple[datetime, float]] = field(default_factory=list)
     trades: list[Trade] = field(default_factory=list)
+    vetoed_signals: list[Order] = field(default_factory=list)
     metrics: Metrics = field(default_factory=Metrics)
     benchmark: BenchmarkStats | None = None
     stat_validation: StatValidation | None = None
     benchmark_equity: list[tuple[datetime, float]] | None = None
 
     @classmethod
-    def compute(cls, equity_curve, trades, num_params: int = 0) -> BacktestResult:
+    def compute(
+        cls,
+        equity_curve,
+        trades,
+        num_params: int = 0,
+        vetoed_signals: list | None = None,
+    ) -> BacktestResult:
         return cls(
             equity_curve=list(equity_curve),
             trades=list(trades),
+            vetoed_signals=list(vetoed_signals or []),
             metrics=_metrics(equity_curve, trades, num_params),
         )
 
@@ -103,6 +112,7 @@ class BacktestResult:
             "metrics": asdict(self.metrics),
             "equity_curve": [(ts.isoformat(), eq) for ts, eq in self.equity_curve],
             "trades": [_trade_dict(t) for t in self.trades],
+            "vetoed_signals": [_vetoed_dict(o) for o in self.vetoed_signals],
         }
         if self.benchmark is not None:
             d["benchmark"] = asdict(self.benchmark)
@@ -135,8 +145,28 @@ def _trade_dict(t: Trade) -> dict:
             "reason": ai.reason,
             "model_id": ai.model_id,
             "prompt": ai.prompt,
+            "from_cache": ai.from_cache,
         }
     return d
+
+
+def _vetoed_dict(o: Order) -> dict:
+    ai = o.ai_decision
+    return {
+        "symbol": str(o.instrument.symbol),
+        "side": o.side.value,
+        "size": o.size,
+        "entry_ref": o.fill_price or o.limit_price or o.stop_price,
+        "created_at": o.created_at.isoformat() if o.created_at else None,
+        "ai_decision": {
+            "approved": ai.approved,
+            "confidence": ai.confidence,
+            "reason": ai.reason,
+            "model_id": ai.model_id,
+            "prompt": ai.prompt,
+            "from_cache": ai.from_cache,
+        },
+    }
 
 
 def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:

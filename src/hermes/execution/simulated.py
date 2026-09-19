@@ -47,6 +47,7 @@ class SimulatedVenue(ExecutionVenue):
         self._pending_closes: list[Trade] = []  # exits decided last bar
         self._open: list[Trade] = []
         self._closed: list[Trade] = []
+        self._vetoed: list[Order] = []          # AI-vetoed orders (never filled)
         self._last_bar: Bar | None = None
         self._last_day: object | None = None
         # Set by PortfolioBacktest to account for other legs' margin reservations.
@@ -106,6 +107,9 @@ class SimulatedVenue(ExecutionVenue):
         if order in self._working:
             self._working.remove(order)
             order.status = OrderStatus.CANCELLED
+            ai = getattr(order, "ai_decision", None)
+            if ai is not None and not ai.approved:
+                self._vetoed.append(order)
 
     def modify_trade(self, trade, *, stop_loss=None, take_profit=None) -> None:
         if stop_loss is not None:
@@ -290,3 +294,7 @@ class SimulatedVenue(ExecutionVenue):
     @property
     def closed_trades(self) -> list[Trade]:
         return self._closed
+
+    @property
+    def vetoed_orders(self) -> list[Order]:
+        return self._vetoed

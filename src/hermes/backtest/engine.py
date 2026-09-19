@@ -239,7 +239,10 @@ class Backtest:
             _cb(_total_bars, _total_bars)
         strat.on_stop()
         num_params = len(strat.declared_parameters())
-        result = BacktestResult.compute(equity_curve, venue.closed_trades, num_params=num_params)
+        result = BacktestResult.compute(
+            equity_curve, venue.closed_trades, num_params=num_params,
+            vetoed_signals=venue.vetoed_orders,
+        )
 
         # --- buy-and-hold benchmark ------------------------------------------
         if first_close and last_close and first_close > 0 and equity_curve:
