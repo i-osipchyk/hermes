@@ -103,7 +103,14 @@ class PortfolioBacktest:
             raise ValueError("PortfolioBacktest requires at least one leg.")
 
         account = Account(self.starting_cash)
-        leg_states: list[_LegState] = [self._wire(leg, account, self.unconstrained) for leg in self.legs]
+        all_states = [self._wire(leg, account, self.unconstrained) for leg in self.legs]
+        leg_states: list[_LegState] = []
+        for leg, ls in zip(self.legs, all_states):
+            if not ls.bars:
+                import warnings
+                warnings.warn(f"Skipping {leg.symbol}: no data found in cache.", stacklevel=2)
+            else:
+                leg_states.append(ls)
 
         # Give each venue a cross-leg margin view so _can_afford rejects orders that
         # would exceed the shared capital pool.
@@ -122,11 +129,15 @@ class PortfolioBacktest:
         equity_curve: list[tuple[datetime, float]] = []
         prev_closed_counts = [0] * len(leg_states)
 
-        _total_events = len(events)
+        _window_start = min(_as_utc(leg.start) for leg in self.legs)
+        _total_events = sum(1 for ts, _i, _b in events if ts >= _window_start)
         _cb = self.progress_callback
-        for _ev_idx, (ts, idx, bar) in enumerate(events):
-            if _cb and _ev_idx % 1000 == 0:
-                _cb(_ev_idx, _total_events)
+        _cb_done = 0
+        for (ts, idx, bar) in events:
+            if ts >= _window_start:
+                if _cb and _cb_done % 1000 == 0:
+                    _cb(_cb_done, _total_events, ts)
+                _cb_done += 1
             ls = leg_states[idx]
 
             # Advance reference feeds for this leg up to now (no look-ahead).

@@ -148,11 +148,14 @@ class Backtest:
             {tf: 0 for tf in rtf} for rtf in ref_tf_indicators
         ]
 
-        _total_bars = len(bars)
+        _total_bars = sum(1 for b in bars if b.timestamp >= start)
         _cb = self.progress_callback
-        for _bar_idx, bar in enumerate(bars):
-            if _cb and _bar_idx % 250 == 0:
-                _cb(_bar_idx, _total_bars)
+        _cb_done = 0
+        for bar in bars:
+            if bar.timestamp >= start:
+                if _cb and _cb_done % 250 == 0:
+                    _cb(_cb_done, _total_bars, bar.timestamp)
+                _cb_done += 1
             t = bar.timestamp
 
             # Advance reference feeds up to now — no look-ahead.

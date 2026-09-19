@@ -24,11 +24,11 @@ st.title("Hermes — backtesting")
 
 
 def _make_progress_cb(bar_widget, text_widget, label: str):
-    """Return a callback(done, total) that updates a Streamlit progress bar + ETA caption."""
+    """Return a callback(done, total, current_date=None) that updates a Streamlit progress bar + ETA caption."""
     import time
     _state: dict = {"start": None}
 
-    def cb(done: int, total: int) -> None:
+    def cb(done: int, total: int, current_date=None) -> None:
         if total == 0:
             return
         if _state["start"] is None:
@@ -36,10 +36,11 @@ def _make_progress_cb(bar_widget, text_widget, label: str):
         frac = min(done / total, 1.0)
         bar_widget.progress(frac)
         elapsed = time.monotonic() - _state["start"]
+        date_str = f"  |  {current_date.strftime('%Y-%m-%d')}" if current_date is not None else ""
         if 0 < frac < 1.0 and elapsed > 0.5:
             eta = elapsed / frac * (1.0 - frac)
             text_widget.caption(
-                f"{label} — {done:,} / {total:,}  |  elapsed {elapsed:.0f}s  eta {eta:.0f}s"
+                f"{label}{date_str}  |  elapsed {elapsed:.0f}s  eta {eta:.0f}s"
             )
         elif frac >= 1.0:
             text_widget.caption(f"{label} — done in {elapsed:.1f}s")

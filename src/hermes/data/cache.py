@@ -24,6 +24,18 @@ class BarCache:
         sym = instrument.symbol
         return self.root / sym.source / f"{sym.ticker}_{timeframe}.parquet"
 
+    def _nodata_path(self, instrument: Instrument, timeframe: Timeframe) -> Path:
+        sym = instrument.symbol
+        return self.root / sym.source / f"{sym.ticker}_{timeframe}.nodata"
+
+    def mark_nodata(self, instrument: Instrument, timeframe: Timeframe) -> None:
+        path = self._nodata_path(instrument, timeframe)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+    def is_nodata(self, instrument: Instrument, timeframe: Timeframe) -> bool:
+        return self._nodata_path(instrument, timeframe).exists()
+
     def _load(self, instrument: Instrument, timeframe: Timeframe):
         import pandas as pd
 

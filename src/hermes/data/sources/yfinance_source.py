@@ -48,11 +48,17 @@ class YFinanceSource(DataSource):
     def history(
         self, instrument: Instrument, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[Bar]:
+        if self.cache.is_nodata(instrument, timeframe):
+            return []
+        file_existed = self.cache._path(instrument, timeframe).exists()
         for gap_start, gap_end in self.cache.missing_ranges(instrument, timeframe, start, end):
             self.cache.write(
                 instrument, timeframe, self._fetch(instrument.symbol.ticker, timeframe, gap_start, gap_end)
             )
-        return self.cache.read(instrument, timeframe, start, end)
+        bars = self.cache.read(instrument, timeframe, start, end)
+        if not bars and not file_existed:
+            self.cache.mark_nodata(instrument, timeframe)
+        return bars
 
     def supported_timeframes(self) -> set[Timeframe]:
         return {Timeframe.parse(t) for t in _INTERVAL}
