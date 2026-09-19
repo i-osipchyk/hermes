@@ -1,19 +1,22 @@
 """EMA Close Crossover strategy with AI Advisor confirmation gate (daily, long-only).
 
-Identical edge to ``ema_crossover.py`` — ride the trend while the 8-period EMA stays
-above the 32-period EMA — but every entry must pass an AI fundamental filter before
+Identical edge to ``ema_crossover.py`` — ride the trend while the fast EMA stays
+above the slow EMA — but every entry must pass an AI fundamental filter before
 the order is submitted.  The AI gate can only veto; it cannot invent or resize trades.
 
-Entry:  Golden cross (8 EMA crosses above 32 EMA) on bar N close → candidate order
+EMA periods are configurable via ``short_ema`` (default 8) and ``long_ema`` (default 32)
+parameters; the AI prompt is generated dynamically to reflect the active periods.
+
+Entry:  Golden cross (fast EMA crosses above slow EMA) on bar N close → candidate order
         sent to the AI Advisor with PIT fundamentals, 10-K excerpts, and recent news →
         approved: order sent; vetoed: order cancelled.  Fills at bar N+1 open.
 
-Exit:   Death cross (8 EMA crosses below 32 EMA) on bar M → market close, no AI gate.
+Exit:   Death cross (fast EMA crosses below slow EMA) on bar M → market close, no AI gate.
         Fills at bar M+1 open.
 
-AI goal: filter out golden crosses in companies whose fundamentals do not support a
-         sustained uptrend — deteriorating margins, balance sheet stress, or material
-         negative news that the price action hasn't priced in yet.
+AI goal: filter out golden crosses where the fundamental TRAJECTORY is deteriorating —
+         compressing margins, decelerating revenue, rising leverage, or a recent negative
+         catalyst — regardless of whether absolute metrics look healthy.
 
 Sizing: Defaults to ``EquityFraction(0.95)`` when no sizer is set on the Backtest.
 
@@ -43,44 +46,84 @@ GENERATED_BY = "hermes-strategy"
 D1 = Timeframe.parse("1D")
 
 # Parameters: 3  (≤ 3 recommended; more reduces parameter_adjusted_sharpe)
-# TODO: replace this placeholder with a real task description for the model.
-_AI_PROMPT = """\
-Strategy: EMA Crossover (8 EMA / 32 EMA, daily bars, long-only)
-Signal: The 8-period EMA just crossed above the 32-period EMA (golden cross), \
+def _ai_prompt(short_len: int, long_len: int) -> str:
+    return f"""\
+Strategy: EMA Crossover ({short_len} EMA / {long_len} EMA, daily bars, long-only)
+Signal: The {short_len}-period EMA just crossed above the {long_len}-period EMA (golden cross), \
 generating a candidate long entry.
 
-Your task: assess whether this ticker has the fundamental and business quality \
-to sustain an uptrend from this point forward. The technical signal is already \
-confirmed — your job is to filter out false positives where the crossover is \
-unlikely to lead to a lasting trend.
+Your task: decide whether this crossover has fundamental backing strong enough to \
+justify entering. The default answer is VETO. APPROVE only if you find at least TWO \
+of the five signals below — each verified against a specific number or named event \
+from the data provided. You may not infer, estimate, or extrapolate signals that \
+are not directly stated in the fundamentals snapshot, 10-K excerpts, or news items.
 
-APPROVE if ALL of the following hold:
-  - The business is profitable or on a credible path to profitability \
-(positive ROE, healthy margins, or a clear revenue growth story from the filing).
-  - The balance sheet is not under existential stress. NOTE: a current ratio \
-below 1 is normal and expected for large-cap companies that park cash in \
-long-term investments (e.g. Apple, Microsoft) — do NOT treat this alone as a \
-stress signal. Evaluate debt load in the context of earnings power and sector norms.
-  - There is no immediate fundamental headwind visible in the 10-K or recent news \
-(e.g. loss of major customer, regulatory action, covenant breach, going-concern language).
-  - Recent news is neutral-to-positive or unrelated to structural business deterioration.
+THE FIVE VALID SIGNALS — each must be verified, not inferred:
 
-VETO if ANY of the following is true:
-  - The company is deeply unprofitable with deteriorating margins and no clear \
-path to profitability.
-  - The balance sheet shows genuine solvency risk: debt that cannot be serviced \
-from operating cash flow, covenant breach language, or a going-concern note in \
-the filing. A current ratio below 1 alone is NOT sufficient to veto — look at \
-the full picture.
-  - The 10-K or recent news reveals a material negative catalyst (earnings \
-collapse, major lawsuit, product recall, executive fraud, industry disruption \
-that directly threatens this business model).
-  - The crossover is occurring in a company whose fundamentals do not justify \
-holding through a trend — i.e. this looks like a technical bounce in a \
-fundamentally deteriorating name.
+  S1. MARGIN EXPANSION (last reported year vs the year before):
+      Gross margin OR operating margin improved by at least 100bps year-over-year.
+      You must state both the current and prior-year margin figures, sourced from \
+the filing. If only one year's figure is available, this signal does not count.
 
-Be decisive. If fundamentals are missing or unavailable, default to APPROVE \
-and note the data gap in your reason — do not veto on uncertainty alone.\
+  S2. REVENUE RE-ACCELERATION (last two reported periods):
+      The YoY revenue growth rate in the most recent period is HIGHER than the \
+growth rate in the preceding period — i.e., growth is speeding up, not just positive.
+      You must state both growth rates with the source periods. Positive-but-decelerating \
+growth does NOT qualify.
+
+  S3. EARNINGS BEAT AND GUIDANCE RAISE — both in the same quarter:
+      The most recent earnings release beat consensus EPS AND management raised \
+forward guidance in the same announcement. Both conditions must be explicitly \
+stated in the news window. A beat without a raise, or a raise without a beat, \
+does not qualify.
+
+  S4. LEVERAGE REDUCTION (year-over-year):
+      Debt/Equity ratio fell by at least 10% year-over-year, OR interest coverage \
+ratio improved by at least 0.5x. You must cite both the current and prior figures. \
+If only one figure is available, this signal does not count.
+
+  S5. NAMED REVENUE CATALYST (in the 30-day news window):
+      A specific, named event that directly adds measurable near-term revenue: \
+a signed contract with a stated dollar value, a regulatory approval for a product \
+already in market, or a completed acquisition with revenue already consolidated. \
+The dollar impact or approval must be explicitly stated in the news. The following \
+do NOT qualify: analyst upgrades, price target raises, strategic intent, market \
+size projections, memoranda of understanding, letters of intent, pipeline language, \
+or acquisitions where revenue is not yet consolidated.
+
+VETO if you cannot confirm two signals from the above list using the data provided.
+
+AUTOMATIC VETO regardless of signals found:
+  - Revenue declined year-over-year (negative growth rate in the most recent period).
+  - Gross or operating margin compressed more than 150bps year-over-year.
+  - The most recent earnings release was a miss AND guidance was cut.
+  - Going-concern, covenant breach, or solvency warning in the 10-K.
+  - Named negative event in the news: lost contract, regulatory enforcement action, \
+product recall, material fraud allegation, or CFO/CEO departure under adverse \
+circumstances — each explicitly stated, not inferred.
+
+If the fundamentals snapshot is absent or the filing excerpts are missing, \
+VETO at confidence 0.35.
+
+CONFIDENCE CALIBRATION — use the full 0–1 range:
+  0.0–0.2  Definitive veto: automatic veto trigger fired AND trajectory actively \
+deteriorating across multiple axes.
+  0.2–0.4  Clear veto: fewer than two confirmed signals AND at least one deteriorating \
+axis or named negative catalyst.
+  0.4–0.5  Weak veto: fewer than two confirmed signals, but no active deterioration. \
+Trajectory is flat or ambiguous.
+  0.5–0.6  Borderline approval: exactly two signals confirmed, but both are weak or \
+offset by conflicting evidence.
+  0.6–0.75 Moderate approval: two signals clearly confirmed, no conflicting evidence.
+  0.75–0.9 Strong approval: three or more signals clearly confirmed.
+  0.9–1.0  Very high conviction: four or more signals confirmed, trajectory \
+unambiguously accelerating. Reserve for rare standout cases.
+
+Hard rules:
+  - VETO confidence must be ≤ 0.5.
+  - Missing data → VETO at 0.35.
+  - You must state which signals you counted and why, with the specific figures.
+  - If you cannot produce the source figure, the signal does not count.\
 """
 
 
@@ -104,6 +147,8 @@ class EmaCrossoverAI(Strategy):
                 description="Minimum AI confidence to approve a trade (0 = pass all approvals)",
             )
         )
+        self._short_len = short_len
+        self._long_len = long_len
         self.short_ema = self.use(EMA(D1, short_len))
         self.long_ema = self.use(EMA(D1, long_len))
         self._prev_short: float | None = None
@@ -121,7 +166,7 @@ class EmaCrossoverAI(Strategy):
         # If already in a golden-cross state at window start, enter — AI-gated.
         if short > long and self.venue.position().is_flat:
             order = self.buy(self.sizer or EquityFraction(0.95), tag="ema_x_long_initial")
-            if not self.confirm_with_ai(order, _AI_PROMPT):
+            if not self.confirm_with_ai(order, _ai_prompt(self._short_len, self._long_len)):
                 self.venue.cancel(order)
 
     def on_bar(self, bar) -> None:  # noqa: ARG002
@@ -144,7 +189,7 @@ class EmaCrossoverAI(Strategy):
 
         if golden_cross and position.is_flat:
             order = self.buy(self.sizer or EquityFraction(0.95), tag="ema_x_long")
-            if not self.confirm_with_ai(order, _AI_PROMPT):
+            if not self.confirm_with_ai(order, _ai_prompt(self._short_len, self._long_len)):
                 self.venue.cancel(order)
 
         elif death_cross and not position.is_flat:
@@ -175,13 +220,18 @@ def build_backtest(**overrides) -> Backtest:
         advisor=AIAdvisor(
             ClaudeProvider(),
             system_prompt=(
-                "You are a fundamental analyst and trading risk filter. "
+                "You are a fundamental momentum analyst and trading risk filter. "
+                "Your default answer is VETO. You APPROVE only when you can verify at least "
+                "two of five defined signals using specific numbers or named events from the "
+                "data provided — no inference, no extrapolation, no invented figures. "
+                "Analyst opinions, market projections, and strategic intent do not count. "
                 "You receive a technical entry signal (EMA golden cross on daily bars) "
                 "together with point-in-time financial metrics, 10-K filing excerpts, "
-                "and recent news. Your sole job is to approve or veto the trade based "
-                "on whether the company's fundamentals support a sustained uptrend. "
-                "Reply with a JSON object: {\"approved\": true|false, \"confidence\": 0-1, "
-                "\"reason\": \"one sentence\"}."
+                "and recent news. "
+                "Reply with a JSON object: {\"approved\": true|false, \"confidence\": 0.0-1.0, "
+                "\"reason\": \"one sentence citing the specific signals that drove the decision\"}. "
+                "Vetos must have confidence ≤ 0.5. Missing data is a veto at 0.35. "
+                "Approvals require at least two concrete positive momentum signals."
             ),
             enrichers=[
                 YFinanceFundamentalsEnricher(),   # PIT P/E, P/B, ROE, D/E — no API key
