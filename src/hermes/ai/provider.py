@@ -21,6 +21,7 @@ class AdvisorDecision:
     model_id: str              # recorded so backtest/live divergence is detectable
     is_error: bool = False     # True when the decision is a fail-open due to a provider error; never cached
     prompt: str = ""           # assembled user prompt (set after cache lookup; not stored in cache)
+    from_cache: bool = False   # True when served from the decision cache; False for a live API call
 
 
 class AIProvider(ABC):

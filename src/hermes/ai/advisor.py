@@ -51,11 +51,11 @@ class AIAdvisor:
         key = self.cache.key(self.provider.model_id, self.system_prompt, user_prompt)
         cached = self.cache.get(key)
         if cached is not None:
-            return self._apply_threshold(dataclasses.replace(cached, prompt=user_prompt))
+            return self._apply_threshold(dataclasses.replace(cached, prompt=user_prompt, from_cache=True))
         decision = self.provider.decide(self.system_prompt, user_prompt)
         if not decision.is_error:
-            self.cache.put(key, decision)
-        return self._apply_threshold(dataclasses.replace(decision, prompt=user_prompt))
+            self.cache.put(key, decision, user_prompt)
+        return self._apply_threshold(dataclasses.replace(decision, prompt=user_prompt, from_cache=False))
 
     def _apply_threshold(self, decision: AdvisorDecision) -> AdvisorDecision:
         """Downgrade an approval to a veto if confidence < min_confidence."""
@@ -66,6 +66,7 @@ class AIAdvisor:
                 reason=f"confidence {decision.confidence:.0%} below threshold {self.min_confidence:.0%}: {decision.reason}",
                 model_id=decision.model_id,
                 prompt=decision.prompt,
+                from_cache=decision.from_cache,
             )
         return decision
 
@@ -85,7 +86,7 @@ class AIAdvisor:
         side = order.side.value.upper()
         lines.append("Candidate trade:")
         lines.append(
-            f"  side={side} size={order.size} type={order.type.value} "
+            f"  side={side} type={order.type.value} "
             f"entry_ref={strategy.price} stop_loss={order.stop_loss} "
             f"take_profit={order.take_profit}"
         )
