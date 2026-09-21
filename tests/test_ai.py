@@ -76,6 +76,10 @@ def test_ai_veto_blocks_trade(tmp_path):
     result = _run(advisor)
     assert len(result.trades) == 0
     assert provider.calls == 1
+    assert len(result.vetoed_signals) == 1
+    vetoed = result.vetoed_signals[0]
+    assert vetoed.ai_decision is not None
+    assert vetoed.ai_decision.approved is False
 
 
 def test_ai_approve_allows_trade(tmp_path):
@@ -83,6 +87,7 @@ def test_ai_approve_allows_trade(tmp_path):
     advisor = AIAdvisor(provider, cache=DecisionCache(tmp_path))
     result = _run(advisor)
     assert len(result.trades) == 1
+    assert len(result.vetoed_signals) == 0
 
 
 def test_decision_cache_roundtrip_and_reuse(tmp_path):

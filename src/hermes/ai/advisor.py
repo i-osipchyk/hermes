@@ -54,7 +54,7 @@ class AIAdvisor:
             return self._apply_threshold(dataclasses.replace(cached, prompt=user_prompt, from_cache=True))
         decision = self.provider.decide(self.system_prompt, user_prompt)
         if not decision.is_error:
-            self.cache.put(key, decision, user_prompt)
+            self.cache.put(key, decision, user_prompt, self.system_prompt)
         return self._apply_threshold(dataclasses.replace(decision, prompt=user_prompt, from_cache=False))
 
     def _apply_threshold(self, decision: AdvisorDecision) -> AdvisorDecision:

@@ -42,13 +42,14 @@ class DecisionCache:
             model_id=data["model_id"],
         )
 
-    def put(self, key: str, decision: AdvisorDecision, user_prompt: str = "") -> None:
+    def put(self, key: str, decision: AdvisorDecision, user_prompt: str = "", system_prompt: str = "") -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         payload = {
             "approved": decision.approved,
             "confidence": decision.confidence,
             "reason": decision.reason,
             "model_id": decision.model_id,
+            "system_prompt": system_prompt,
             "user_prompt": user_prompt,
         }
         tmp = self._path(key + ".tmp")
