@@ -130,7 +130,10 @@ def test_per_symbol_breakdown():
 
     assert set(pr.per_symbol) == {"binance:AAA", "binance:BBB"}
     assert len(pr.per_symbol["binance:AAA"]) == 1  # winning trade
-    assert len(pr.per_symbol["binance:BBB"]) == 0  # DoNothing-like (flat bars, no TP hit)
+    # BBB opened a position that never hit TP/SL; it is force-closed at period end.
+    bbb_trades = pr.per_symbol["binance:BBB"]
+    assert len(bbb_trades) == 1
+    assert bbb_trades[0].exit_reason == "period_end"
 
 
 def test_summary_rows_one_row_per_symbol():

@@ -241,6 +241,10 @@ class Backtest:
         if _cb:
             _cb(_total_bars, _total_bars)
         strat.on_stop()
+        if bars:
+            last_bar = next(b for b in reversed(bars) if b.timestamp >= start)
+            venue.force_close_all(last_bar.timestamp)
+            equity_curve.append((last_bar.timestamp, venue.equity()))
         num_params = len(strat.declared_parameters())
         result = BacktestResult.compute(
             equity_curve, venue.closed_trades, num_params=num_params,

@@ -124,6 +124,12 @@ class SimulatedVenue(ExecutionVenue):
     def open_trades(self) -> list[Trade]:
         return list(self._open)
 
+    def force_close_all(self, ts: datetime) -> None:
+        """Close all open positions at the last bar's close price (period end)."""
+        price = self._last_bar.close if self._last_bar else 0.0
+        for trade in list(self._open):
+            self._close_trade(trade, price, "period_end", ts)
+
     def position(self) -> Position:
         pos = Position(self.instrument)
         pos.open_trades = list(self._open)

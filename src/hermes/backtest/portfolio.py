@@ -219,8 +219,14 @@ class PortfolioBacktest:
         if _cb:
             _cb(_total_events, _total_events)
 
+        last_ts = events[-1][0] if events else _window_start
         for ls in leg_states:
             ls.strategy.on_stop()
+            ls.venue.force_close_all(last_ts)
+        # Append a final equity point after all force-closes so the curve ends
+        # at realized-only P&L (unrealised is now 0).
+        total_unrealised = sum(lx.venue.unrealised_pnl() for lx in leg_states)
+        equity_curve.append((last_ts, account.cash + total_unrealised))
 
         # Gather trades per symbol and build the combined BacktestResult.
         per_symbol: dict[str, list] = {}
