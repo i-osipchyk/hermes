@@ -82,14 +82,17 @@ def _run_dir(key: str) -> Path:
     return RUNS_DIR / key
 
 
-def save_run(key: str, result_dict: dict, meta: RunMeta) -> None:
+def save_run(key: str, result_dict: dict, meta: RunMeta, llm_log=None) -> None:
     d = _run_dir(key)
     d.mkdir(parents=True, exist_ok=True)
     (d / "result.json").write_text(json.dumps(result_dict, indent=2))
     (d / "meta.json").write_text(json.dumps(meta.to_dict(), indent=2))
+    if llm_log is not None and llm_log.total_calls > 0:
+        llm_log.save(d / "llm_log.jsonl")
 
 
 def load_run(key: str) -> tuple[dict, RunMeta] | None:
+    from hermes.ai.observability import LLMObservabilityLog
     d = _run_dir(key)
     result_path = d / "result.json"
     meta_path = d / "meta.json"
@@ -97,6 +100,12 @@ def load_run(key: str) -> tuple[dict, RunMeta] | None:
         return None
     result_dict = json.loads(result_path.read_text())
     meta = RunMeta.from_dict(json.loads(meta_path.read_text()))
+    llm_log_path = d / "llm_log.jsonl"
+    if llm_log_path.exists():
+        try:
+            result_dict["_llm_log"] = LLMObservabilityLog.load(llm_log_path)
+        except Exception:
+            pass
     return result_dict, meta
 
 

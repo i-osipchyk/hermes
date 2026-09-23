@@ -251,6 +251,10 @@ class Backtest:
             vetoed_signals=venue.vetoed_orders,
         )
 
+        # --- LLM observability log -------------------------------------------
+        if self.advisor is not None:
+            result.llm_log = self.advisor.obs_log
+
         # --- buy-and-hold benchmark ------------------------------------------
         if first_close and last_close and first_close > 0 and equity_curve:
             description = f"Buy-and-hold {instrument.symbol.ticker}"

@@ -13,9 +13,11 @@ adjust one. Responsibilities:
 from __future__ import annotations
 
 import dataclasses
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from .cache import DecisionCache
+from .observability import LLMObservabilityLog, compute_cost
 from .provider import AdvisorDecision, AIProvider
 
 if TYPE_CHECKING:
@@ -37,6 +39,11 @@ class AIAdvisor:
         self.cache = cache or DecisionCache()
         self.enrichers: list[ContextEnricher] = enrichers or []
         self.min_confidence = min_confidence
+        self._obs_log = LLMObservabilityLog()
+
+    @property
+    def obs_log(self) -> LLMObservabilityLog:
+        return self._obs_log
 
     def evaluate(self, strategy, order, prompt: str) -> AdvisorDecision:
         """Confirm/veto ``order`` for ``strategy``. ``prompt`` is the author's
@@ -47,15 +54,51 @@ class AIAdvisor:
         is still cached at its original confidence so re-runs with a different
         threshold are free (cache hit, threshold applied fresh each time).
         """
+        request_time = datetime.now(UTC)
         user_prompt = self._assemble_context(strategy, order, prompt)
         key = self.cache.key(self.provider.model_id, self.system_prompt, user_prompt)
         cached = self.cache.get(key)
         if cached is not None:
-            return self._apply_threshold(dataclasses.replace(cached, prompt=user_prompt, from_cache=True))
+            final = self._apply_threshold(dataclasses.replace(cached, prompt=user_prompt, from_cache=True))
+            self._obs_log.record_cache_hit(
+                request_time=request_time,
+                model_id=final.model_id,
+                approved=final.approved,
+                confidence=final.confidence,
+                reason=final.reason,
+                system_prompt=self.system_prompt,
+                user_prompt=user_prompt,
+            )
+            return final
         decision = self.provider.decide(self.system_prompt, user_prompt)
         if not decision.is_error:
             self.cache.put(key, decision, user_prompt, self.system_prompt)
-        return self._apply_threshold(dataclasses.replace(decision, prompt=user_prompt, from_cache=False))
+        final = self._apply_threshold(dataclasses.replace(decision, prompt=user_prompt, from_cache=False))
+        if not decision.is_error and decision.usage is not None:
+            u = decision.usage
+            cost = compute_cost(
+                final.model_id,
+                u.input_tokens,
+                u.output_tokens,
+                u.cache_read_tokens,
+                u.cache_creation_tokens,
+            )
+            self._obs_log.record_live_call(
+                request_time=request_time,
+                model_id=final.model_id,
+                input_tokens=u.input_tokens,
+                output_tokens=u.output_tokens,
+                cache_read_tokens=u.cache_read_tokens,
+                cache_creation_tokens=u.cache_creation_tokens,
+                latency_ms=u.latency_ms,
+                cost_usd=cost,
+                approved=final.approved,
+                confidence=final.confidence,
+                reason=final.reason,
+                system_prompt=self.system_prompt,
+                user_prompt=user_prompt,
+            )
+        return final
 
     def _apply_threshold(self, decision: AdvisorDecision) -> AdvisorDecision:
         """Downgrade an approval to a veto if confidence < min_confidence."""
@@ -118,13 +161,20 @@ class AIAdvisor:
                 lines.append(f"  {type(ind).__name__}@{ind.timeframe}: {pretty}")
 
         if self.enrichers:
+            from concurrent.futures import ThreadPoolExecutor
             ticker = inst.symbol.ticker
             as_of = self._as_of(strategy)
-            for enricher in self.enrichers:
+
+            def _run(enricher):
                 try:
-                    block = enricher.enrich(ticker, as_of)
+                    return enricher.enrich(ticker, as_of)
                 except Exception as exc:
-                    block = f"[enricher {type(enricher).__name__} failed: {exc}]"
+                    return f"[enricher {type(enricher).__name__} failed: {exc}]"
+
+            with ThreadPoolExecutor(max_workers=len(self.enrichers)) as pool:
+                blocks = list(pool.map(_run, self.enrichers))
+
+            for block in blocks:
                 if block:
                     lines.append("")
                     lines.append(block)

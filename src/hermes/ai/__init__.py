@@ -4,6 +4,7 @@ from .advisor import AIAdvisor
 from .cache import DecisionCache
 from .claude import ClaudeProvider
 from .enrichers import ContextEnricher, EDGARFilingEnricher, PolygonNewsEnricher, YFinanceFundamentalsEnricher
+from .observability import LLMCallRecord, LLMObservabilityLog
 from .provider import AdvisorDecision, AIProvider
 
 __all__ = [
@@ -13,6 +14,8 @@ __all__ = [
     "ClaudeProvider",
     "DecisionCache",
     "ContextEnricher",
+    "LLMCallRecord",
+    "LLMObservabilityLog",
     "YFinanceFundamentalsEnricher",
     "EDGARFilingEnricher",
     "PolygonNewsEnricher",

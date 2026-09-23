@@ -80,19 +80,26 @@ class YFinanceFundamentalsEnricher:
             inc = t.income_stmt
             bal = t.balance_sheet
 
-        sector = (t.info or {}).get("sector", "")
-        base: dict = {"sector": sector} if sector else {}
-
         if inc is None or inc.empty or bal is None or bal.empty:
-            cache_set(ticker, as_of, "yf_fundamentals", base)
-            return base
+            cache_set(ticker, as_of, "yf_fundamentals", {})
+            return {}
 
         avail_inc = [c for c in inc.columns if c.date() + timedelta(days=_FILING_LAG_DAYS) <= as_of]
         avail_bal = [c for c in bal.columns if c.date() + timedelta(days=_FILING_LAG_DAYS) <= as_of]
 
         if not avail_inc or not avail_bal:
-            cache_set(ticker, as_of, "yf_fundamentals", base)
-            return base
+            cache_set(ticker, as_of, "yf_fundamentals", {})
+            return {}
+
+        # Fetch sector only when we have real financial data to return.
+        # t.info hits a separate slow quoteSummary endpoint — guard it.
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                sector = (t.info or {}).get("sector", "")
+        except Exception:
+            sector = ""
+        base: dict = {"sector": sector} if sector else {}
 
         latest_inc = inc[avail_inc[0]]
         latest_bal = bal[avail_bal[0]]

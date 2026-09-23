@@ -8,7 +8,7 @@ the core library does not hard-depend on ``anthropic``.
 
 from __future__ import annotations
 
-from .provider import AdvisorDecision, AIProvider
+from .provider import AdvisorDecision, AIProvider, LLMUsage
 
 # Default to the latest capable model; override via MODEL env var or constructor.
 import os
@@ -48,8 +48,11 @@ class ClaudeProvider(AIProvider):
         return self._client
 
     def decide(self, system_prompt: str, user_prompt: str) -> AdvisorDecision:
+        import time
+
         import anthropic
         client = self._get_client()
+        t0 = time.perf_counter()
         try:
             response = client.messages.create(
                 model=self.model_id,
@@ -78,6 +81,14 @@ class ClaudeProvider(AIProvider):
                 stacklevel=2,
             )
             return AdvisorDecision(True, 0.0, f"connection error: {e}", self.model_id, is_error=True)
+        latency_ms = (time.perf_counter() - t0) * 1000
+        usage = LLMUsage(
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+            cache_creation_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+            latency_ms=latency_ms,
+        )
         for block in response.content:
             if getattr(block, "type", None) == "tool_use" and block.name == "record_decision":
                 data = block.input
@@ -86,7 +97,8 @@ class ClaudeProvider(AIProvider):
                     confidence=float(data["confidence"]),
                     reason=str(data["reason"]),
                     model_id=self.model_id,
+                    usage=usage,
                 )
         # Fail safe: if the model returned no structured decision, approve (the gate
         # only ever *blocks*; a malformed response should not silently kill trades).
-        return AdvisorDecision(True, 0.0, "no structured decision returned", self.model_id)
+        return AdvisorDecision(True, 0.0, "no structured decision returned", self.model_id, usage=usage)

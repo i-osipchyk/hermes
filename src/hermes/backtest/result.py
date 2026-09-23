@@ -16,6 +16,7 @@ from ..execution import Trade
 from ..execution.order import Order
 
 if TYPE_CHECKING:
+    from ..ai.observability import LLMObservabilityLog
     from .validation import StatValidation
 
 
@@ -77,6 +78,7 @@ class BacktestResult:
     benchmark: BenchmarkStats | None = None
     stat_validation: StatValidation | None = None
     benchmark_equity: list[tuple[datetime, float]] | None = None
+    llm_log: LLMObservabilityLog | None = None
 
     @classmethod
     def compute(
@@ -118,6 +120,8 @@ class BacktestResult:
             d["benchmark"] = asdict(self.benchmark)
         if self.stat_validation is not None:
             d["stat_validation"] = self.stat_validation.to_dict()
+        if self.llm_log is not None:
+            d["llm_summary"] = self.llm_log.summary()
         return d
 
 

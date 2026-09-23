@@ -12,6 +12,17 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
+class LLMUsage:
+    """Raw token counts and timing from a live API response."""
+
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int       # Anthropic prompt-cache read tokens
+    cache_creation_tokens: int   # Anthropic prompt-cache write tokens
+    latency_ms: float
+
+
+@dataclass(frozen=True, slots=True)
 class AdvisorDecision:
     """Structured result of an AI Advisor call, recorded per Trade for audit."""
 
@@ -22,6 +33,7 @@ class AdvisorDecision:
     is_error: bool = False     # True when the decision is a fail-open due to a provider error; never cached
     prompt: str = ""           # assembled user prompt (set after cache lookup; not stored in cache)
     from_cache: bool = False   # True when served from the decision cache; False for a live API call
+    usage: LLMUsage | None = None  # populated only for live API calls
 
 
 class AIProvider(ABC):
