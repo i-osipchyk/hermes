@@ -179,3 +179,124 @@ class YFinanceFundamentalsEnricher:
 
         cache_set(ticker, as_of, "yf_fundamentals", result)
         return result
+
+
+class YFinanceFundamentalsScreen:
+    """Deterministic S1/S2 filter using yfinance annual financials + 90-day PIT lag.
+
+    screen() returns a dict with boolean signals and detail strings.
+    Reuses the same .cache/pit/ disk cache as YFinanceFundamentalsEnricher.
+    """
+
+    CACHE_KEY = "fund_screen"
+
+    def screen(self, ticker: str, as_of: date,
+               min_margin_expansion_bps: float = 100.0,
+               min_revenue_growth_pct: float = 10.0) -> dict:
+        """
+        Returns:
+          {
+            "s1": bool | None,   # None = insufficient data
+            "s2": bool | None,
+            "s1_detail": str,
+            "s2_detail": str,
+          }
+        """
+        data = self._fetch(ticker, as_of)
+        if data is None:
+            return {"s1": None, "s2": None, "s1_detail": "no data", "s2_detail": "no data"}
+
+        s1, s1_detail = self._compute_s1(data, min_margin_expansion_bps)
+        s2, s2_detail = self._compute_s2(data, min_revenue_growth_pct)
+        return {"s1": s1, "s2": s2, "s1_detail": s1_detail, "s2_detail": s2_detail}
+
+    def _fetch(self, ticker: str, as_of: date) -> dict | None:
+        cached = cache_get(ticker, as_of, self.CACHE_KEY)
+        if cached is not None:
+            return cached or None  # {} sentinel = no data
+
+        try:
+            import yfinance as yf
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                t = yf.Ticker(ticker)
+                inc = t.income_stmt
+        except Exception:
+            cache_set(ticker, as_of, self.CACHE_KEY, {})
+            return None
+
+        if inc is None or inc.empty:
+            cache_set(ticker, as_of, self.CACHE_KEY, {})
+            return None
+
+        avail = [c for c in inc.columns if c.date() + timedelta(days=_FILING_LAG_DAYS) <= as_of]
+        if len(avail) < 3:   # need t0, t1, t2 for S2 (two growth rates)
+            cache_set(ticker, as_of, self.CACHE_KEY, {})
+            return None
+
+        def get_row(name, *alts):
+            for n in (name, *alts):
+                if n in inc.index:
+                    row = inc.loc[n]
+                    vals = [row[avail[i]] for i in range(3)]
+                    return [float(v) if str(float(v)) != "nan" else None for v in vals]
+            return [None, None, None]
+
+        revenue   = get_row("Total Revenue", "Operating Revenue")
+        gross     = get_row("Gross Profit")
+        operating = get_row("Operating Income", "EBIT")
+
+        result = {
+            "revenue": revenue,      # [t0, t1, t2]
+            "gross":   gross,
+            "operating": operating,
+        }
+        cache_set(ticker, as_of, self.CACHE_KEY, result)
+        return result
+
+    def _compute_s1(self, data, min_bps) -> tuple[bool | None, str]:
+        """Gross OR operating margin expanded >= min_bps bps YoY (t0 vs t1)."""
+        rev0, rev1 = data["revenue"][0], data["revenue"][1]
+        if not rev0 or not rev1:
+            return None, "missing revenue"
+
+        # Gross margin
+        g0 = data["gross"][0] / rev0 if data["gross"][0] is not None else None
+        g1 = data["gross"][1] / rev1 if data["gross"][1] is not None else None
+        if g0 is not None and g1 is not None:
+            bps = (g0 - g1) * 10_000
+            if bps >= min_bps:
+                return True, f"gross margin {g1*100:.1f}% → {g0*100:.1f}% (+{bps:.0f}bps)"
+
+        # Operating margin fallback
+        o0 = data["operating"][0] / rev0 if data["operating"][0] is not None else None
+        o1 = data["operating"][1] / rev1 if data["operating"][1] is not None else None
+        if o0 is not None and o1 is not None:
+            bps = (o0 - o1) * 10_000
+            if bps >= min_bps:
+                return True, f"op margin {o1*100:.1f}% → {o0*100:.1f}% (+{bps:.0f}bps)"
+
+        detail = f"gross: {g1*100:.1f}%→{g0*100:.1f}%" if g0 is not None else "no margin data"
+        return False, detail
+
+    def _compute_s2(self, data, min_growth_pct) -> tuple[bool | None, str]:
+        """Revenue re-accelerating (t0_growth > t1_growth) OR t0 growth > min_growth_pct."""
+        r0, r1, r2 = data["revenue"]
+        if None in (r0, r1, r2) or r1 == 0 or r2 == 0:
+            return None, "missing revenue periods"
+
+        g0 = (r0 - r1) / abs(r1) * 100   # YoY growth ending at t0
+        g1 = (r1 - r2) / abs(r2) * 100   # YoY growth ending at t1
+
+        if g0 < 0:
+            return False, f"revenue declined {g0:.1f}% YoY"
+
+        reaccel = g0 > g1
+        fast    = g0 >= min_growth_pct
+
+        if reaccel:
+            return True, f"revenue re-accel: {g1:.1f}% → {g0:.1f}% YoY"
+        if fast:
+            return True, f"revenue fast-growth: {g0:.1f}% YoY (≥{min_growth_pct:.0f}%)"
+
+        return False, f"revenue decel & sub-threshold: {g1:.1f}% → {g0:.1f}% YoY"
