@@ -151,10 +151,15 @@ class Backtest:
         _total_bars = sum(1 for b in bars if b.timestamp >= start)
         _cb = self.progress_callback
         _cb_done = 0
+        _cb_last_t = 0.0
+        import time as _time
         for bar in bars:
             if bar.timestamp >= start:
-                if _cb and _cb_done % 250 == 0:
-                    _cb(_cb_done, _total_bars, bar.timestamp)
+                if _cb:
+                    _now = _time.monotonic()
+                    if _now - _cb_last_t >= 1.0:
+                        _cb(_cb_done, _total_bars, bar.timestamp)
+                        _cb_last_t = _now
                 _cb_done += 1
             t = bar.timestamp
 

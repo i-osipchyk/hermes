@@ -133,10 +133,15 @@ class PortfolioBacktest:
         _total_events = sum(1 for ts, _i, _b in events if ts >= _window_start)
         _cb = self.progress_callback
         _cb_done = 0
+        _cb_last_t = 0.0
+        import time as _time
         for (ts, idx, bar) in events:
             if ts >= _window_start:
-                if _cb and _cb_done % 1000 == 0:
-                    _cb(_cb_done, _total_events, ts)
+                if _cb:
+                    _now = _time.monotonic()
+                    if _now - _cb_last_t >= 1.0:
+                        _cb(_cb_done, _total_events, ts)
+                        _cb_last_t = _now
                 _cb_done += 1
             ls = leg_states[idx]
 
