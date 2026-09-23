@@ -69,11 +69,6 @@ class EmaCrossover(Strategy):
             return
         self._prev_short = short
         self._prev_long  = long
-        # If the stock is already in a golden-cross state at window start, enter now.
-        # Without this, a stock mid-uptrend at period start would never be entered
-        # (the strategy would wait for a death cross + re-cross that might not arrive).
-        if short > long and self.venue.position().is_flat:
-            self.buy(self.sizer or EquityFraction(0.95), tag="ema_x_long_initial")
 
     def on_bar(self, bar) -> None:  # noqa: ARG002
         short = self.indicator_value(self.short_ema)["value"]

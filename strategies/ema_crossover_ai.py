@@ -163,11 +163,6 @@ class EmaCrossoverAI(Strategy):
             return
         self._prev_short = short
         self._prev_long  = long
-        # If already in a golden-cross state at window start, enter — AI-gated.
-        if short > long and self.venue.position().is_flat:
-            order = self.buy(self.sizer or EquityFraction(0.95), tag="ema_x_long_initial")
-            if not self.confirm_with_ai(order, _ai_prompt(self._short_len, self._long_len)):
-                self.venue.cancel(order)
 
     def on_bar(self, bar) -> None:  # noqa: ARG002
         short = self.indicator_value(self.short_ema)["value"]
