@@ -3,7 +3,8 @@
 from .advisor import AIAdvisor
 from .cache import DecisionCache
 from .claude import ClaudeProvider
-from .enrichers import ContextEnricher, EDGARFilingEnricher, PolygonNewsEnricher, YFinanceFundamentalsEnricher
+from .deepseek import DeepSeekProvider
+from .enrichers import ContextEnricher, EDGARFilingEnricher, PolygonNewsEnricher, YFinanceFundamentalsEnricher, YFinanceFundamentalsScreen
 from .observability import LLMCallRecord, LLMObservabilityLog
 from .provider import AdvisorDecision, AIProvider
 from .random_advisor import RandomAdvisor
@@ -13,12 +14,14 @@ __all__ = [
     "AIProvider",
     "AdvisorDecision",
     "ClaudeProvider",
+    "DeepSeekProvider",
     "DecisionCache",
     "ContextEnricher",
     "LLMCallRecord",
     "LLMObservabilityLog",
     "RandomAdvisor",
     "YFinanceFundamentalsEnricher",
+    "YFinanceFundamentalsScreen",
     "EDGARFilingEnricher",
     "PolygonNewsEnricher",
 ]

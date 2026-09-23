@@ -19,6 +19,7 @@ from .ai import (
     EDGARFilingEnricher,
     PolygonNewsEnricher,
     YFinanceFundamentalsEnricher,
+    YFinanceFundamentalsScreen,
 )
 from .backtest import (
     Backtest,
@@ -138,6 +139,7 @@ __all__ = [
     "ClaudeProvider",
     "ContextEnricher",
     "YFinanceFundamentalsEnricher",
+    "YFinanceFundamentalsScreen",
     "EDGARFilingEnricher",
     "PolygonNewsEnricher",
     # backtest
