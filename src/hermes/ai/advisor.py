@@ -13,12 +13,15 @@ adjust one. Responsibilities:
 from __future__ import annotations
 
 import dataclasses
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from .cache import DecisionCache
 from .observability import LLMObservabilityLog, compute_cost
 from .provider import AdvisorDecision, AIProvider
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .enrichers import ContextEnricher
@@ -60,6 +63,8 @@ class AIAdvisor:
         cached = self.cache.get(key)
         if cached is not None:
             final = self._apply_threshold(dataclasses.replace(cached, prompt=user_prompt, from_cache=True))
+            log.debug("cache hit  model=%s approved=%s confidence=%.2f  %s",
+                      final.model_id, final.approved, final.confidence, final.reason[:80])
             self._obs_log.record_cache_hit(
                 request_time=request_time,
                 model_id=final.model_id,
@@ -70,8 +75,17 @@ class AIAdvisor:
                 user_prompt=user_prompt,
             )
             return final
+        log.debug("cache miss model=%s — calling provider", self.provider.model_id)
         decision = self.provider.decide(self.system_prompt, user_prompt)
-        if not decision.is_error:
+        if decision.is_error:
+            log.warning("provider error model=%s — fail-open (approved). reason: %s",
+                        decision.model_id, decision.reason)
+        else:
+            latency = decision.usage.latency_ms if decision.usage else None
+            tokens = (decision.usage.input_tokens + decision.usage.output_tokens) if decision.usage else None
+            log.debug("live call  model=%s approved=%s confidence=%.2f  latency=%.0fms tokens=%s  %s",
+                      decision.model_id, decision.approved, decision.confidence,
+                      latency or 0, tokens, decision.reason[:80])
             self.cache.put(key, decision, user_prompt, self.system_prompt)
         final = self._apply_threshold(dataclasses.replace(decision, prompt=user_prompt, from_cache=False))
         if not decision.is_error and decision.usage is not None:
