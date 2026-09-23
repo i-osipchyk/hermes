@@ -18,6 +18,7 @@ dependencies = [
     "pyarrow>=16",          # Parquet cache
     "exchange-calendars>=4.5",  # Session Calendars for stocks/CFDs
     "truststore>=0.9",      # trust the OS cert store (corporate proxies) for fetches
+    "openai>=3.19.0",
 ]
 
 [project.optional-dependencies]

@@ -29,13 +29,17 @@ from typing import Iterator
 # Add rows for new models; the longest prefix match wins.
 # ---------------------------------------------------------------------------
 _PRICING: list[tuple[str, dict[str, float]]] = [
-    ("claude-opus-4",   {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75}),
-    ("claude-sonnet-4", {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
-    ("claude-haiku-4",  {"input":  0.80, "output":  4.00, "cache_read": 0.08,  "cache_write":  1.00}),
-    # Legacy / fallback
-    ("claude-opus",     {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75}),
-    ("claude-sonnet",   {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
-    ("claude-haiku",    {"input":  0.80, "output":  4.00, "cache_read": 0.08,  "cache_write":  1.00}),
+    ("claude-opus-4",      {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75}),
+    ("claude-sonnet-4",    {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
+    ("claude-haiku-4",     {"input":  0.80, "output":  4.00, "cache_read": 0.08,  "cache_write":  1.00}),
+    # Legacy / fallback Claude
+    ("claude-opus",        {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75}),
+    ("claude-sonnet",      {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
+    ("claude-haiku",       {"input":  0.80, "output":  4.00, "cache_read": 0.08,  "cache_write":  1.00}),
+    # DeepSeek
+    ("deepseek-reasoner",  {"input":  0.55, "output":  2.19, "cache_read": 0.14,  "cache_write":  0.55}),
+    ("deepseek-chat",      {"input":  0.27, "output":  1.10, "cache_read": 0.07,  "cache_write":  0.27}),
+    ("deepseek",           {"input":  0.27, "output":  1.10, "cache_read": 0.07,  "cache_write":  0.27}),
 ]
 
 
