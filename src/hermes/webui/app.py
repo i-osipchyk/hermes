@@ -7,8 +7,19 @@ absolute.
 
 from __future__ import annotations
 
+import logging
 import dotenv
 dotenv.load_dotenv()
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)-7s %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
+logging.getLogger("hermes.ai.advisor").setLevel(logging.DEBUG)
+# Suppress noisy third-party loggers
+for _noisy in ("httpx", "httpx2", "httpcore", "httpcore2", "anthropic", "openai"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from datetime import UTC, datetime, time
 
@@ -373,9 +384,9 @@ defaults = discovery.default_config(entry)
 param_specs = discovery.declared_parameters(entry)
 src_names = sources.source_names()
 
-# --- Data group (outside form so Symbols↔Symbol react immediately) ---------
+# --- Data & Model group (outside form so Symbols↔Symbol react immediately) -
 
-st.markdown("**Data**")
+st.markdown("**Data & Model**")
 d1, d2, d3 = st.columns(3)
 source_name = d1.selectbox(
     "Source",
@@ -404,6 +415,21 @@ ticker = d3.text_input(
 )
 if source_name in sources.NEEDS_SETUP:
     st.caption("⚠️ cTrader/Pepperstone needs `CTRADER_*` credentials and its live fetch wired.")
+
+_has_advisor = defaults.advisor is not None
+_AI_MODELS = ["claude", "deepseek"]
+selected_ai_model: str = "claude"
+if _has_advisor:
+    import os as _os
+    _claude_label = f"Claude ({_os.getenv('MODEL', 'claude-opus-4-8')})"
+    _deepseek_label = f"DeepSeek ({_os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')})"
+    selected_ai_model = st.selectbox(
+        "Model",
+        _AI_MODELS,
+        format_func=lambda x: _claude_label if x == "claude" else _deepseek_label,
+        help="AI provider used for the advisor confirm/veto gate.",
+        key="ai_model",
+    )
 
 # --- Sizing group (outside form so type↔value react immediately) -----------
 
@@ -470,6 +496,24 @@ if _pre_hit:
         st.session_state["_auto_run"] = True
         st.rerun()
 
+def _apply_model_override(bt, model_choice: str):
+    """Return a new Backtest with the advisor's provider swapped to match model_choice."""
+    if bt.advisor is None or model_choice == "claude":
+        return bt
+    from dataclasses import replace as _dc_replace
+    from hermes.ai import AIAdvisor
+    from hermes.ai.deepseek import DeepSeekProvider
+    orig = bt.advisor
+    new_advisor = AIAdvisor(
+        DeepSeekProvider(),
+        system_prompt=orig.system_prompt,
+        cache=orig.cache,
+        enrichers=orig.enrichers,
+        min_confidence=orig.min_confidence,
+    )
+    return _dc_replace(bt, advisor=new_advisor)
+
+
 if run or st.session_state.pop("_auto_run", False):
     start_dt = datetime.combine(start, time(), tzinfo=UTC)
     end_dt = datetime.combine(end, time(), tzinfo=UTC)
@@ -493,6 +537,7 @@ if run or st.session_state.pop("_auto_run", False):
                 start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
                 unconstrained=unconstrained, sizer=sizer,
             )
+            bt = _apply_model_override(bt, selected_ai_model)
             try:
                 _prog = st.progress(0.0)
                 _prog_txt = st.empty()
@@ -548,6 +593,7 @@ if run or st.session_state.pop("_auto_run", False):
             )
 
             _template_bt = entry.build_backtest()
+            _template_bt = _apply_model_override(_template_bt, selected_ai_model)
             ub = UniverseBacktest(
                 strategy_factory=lambda: entry.build_backtest().strategy,
                 source=source,
@@ -613,10 +659,13 @@ if run or st.session_state.pop("_auto_run", False):
             try:
                 _prog = st.progress(0.0)
                 _prog_txt = st.empty()
+                _uni_advisor = _apply_model_override(
+                    entry.build_backtest(), selected_ai_model
+                ).advisor
                 universe_result = discovery.run_universe(
                     entry, tickers=tickers, source_name=src_override or source_name,
                     start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
-                    unconstrained=unconstrained, sizer=sizer,
+                    unconstrained=unconstrained, sizer=sizer, advisor=_uni_advisor,
                     progress_callback=_make_progress_cb(_prog, _prog_txt, f"{universe} ({len(tickers)} symbols)"),
                 )
                 _prog.empty()

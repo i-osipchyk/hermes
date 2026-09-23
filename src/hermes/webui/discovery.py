@@ -90,6 +90,7 @@ def configured_backtest(
     params: dict | None = None,
     unconstrained: bool = False,
     sizer=None,
+    advisor=None,
 ) -> Backtest:
     """Build a fresh Backtest (new Strategy instance) with the form's overrides —
     source, ticker, dates, cash, and strategy Parameter overrides."""
@@ -110,6 +111,8 @@ def configured_backtest(
     )
     if sizer is not None:
         kw["sizer"] = sizer
+    if advisor is not None:
+        kw["advisor"] = advisor
     return replace(bt, **kw)
 
 
@@ -124,6 +127,7 @@ def run_universe(
     params: dict | None = None,
     unconstrained: bool = False,
     sizer=None,
+    advisor=None,
     progress_callback=None,
 ):
     """Run the strategy across all tickers as a single shared-capital portfolio.
@@ -138,6 +142,7 @@ def run_universe(
             entry, source_name=source_name, ticker=ticker,
             start=start, end=end, starting_cash=starting_cash,
             params=params, unconstrained=unconstrained, sizer=sizer,
+            advisor=advisor,
         )
         for ticker in tickers
     ]
