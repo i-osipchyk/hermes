@@ -77,12 +77,21 @@ class BarCache:
         if start < cached_min:
             gaps.append((start, min(cached_min, end)))
         if end > cached_max:
-            gaps.append((max(cached_max, start), end))
+            gap_start = max(cached_max, start)
+            gap_seconds = (end - gap_start).total_seconds()
+            # Skip tail gaps narrower than the timeframe's bar width: no new bar
+            # can fit inside them, so the fetch would always return empty.
+            # This avoids hitting the provider unnecessarily on every repeated
+            # run (e.g. N parallel simulations all requesting the same tiny gap).
+            tf_seconds = timeframe.seconds if hasattr(timeframe, "seconds") else 86_400
+            if gap_seconds >= tf_seconds:
+                gaps.append((gap_start, end))
         return gaps
 
     def write(self, instrument: Instrument, timeframe: Timeframe, bars: list[Bar]) -> None:
         if not bars:
             return
+        import fcntl
         import pandas as pd
 
         new = pd.DataFrame(
@@ -95,14 +104,22 @@ class BarCache:
                 "volume": [b.volume for b in bars],
             }
         )
-        merged = (
-            pd.concat([self._load(instrument, timeframe), new], ignore_index=True)
-            .drop_duplicates(subset="ts", keep="last")
-            .sort_values("ts")
-        )
         path = self._path(instrument, timeframe)
         path.parent.mkdir(parents=True, exist_ok=True)
-        merged.to_parquet(path, index=False)
+        # Exclusive lock prevents concurrent processes from interleaving their
+        # read-modify-write cycles.  Atomic rename ensures readers never see a
+        # partially-written file.
+        lock_path = path.with_suffix(".lock")
+        with open(lock_path, "w") as _lf:
+            fcntl.flock(_lf, fcntl.LOCK_EX)
+            merged = (
+                pd.concat([self._load(instrument, timeframe), new], ignore_index=True)
+                .drop_duplicates(subset="ts", keep="last")
+                .sort_values("ts")
+            )
+            tmp = path.with_suffix(".parquet.tmp")
+            merged.to_parquet(tmp, index=False)
+            tmp.rename(path)
 
 
 def _epoch(dt: datetime) -> int:

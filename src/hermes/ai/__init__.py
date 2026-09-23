@@ -6,6 +6,7 @@ from .claude import ClaudeProvider
 from .enrichers import ContextEnricher, EDGARFilingEnricher, PolygonNewsEnricher, YFinanceFundamentalsEnricher
 from .observability import LLMCallRecord, LLMObservabilityLog
 from .provider import AdvisorDecision, AIProvider
+from .random_advisor import RandomAdvisor
 
 __all__ = [
     "AIAdvisor",
@@ -16,6 +17,7 @@ __all__ = [
     "ContextEnricher",
     "LLMCallRecord",
     "LLMObservabilityLog",
+    "RandomAdvisor",
     "YFinanceFundamentalsEnricher",
     "EDGARFilingEnricher",
     "PolygonNewsEnricher",

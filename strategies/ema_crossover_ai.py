@@ -211,13 +211,9 @@ def build_backtest(**overrides) -> Backtest:
     """
     symbol = overrides.pop("symbol", Symbol("SPY", "yfinance"))
     starting_cash = overrides.pop("starting_cash", 100_000)
-    return Backtest(
-        strategy=EmaCrossoverAI(),
-        source=YFinanceSource(),
-        symbol=symbol,
-        timeframes=[D1],
-        starting_cash=starting_cash,
-        advisor=AIAdvisor(
+    advisor = overrides.pop(
+        "advisor",
+        AIAdvisor(
             ClaudeProvider(),
             system_prompt=(
                 "You are a fundamental momentum analyst and trading risk filter. "
@@ -240,6 +236,14 @@ def build_backtest(**overrides) -> Backtest:
             ],
             min_confidence=0.0,
         ),
+    )
+    return Backtest(
+        strategy=EmaCrossoverAI(),
+        source=YFinanceSource(),
+        symbol=symbol,
+        timeframes=[D1],
+        starting_cash=starting_cash,
+        advisor=advisor,
         **overrides,
     )
 
