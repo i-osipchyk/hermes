@@ -27,7 +27,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from hermes.backtest import BacktestResult
-from hermes.strategy import EquityFraction, NotionalCash, RiskCash, RiskPercent, Units
+from hermes.strategy import EquityFraction, LeveragedFraction, NotionalCash, RiskCash, RiskPercent, Units
 from hermes.webui import discovery, review, run_cache as _rc, sources, universes
 
 st.set_page_config(page_title="Hermes Backtester", layout="wide")
@@ -90,11 +90,12 @@ def _param_widget(spec):
 
 
 _SIZER_TYPES = {
-    "Risk % of equity":  ("risk_pct",    "Risk per trade (%)",        1.0,   0.01,  10.0,  "e.g. 1.0 means 1% of equity risked. Requires a stop loss."),
-    "Equity fraction":   ("equity_frac", "Fraction of equity (%)",    95.0,  1.0,   100.0, "e.g. 95 invests 95% of current equity. No stop loss needed."),
-    "Fixed notional ($)":("notional",    "Notional per trade ($)",     10000.0, 1.0,   1e9,   "Fixed dollar amount per trade regardless of equity."),
-    "Fixed shares (n)":  ("units",       "Shares / contracts per trade", 100.0, 1.0,   1e7,   "Always trade exactly this many units."),
-    "Risk cash ($)":     ("risk_cash",   "Cash at risk per trade ($)", 100.0, 0.01,  1e9,   "Fixed dollar amount to risk per trade. Requires a stop loss."),
+    "Risk % of equity":        ("risk_pct",    "Risk per trade (%)",          1.0,     0.01,  10.0,  "e.g. 1.0 means 1% of equity risked. Requires a stop loss."),
+    "Leveraged fraction":      ("lev_frac",    "Buying power used (%)",       100.0,   1.0,   100.0, "notional = equity × leverage × fraction. Uses the instrument's leverage. No stop loss needed."),
+    "Equity fraction":         ("equity_frac", "Fraction of equity (%)",      95.0,    1.0,   100.0, "e.g. 95 invests 95% of current equity. No stop loss needed."),
+    "Fixed notional ($)":      ("notional",    "Notional per trade ($)",      10000.0, 1.0,   1e9,   "Fixed dollar amount per trade regardless of equity."),
+    "Fixed shares (n)":        ("units",       "Shares / contracts per trade", 100.0,  1.0,   1e7,   "Always trade exactly this many units."),
+    "Risk cash ($)":           ("risk_cash",   "Cash at risk per trade ($)",  100.0,   0.01,  1e9,   "Fixed dollar amount to risk per trade. Requires a stop loss."),
 }
 
 
@@ -121,6 +122,8 @@ def _sizer_widget() -> tuple[object, bool]:
 
     if sizer_type == "Risk % of equity":
         return RiskPercent(value / 100.0), unconstrained
+    if sizer_type == "Leveraged fraction":
+        return LeveragedFraction(value / 100.0), unconstrained
     if sizer_type == "Equity fraction":
         return EquityFraction(value / 100.0), unconstrained
     if sizer_type == "Fixed notional ($)":
@@ -439,14 +442,23 @@ sizer, unconstrained = _sizer_widget()
 # --- Date & Cash group -----------------------------------------------------
 
 st.markdown("**Date & Cash**")
-dc1, dc2, dc3 = st.columns(3)
-start = dc1.date_input("Start", value=defaults.start.date(), key="start")
-end = dc2.date_input("End", value=defaults.end.date(), key="end")
+dc1, dc2, dc3, dc4 = st.columns(4)
+import datetime as _dt
+start = dc1.date_input("Start", value=defaults.start.date(), min_value=_dt.date(1990, 1, 1), key="start")
+end = dc2.date_input("End", value=defaults.end.date(), min_value=_dt.date(1990, 1, 1), key="end")
 cash = dc3.number_input(
     "Starting cash", value=float(defaults.starting_cash), step=1000.0,
     help="For a universe, this is the TOTAL — split equally across the symbols.",
     key="cash",
 )
+_is_leveraged = source_name in sources.LEVERAGED_SOURCES
+leverage = dc4.number_input(
+    "Leverage", value=30.0, min_value=1.0, max_value=500.0, step=10.0,
+    help="Margin multiplier applied to the instrument (CFD / perp sources only).",
+    key="leverage",
+    disabled=not _is_leveraged,
+)
+_leverage_arg = leverage if _is_leveraged else None
 st.caption(f"Timeframes: {', '.join(str(tf) for tf in defaults.timeframes)}")
 
 # --- Parameters + run button -----------------------------------------------
@@ -476,6 +488,7 @@ _ck = _rc.cache_key(
     params=param_values,
     sizer=_sizer_repr,
     unconstrained=unconstrained,
+    leverage=_leverage_arg,
 )
 st.session_state["_ck"] = _ck
 
@@ -535,7 +548,7 @@ if run or st.session_state.pop("_auto_run", False):
             bt = discovery.configured_backtest(
                 entry, source_name=source_name, ticker=ticker,
                 start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
-                unconstrained=unconstrained, sizer=sizer,
+                unconstrained=unconstrained, sizer=sizer, leverage=_leverage_arg,
             )
             bt = _apply_model_override(bt, selected_ai_model)
             try:
@@ -587,7 +600,7 @@ if run or st.session_state.pop("_auto_run", False):
             cal = universes.load_calendar(universe)
             defaults = discovery.default_config(entry)
             source = (
-                _build_source(source_name)
+                _build_source(source_name, leverage=_leverage_arg)
                 if source_name and source_name != defaults.source.name
                 else defaults.source
             )
@@ -666,6 +679,7 @@ if run or st.session_state.pop("_auto_run", False):
                     entry, tickers=tickers, source_name=src_override or source_name,
                     start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
                     unconstrained=unconstrained, sizer=sizer, advisor=_uni_advisor,
+                    leverage=_leverage_arg,
                     progress_callback=_make_progress_cb(_prog, _prog_txt, f"{universe} ({len(tickers)} symbols)"),
                 )
                 _prog.empty()

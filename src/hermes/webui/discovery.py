@@ -91,6 +91,7 @@ def configured_backtest(
     unconstrained: bool = False,
     sizer=None,
     advisor=None,
+    leverage: float | None = None,
 ) -> Backtest:
     """Build a fresh Backtest (new Strategy instance) with the form's overrides —
     source, ticker, dates, cash, and strategy Parameter overrides."""
@@ -98,7 +99,9 @@ def configured_backtest(
 
     bt = entry.build_backtest()
     source = (
-        build_source(source_name) if source_name and source_name != bt.source.name else bt.source
+        build_source(source_name, leverage=leverage)
+        if source_name and source_name != bt.source.name
+        else bt.source
     )
     kw = dict(
         source=source,
@@ -129,6 +132,7 @@ def run_universe(
     sizer=None,
     advisor=None,
     progress_callback=None,
+    leverage: float | None = None,
 ):
     """Run the strategy across all tickers as a single shared-capital portfolio.
 
@@ -142,7 +146,7 @@ def run_universe(
             entry, source_name=source_name, ticker=ticker,
             start=start, end=end, starting_cash=starting_cash,
             params=params, unconstrained=unconstrained, sizer=sizer,
-            advisor=advisor,
+            advisor=advisor, leverage=leverage,
         )
         for ticker in tickers
     ]

@@ -60,6 +60,7 @@ def cache_key(
     params: dict,
     sizer: str,
     unconstrained: bool,
+    leverage: float | None = None,
 ) -> str:
     """SHA-256[:16] of all inputs — any change produces a different key."""
     inputs = {
@@ -73,6 +74,7 @@ def cache_key(
         "params": params,
         "sizer": sizer,
         "unconstrained": unconstrained,
+        "leverage": leverage,
     }
     blob = json.dumps(inputs, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()[:16]

@@ -41,12 +41,18 @@ _FACTORIES: dict[str, Callable[[], DataSource]] = {
 # Sources that need credentials / an unfinished transport — flagged in the UI.
 NEEDS_SETUP = {PepperstoneSource.name}
 
+# Sources whose instruments carry a leverage multiplier (CFDs, perps).
+LEVERAGED_SOURCES = {PepperstoneSource.name, BinanceFuturesSource.name}
+
 
 def source_names() -> list[str]:
     return list(_FACTORIES)
 
 
-def build_source(name: str) -> DataSource:
+def build_source(name: str, *, leverage: float | None = None) -> DataSource:
     if name not in _FACTORIES:
         raise ValueError(f"Unknown source '{name}'. Known: {', '.join(_FACTORIES)}")
-    return _FACTORIES[name]()
+    source = _FACTORIES[name]()
+    if leverage is not None and hasattr(source, "leverage"):
+        source.leverage = leverage
+    return source
