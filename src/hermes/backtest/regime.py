@@ -114,9 +114,14 @@ def _regime_stats(label: str, trades: list) -> RegimeStats:
     gross_win = sum(wins) if wins else 0.0
     profit_factor = (gross_win / gross_loss) if gross_loss > 0 else (math.inf if gross_win > 0 else None)
 
-    # Sharpe from fractional PnL returns (approximate — use pnl / |avg pnl| as proxy)
-    if pnls:
-        sharpe = _sharpe_from_rets(pnls, 252.0)
+    # Convert PnL to fractional returns for a scale-independent Sharpe.
+    rets = []
+    for t in trades:
+        if t.net_pnl is not None and t.entry_price > 0 and t.size > 0:
+            capital_at_risk = t.entry_price * t.size * t.instrument.contract_size()
+            rets.append(t.net_pnl / capital_at_risk)
+    if rets:
+        sharpe = _sharpe_from_rets(rets, 252.0)
     else:
         sharpe = None
 

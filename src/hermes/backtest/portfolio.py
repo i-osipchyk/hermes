@@ -177,7 +177,7 @@ class PortfolioBacktest:
 
             if ts < ls.start:
                 continue
-            if not _warm(ls.view, ls.warm_needed):
+            if not _warm(ls.view, ls.warm_needed, ls.tf_to_indicators):
                 continue
 
             if not ls.trading:
@@ -355,7 +355,15 @@ def _last_per_day(
     return list(by_day.values())
 
 
-def _warm(view: MultiTimeframeView, warm_needed: dict) -> bool:
+def _warm(view: MultiTimeframeView, warm_needed: dict, tf_to_indicators: dict | None = None) -> bool:
+    if tf_to_indicators is not None:
+        for tf, inds in tf_to_indicators.items():
+            series = view[tf]
+            for ind in inds:
+                check = series.closed() if ind.mode == "latest_confirmed" else series.bars_for_compute()
+                if len(check) < ind.lookback:
+                    return False
+        return True
     for tf, need in warm_needed.items():
         if len(view[tf].bars_for_compute()) < need:
             return False

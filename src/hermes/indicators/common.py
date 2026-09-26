@@ -80,11 +80,14 @@ class SMA(Indicator):
 
     def on_forming_bar(self, bars: list[Bar]) -> None:
         # bars[-1] is the forming bar; use last (period-1) closed values + it.
+        forming_val = getattr(bars[-1], self.source)
+        if self.period == 1:
+            self._current = {"value": forming_val}
+            return
         if len(self._window) < self.period - 1:
             self._current = {"value": None}
             return
         closed_part = list(self._window)[-(self.period - 1):]
-        forming_val = getattr(bars[-1], self.source)
         self._current = {"value": (sum(closed_part) + forming_val) / self.period}
 
     def _value_from_window(self) -> dict[str, float | None]:
@@ -400,12 +403,32 @@ class MACD(Indicator):
     def on_bar_closed(self, bars: list[Bar]) -> None:
         close = bars[-1].close
         if self._fast_ema is None or self._slow_ema is None:
-            self._current = self.compute(bars)
+            result = self.compute(bars)
+            self._current = result
+            # Seed EMA state once we have enough bars for incremental updates.
+            closes = [b.close for b in bars]
+            fast_s = _ema_running(closes, self.fast)
+            slow_s = _ema_running(closes, self.slow)
+            if fast_s[-1] is not None and slow_s[-1] is not None:
+                self._fast_ema = fast_s[-1]
+                self._slow_ema = slow_s[-1]
+                macd_vals = [f - s for f, s in zip(fast_s, slow_s) if f is not None and s is not None]
+                if len(macd_vals) >= self.signal:
+                    sig_s = _ema_running(macd_vals, self.signal)
+                    self._signal_ema = sig_s[-1]
             return
         self._fast_ema = close * self._k_fast + self._fast_ema * (1 - self._k_fast)
         self._slow_ema = close * self._k_slow + self._slow_ema * (1 - self._k_slow)
         macd = self._fast_ema - self._slow_ema
         if self._signal_ema is None:
+            macd_vals = []
+            closes = [b.close for b in bars]
+            fast_s = _ema_running(closes, self.fast)
+            slow_s = _ema_running(closes, self.slow)
+            macd_vals = [f - s for f, s in zip(fast_s, slow_s) if f is not None and s is not None]
+            if len(macd_vals) >= self.signal:
+                sig_s = _ema_running(macd_vals, self.signal)
+                self._signal_ema = sig_s[-1]
             self._current = self.compute(bars)
             return
         self._signal_ema = macd * self._k_signal + self._signal_ema * (1 - self._k_signal)

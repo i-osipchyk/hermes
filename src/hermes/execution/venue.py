@@ -13,6 +13,9 @@ from abc import ABC, abstractmethod
 from .order import Order
 from .trade import Position, Trade
 
+_UNSET = object()
+"""Sentinel to distinguish 'not provided' from ``None`` (clear the level)."""
+
 
 class ExecutionVenue(ABC):
     @abstractmethod
@@ -26,9 +29,11 @@ class ExecutionVenue(ABC):
 
     @abstractmethod
     def modify_trade(
-        self, trade: Trade, *, stop_loss: float | None = None, take_profit: float | None = None
+        self, trade: Trade, *, stop_loss=_UNSET, take_profit=_UNSET
     ) -> None:
-        """Mutate a live Trade's protective levels (move-to-breakeven, trailing)."""
+        """Mutate a live Trade's protective levels (move-to-breakeven, trailing).
+
+        Pass ``None`` to clear a level; omit the argument to leave it unchanged."""
 
     @abstractmethod
     def close_trade(self, trade: Trade) -> None:
@@ -39,3 +44,15 @@ class ExecutionVenue(ABC):
 
     @abstractmethod
     def position(self) -> Position: ...
+
+    @abstractmethod
+    def force_close_all(self, ts) -> None:
+        """Close all open positions at the given timestamp."""
+
+    @abstractmethod
+    def unrealised_pnl(self, price: float | None = None) -> float:
+        """Total unrealised P&L across open trades."""
+
+    @abstractmethod
+    def equity(self) -> float:
+        """Current account equity (cash + unrealised P&L)."""

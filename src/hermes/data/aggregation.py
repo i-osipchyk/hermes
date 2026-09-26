@@ -71,8 +71,11 @@ def bucket_bounds(
     local = session.to_local(ts_utc)
 
     if timeframe.seconds % _WEEK == 0:
-        monday = _local_midnight(local) - timedelta(days=local.weekday())
-        open_local = monday
+        ref = _day_anchor_ref(local, session)
+        # Walk back to the start of the week (weekday 0 = Monday for stocks,
+        # Sunday for forex when day_anchor shifts the reference).
+        week_start = ref - timedelta(days=ref.weekday())
+        open_local = week_start
         close_local = open_local + timedelta(seconds=timeframe.seconds)
         return open_local.astimezone(_UTC), close_local.astimezone(_UTC)
 

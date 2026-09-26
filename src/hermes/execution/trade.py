@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from ..core import Instrument
 from .order import Side
 
+if TYPE_CHECKING:
+    from ..ai.provider import AdvisorDecision
 
-@dataclass(slots=True)
+
+@dataclass(slots=True, eq=False)
 class Trade:
     instrument: Instrument
     side: Side
@@ -29,7 +33,7 @@ class Trade:
     # Accounting captured at close for the blotter:
     gross_pnl: float | None = None
     costs: float | None = None        # commission + spread + slippage + financing
-    ai_decision: object | None = None  # the Advisor Decision, if consulted
+    ai_decision: AdvisorDecision | None = None  # the Advisor Decision, if consulted
 
     @property
     def is_open(self) -> bool:
@@ -59,4 +63,4 @@ class Position:
 
     @property
     def is_flat(self) -> bool:
-        return self.net_size == 0
+        return abs(self.net_size) < 1e-12

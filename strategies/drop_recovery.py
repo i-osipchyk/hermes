@@ -76,10 +76,16 @@ class DropRecovery(Strategy):
         self._bar_count += 1
         closed = self.data(D1).closed()
 
-        # Register newly opened trades; enforce time-based exit.
+        # Register newly opened trades; adjust SL/TP to actual fill price; enforce time-based exit.
         for trade in list(self.venue.open_trades()):
             if trade.entry_time not in self._entry_bars:
                 self._entry_bars[trade.entry_time] = self._bar_count
+                # Recalculate SL/TP relative to actual fill price (not signal-bar close).
+                self.venue.modify_trade(
+                    trade,
+                    stop_loss=trade.entry_price * (1 - self.sl_pct),
+                    take_profit=trade.entry_price * (1 + self.tp_pct),
+                )
             elif self._bar_count - self._entry_bars[trade.entry_time] >= self.max_hold_days:
                 self.close(trade)
 
@@ -133,7 +139,7 @@ def _stock_cost_model() -> CostModel:
 
 
 def build_backtest(**overrides) -> Backtest:
-    bt = Backtest(
+    defaults = dict(
         strategy=DropRecovery(),
         source=YFinanceSource(),
         symbol=Symbol("AAPL", "yfinance"),
@@ -141,9 +147,8 @@ def build_backtest(**overrides) -> Backtest:
         starting_cash=100_000,
         cost_model=_stock_cost_model(),
     )
-    for key, value in overrides.items():
-        setattr(bt, key, value)
-    return bt
+    defaults.update(overrides)
+    return Backtest(**defaults)
 
 
 if __name__ == "__main__":

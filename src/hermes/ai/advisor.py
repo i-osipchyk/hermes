@@ -80,6 +80,21 @@ class AIAdvisor:
         if decision.is_error:
             log.warning("provider error model=%s — fail-open (approved). reason: %s",
                         decision.model_id, decision.reason)
+            self._obs_log.record_live_call(
+                request_time=request_time,
+                model_id=decision.model_id,
+                input_tokens=0,
+                output_tokens=0,
+                cache_read_tokens=0,
+                cache_creation_tokens=0,
+                latency_ms=decision.usage.latency_ms if decision.usage else 0.0,
+                cost_usd=None,
+                approved=True,
+                confidence=0.0,
+                reason=f"[ERROR] {decision.reason}",
+                system_prompt=self.system_prompt,
+                user_prompt=user_prompt,
+            )
         else:
             latency = decision.usage.latency_ms if decision.usage else None
             tokens = (decision.usage.input_tokens + decision.usage.output_tokens) if decision.usage else None

@@ -66,11 +66,11 @@ class SessionCalendar:
 
     def is_open(self, moment_utc: datetime) -> bool:
         """Whether the market is open at ``moment_utc`` (tz-aware UTC)."""
-        if self.is_24_7:
-            return True
         local = self.to_local(moment_utc)
         if local.weekday() not in self.weekdays:
             return False
+        if self.is_24_7:
+            return True
         naive = local.time()
         return self.open_time <= naive < self.close_time
 
@@ -138,6 +138,11 @@ class Instrument(ABC):
     @abstractmethod
     def to_native_units(self, size: float) -> float:
         """Convert a Sizer's resolved size into the venue's native units/lots."""
+
+    @property
+    def leverage(self) -> float:
+        """Maximum leverage for margin instruments (default 1× = unleveraged)."""
+        return 1.0
 
 
 @dataclass(eq=False)

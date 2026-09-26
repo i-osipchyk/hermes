@@ -15,8 +15,16 @@ import json
 from datetime import date
 from pathlib import Path
 
-# Resolve to the repo root regardless of where Python is invoked from.
-_CACHE_ROOT = Path(__file__).parents[5] / ".cache" / "pit"
+def _find_project_root() -> Path:
+    """Walk up from this file to find the nearest directory with pyproject.toml."""
+    p = Path(__file__).resolve().parent
+    while p != p.parent:
+        if (p / "pyproject.toml").exists():
+            return p
+        p = p.parent
+    return Path(__file__).resolve().parents[5]  # fallback
+
+_CACHE_ROOT = _find_project_root() / ".cache" / "pit"
 
 
 def _path(ticker: str, as_of: date, key: str) -> Path:

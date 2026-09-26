@@ -169,7 +169,7 @@ def _vetoed_dict(o: Order) -> dict:
             "model_id": ai.model_id,
             "prompt": ai.prompt,
             "from_cache": ai.from_cache,
-        },
+        } if ai is not None else None,
     }
 
 

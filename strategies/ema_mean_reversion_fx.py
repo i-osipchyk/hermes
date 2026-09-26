@@ -284,9 +284,12 @@ class EMAMeanReversionFX(Strategy):
 
     def on_trade_closed(self, trade: Trade) -> None:
         if trade.side == Side.BUY:
-            self._buy_order = None
+            # Only clear if the current ref is not a new pending order.
+            if self._buy_order is None or self._buy_order.status != OrderStatus.WORKING:
+                self._buy_order = None
         else:
-            self._sell_order = None
+            if self._sell_order is None or self._sell_order.status != OrderStatus.WORKING:
+                self._sell_order = None
 
     def _risk_size(self, entry: float, exit_: float) -> float:
         """Size so that risk from entry to exit matches the configured sizer."""

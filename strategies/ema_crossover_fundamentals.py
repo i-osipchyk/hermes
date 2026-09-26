@@ -68,7 +68,7 @@ class EmaCrossoverFundamentals(Strategy):
                 min_margin_expansion_bps=self._min_margin_bps,
                 min_revenue_growth_pct=self._min_rev_growth,
             )
-            if result["s1"] or result["s2"]:
+            if result["s1"] and result["s2"]:
                 self.buy(self.sizer or EquityFraction(0.10), tag="ema_x_fund_long")
 
         elif death_cross and not position.is_flat:

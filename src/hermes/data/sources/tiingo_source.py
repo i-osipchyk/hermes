@@ -164,11 +164,11 @@ class TiingoSource(DataSource):
                 ts = ts.replace(tzinfo=UTC)
             ts = ts.astimezone(UTC)
 
-            o = row.get("adjOpen") or row.get("open")
-            h = row.get("adjHigh") or row.get("high")
-            lo = row.get("adjLow") or row.get("low")
-            c = row.get("adjClose") or row.get("close")
-            v = row.get("adjVolume") or row.get("volume") or 0.0
+            o = row.get("adjOpen") if row.get("adjOpen") is not None else row.get("open")
+            h = row.get("adjHigh") if row.get("adjHigh") is not None else row.get("high")
+            lo = row.get("adjLow") if row.get("adjLow") is not None else row.get("low")
+            c = row.get("adjClose") if row.get("adjClose") is not None else row.get("close")
+            v = row.get("adjVolume") if row.get("adjVolume") is not None else (row.get("volume") or 0.0)
 
             if None in (o, h, lo, c):
                 continue  # skip rows with missing OHLC

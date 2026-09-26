@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from .provider import AdvisorDecision
@@ -52,6 +54,11 @@ class DecisionCache:
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
         }
-        tmp = self._path(key + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2))
-        tmp.replace(self._path(key))
+        fd, tmp_name = tempfile.mkstemp(dir=self.root, suffix=".tmp.json")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(payload, f, indent=2)
+            Path(tmp_name).replace(self._path(key))
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise

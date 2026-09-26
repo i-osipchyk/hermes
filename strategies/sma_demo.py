@@ -35,16 +35,15 @@ class SmaDemo(Strategy):
 
 def build_backtest(**overrides) -> Backtest:
     # start/end omitted -> Backtest defaults to year-to-date (Jan 1 -> today).
-    bt = Backtest(
+    defaults = dict(
         strategy=SmaDemo(),
         source=BinanceSource(),
         symbol=Symbol("BTCUSDT", "binance"),
         timeframes=[H1, H4],
         starting_cash=10_000,
     )
-    for key, value in overrides.items():
-        setattr(bt, key, value)
-    return bt
+    defaults.update(overrides)
+    return Backtest(**defaults)
 
 
 if __name__ == "__main__":

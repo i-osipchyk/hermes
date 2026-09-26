@@ -38,8 +38,13 @@ class BinanceSource(DataSource):
             for f in s["filters"]:
                 if f["filterType"] == "PRICE_FILTER":
                     tick_size = float(f["tickSize"])
-        except Exception:
+        except (KeyError, IndexError, ValueError):
             pass  # best-effort metadata; defaults are fine for backtesting
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Unexpected error fetching instrument info for %s", symbol.ticker, exc_info=True
+            )
         return self._make_instrument(symbol, base_asset, quote, tick_size)
 
     def _make_instrument(self, symbol: Symbol, base_asset: str, quote: str, tick_size: float):

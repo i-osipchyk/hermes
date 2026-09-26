@@ -24,7 +24,7 @@ from .account import Account
 from .costs import CostModel
 from .order import Liquidity, Order, OrderStatus, OrderType, Side
 from .trade import Position, Trade
-from .venue import ExecutionVenue
+from .venue import ExecutionVenue, _UNSET
 
 
 class SimulatedVenue(ExecutionVenue):
@@ -92,6 +92,9 @@ class SimulatedVenue(ExecutionVenue):
     # --- ExecutionVenue interface ---------------------------------------------
 
     def submit(self, order: Order) -> Order:
+        if self._last_bar is None and order.limit_price is None and order.stop_price is None:
+            order.status = OrderStatus.REJECTED
+            return order
         order.created_at = self._last_bar.timestamp if self._last_bar else None
         ref_price = order.limit_price or order.stop_price or (
             self._last_bar.close if self._last_bar else 0.0
@@ -111,10 +114,10 @@ class SimulatedVenue(ExecutionVenue):
             if ai is not None and not ai.approved:
                 self._vetoed.append(order)
 
-    def modify_trade(self, trade, *, stop_loss=None, take_profit=None) -> None:
-        if stop_loss is not None:
+    def modify_trade(self, trade, *, stop_loss=_UNSET, take_profit=_UNSET) -> None:
+        if stop_loss is not _UNSET:
             trade.stop_loss = stop_loss
-        if take_profit is not None:
+        if take_profit is not _UNSET:
             trade.take_profit = take_profit
 
     def close_trade(self, trade: Trade) -> None:
@@ -126,7 +129,9 @@ class SimulatedVenue(ExecutionVenue):
 
     def force_close_all(self, ts: datetime) -> None:
         """Close all open positions at the last bar's close price (period end)."""
-        price = self._last_bar.close if self._last_bar else 0.0
+        if self._last_bar is None:
+            return  # no bars arrived — nothing to close
+        price = self._last_bar.close
         for trade in list(self._open):
             self._close_trade(trade, price, "period_end", ts)
 
@@ -138,7 +143,10 @@ class SimulatedVenue(ExecutionVenue):
     # --- valuation -------------------------------------------------------------
 
     def unrealised_pnl(self, price: float | None = None) -> float:
-        price = price if price is not None else (self._last_bar.close if self._last_bar else 0.0)
+        if price is None:
+            price = self._last_bar.close if self._last_bar else 0.0
+            if self._last_bar is None and self._open:
+                return 0.0  # no bar yet — cannot value
         cs = self.instrument.contract_size()
         total = 0.0
         for t in self._open:
@@ -165,9 +173,11 @@ class SimulatedVenue(ExecutionVenue):
     # --- internals -------------------------------------------------------------
 
     def _can_afford(self, side: Side, size: float, price: float) -> bool:
-        if side is Side.SELL and not self.instrument.can_short and not self._open:
-            # Selling with no long position on a non-shortable instrument.
-            return False
+        if side is Side.SELL and not self.instrument.can_short:
+            # Reject if net long size doesn't cover the sell on non-shortable instruments.
+            net_long = sum(t.size for t in self._open if t.side is Side.BUY) - sum(t.size for t in self._open if t.side is Side.SELL)
+            if net_long < size:
+                return False
         if self._unconstrained:
             return True
         req = Account.margin_required(self.instrument, price, size)

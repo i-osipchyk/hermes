@@ -18,7 +18,7 @@ import requests
 
 from ._cache import cache_get, cache_set
 
-_EDGAR_HEADERS = {"User-Agent": "hermes-trading research@example.com"}
+_EDGAR_HEADERS = {"User-Agent": f"hermes-trading {os.getenv('EDGAR_CONTACT_EMAIL', 'research@example.com')}"}
 _CHARS_PER_SECTION = int(os.getenv("CHARS_PER_SECTION", "3000"))
 
 _SECTION_PATTERNS = [

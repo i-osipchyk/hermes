@@ -128,10 +128,15 @@ class FvgFractalStrategy(Strategy):
         if ts in self._recorded_ts:
             return
         self._recorded_ts.add(ts)
+        _MAX_FRACTAL_HISTORY = 5000
         if prev.high < cand.high and nxt.high <= cand.high:
             self._highs.append((ts, cand.high))
+            if len(self._highs) > _MAX_FRACTAL_HISTORY:
+                self._highs = self._highs[-_MAX_FRACTAL_HISTORY:]
         if prev.low > cand.low and nxt.low >= cand.low:
             self._lows.append((ts, cand.low))
+            if len(self._lows) > _MAX_FRACTAL_HISTORY:
+                self._lows = self._lows[-_MAX_FRACTAL_HISTORY:]
 
     # ── FVG detection ─────────────────────────────────────────────────────────
 
