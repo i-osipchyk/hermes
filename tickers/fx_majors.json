@@ -1,0 +1,10 @@
+{
+  "source": "yfinance",
+  "tickers": [
+    "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "NZDUSD=X", "USDCHF=X",
+    "EURGBP=X", "EURJPY=X", "EURAUD=X", "EURCAD=X", "EURNZD=X", "EURCHF=X",
+    "GBPJPY=X", "GBPAUD=X", "GBPCAD=X", "GBPNZD=X", "GBPCHF=X",
+    "AUDJPY=X", "CADJPY=X", "NZDJPY=X", "CHFJPY=X",
+    "AUDCAD=X", "AUDNZD=X", "AUDCHF=X", "NZDCAD=X", "NZDCHF=X"
+  ]
+}
