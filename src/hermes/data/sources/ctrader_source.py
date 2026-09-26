@@ -39,7 +39,7 @@ from ..source import DataSource
 _H1 = Timeframe.parse("1h")
 _PRICE_SCALE = 1e5  # cTrader trendbar prices are integers scaled by 10^5
 # Hermes Timeframe -> cTrader trendbar period name (only <= 1h is fetched natively).
-_PERIOD = {"1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30", "1h": "H1"}
+_PERIOD = {"1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30", "1h": "H1", "1d": "D1", "1w": "W1"}
 _MAX_TRENDBARS_PER_REQUEST = 1000  # Spotware Open API page size cap
 
 # Forex/CFD trading week: opens Sunday 17:00 NY, closes Friday 17:00 NY.
@@ -93,22 +93,33 @@ def resample_from_hourly(
     return view[target].closed()
 
 
-def next_page_start(
-    page: list[dict], from_ms: int, to_ms: int, period_seconds: int
+def prev_page_end(
+    page: list[dict], from_ms: int, period_seconds: int
 ) -> int | None:
-    """Given one page of raw trendbar dicts (as returned by the Open API), return the
-    ``fromTimestamp`` (ms) to request next, or ``None`` once ``to_ms`` is covered.
+    """Return the next ``toTimestamp`` (ms) for backward pagination, or ``None`` when done.
 
-    Pure so the pagination logic is tested without a live connection; the network
-    loop (:meth:`CTraderSource._request_trendbars`) just calls this in a while-loop.
+    The cTrader API returns up to ``count`` bars whose timestamps fall in
+    [fromTimestamp, toTimestamp], filling from ``toTimestamp`` backward.  To
+    fetch the next older chunk, step ``toTimestamp`` to just before the earliest
+    bar in the current page.
+
+    Stop conditions:
+    - Empty page: no data exists in the current window → done.
+    - ``next_end <= from_ms``: the beginning of the requested range is reached.
+
+    Note: a short (but non-empty) page does *not* mean there is no earlier data —
+    the API may return fewer bars than ``count`` due to calendar gaps while older
+    bars still exist.  Only an empty page reliably signals exhaustion.
+
+    Pure so the pagination logic is tested without a live connection.
     """
     if not page:
         return None
-    last_ts_ms = max(tb["utcTimestampInMinutes"] for tb in page) * 60_000
-    next_start = last_ts_ms + period_seconds * 1000
-    if next_start >= to_ms or len(page) < _MAX_TRENDBARS_PER_REQUEST:
+    first_ts_ms = min(tb["utcTimestampInMinutes"] for tb in page) * 60_000
+    next_end = first_ts_ms - period_seconds * 1000
+    if next_end <= from_ms:
         return None
-    return next_start
+    return next_end
 
 
 def _ms(dt: datetime) -> int:
@@ -186,8 +197,22 @@ class _CTraderConnection:
         result: Queue = Queue(maxsize=1)
 
         def _start():
+            from ctrader_open_api import Protobuf
+
+            def _on_response(r):
+                try:
+                    msg = Protobuf.extract(r)
+                    if type(msg).__name__ in ("ProtoOAErrorRes", "ProtoErrorRes"):
+                        result.put(("err", RuntimeError(
+                            f"cTrader API error {msg.errorCode}: {msg.description}"
+                        )))
+                    else:
+                        result.put(("ok", msg))
+                except Exception as exc:
+                    result.put(("err", exc))
+
             d = make_deferred()
-            d.addCallback(lambda r: result.put(("ok", r)))
+            d.addCallback(_on_response)
             d.addErrback(lambda f: result.put(("err", f.value)))
 
         reactor.callFromThread(_start)
@@ -306,10 +331,14 @@ class CTraderSource(DataSource):
         self, instrument: Instrument, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[Bar]:
         for gap_start, gap_end in self.cache.missing_ranges(instrument, timeframe, start, end):
-            if timeframe.seconds <= _H1.seconds:
+            if str(timeframe) in _PERIOD:
+                # Use native cTrader bars when a direct mapping exists (includes
+                # D1/W1 which have much deeper history than H1).  For D1/W1 the
+                # 17:00 NY day_anchor on the Instrument's session calendar corrects
+                # any residual timestamp offset at display/bucketing time.
                 fetched = self._fetch_native(instrument, timeframe, gap_start, gap_end)
             else:
-                # Never trust cTrader's native 4h+; rebuild from 1h (see ADR-0006).
+                # No native mapping (e.g. 4h): rebuild from 1h (see ADR-0006).
                 hourly = self._fetch_native(instrument, _H1, gap_start, gap_end)
                 fetched = resample_from_hourly(hourly, instrument, timeframe)
             self.cache.write(instrument, timeframe, fetched)
@@ -327,7 +356,7 @@ class CTraderSource(DataSource):
     ) -> list[Bar]:
         period = _PERIOD.get(str(timeframe))
         if period is None:
-            raise ValueError(f"cTrader native fetch only supports <= 1h, got {timeframe}")
+            raise ValueError(f"cTrader native fetch: no period mapping for {timeframe}")
         raw = self._request_trendbars(
             instrument.symbol.ticker, period, timeframe.seconds, start, end
         )
@@ -348,15 +377,21 @@ class CTraderSource(DataSource):
     def _request_trendbars(
         self, ticker: str, period: str, period_seconds: int, start: datetime, end: datetime
     ) -> list[dict]:
-        """Call the Spotware Open API for trendbars, paginating until ``end`` is
-        covered. Returns dicts with the raw ProtoOATrendbar fields. Requires
-        credentials + live network (install with ``pip install 'hermes[pepperstone]'``);
-        not exercised in tests — see module docstring."""
+        """Call the Spotware Open API for trendbars, paginating backward until the
+        full [start, end] window is covered.  Returns dicts with the raw
+        ProtoOATrendbar fields sorted ascending by time.  Requires credentials +
+        live network; not exercised in tests — see module docstring.
+
+        The cTrader API fills each request from ``toTimestamp`` backward (returning
+        the most recent ``count`` bars in the window), so we page by decrementing
+        ``toTimestamp`` to just before the earliest bar of each page.
+        """
         conn = self._connection()
         symbol_id = conn.symbol_id(ticker)
-        from_ms, to_ms = _ms(start), _ms(end)
+        from_ms = _ms(start)
+        to_ms: int | None = _ms(end)
         out: list[dict] = []
-        while from_ms is not None:
+        while to_ms is not None:
             page = [
                 {
                     "low": tb.low,
@@ -369,7 +404,8 @@ class CTraderSource(DataSource):
                 for tb in conn.trendbars(symbol_id, period, from_ms, to_ms, _MAX_TRENDBARS_PER_REQUEST)
             ]
             out.extend(page)
-            from_ms = next_page_start(page, from_ms, to_ms, period_seconds)
+            to_ms = prev_page_end(page, from_ms, period_seconds)
+        out.sort(key=lambda tb: tb["utcTimestampInMinutes"])
         return out
 
     def _connection(self) -> _CTraderConnection:

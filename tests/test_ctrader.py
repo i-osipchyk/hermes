@@ -12,7 +12,7 @@ from hermes.core import Bar
 from hermes.data.aggregation import bucket_bounds
 from hermes.data.sources.ctrader_source import (
     _CFD_SESSION,
-    next_page_start,
+    prev_page_end,
     resample_from_hourly,
     trendbar_to_bar,
 )
@@ -123,25 +123,27 @@ def test_missing_credentials_raise_on_connect(monkeypatch):
         source._connection()
 
 
-def test_next_page_start_stops_on_short_page():
-    # A page smaller than the request cap means the provider has no more data.
-    page = [{"utcTimestampInMinutes": 100}]
-    assert next_page_start(page, from_ms=0, to_ms=10**12, period_seconds=3600) is None
+def test_prev_page_end_continues_on_short_non_empty_page():
+    # A short but non-empty page may have older data before it (calendar gaps).
+    page = [{"utcTimestampInMinutes": 1000}]
+    next_end = prev_page_end(page, from_ms=0, period_seconds=3600)
+    assert next_end == 1000 * 60_000 - 3600 * 1000
 
 
-def test_next_page_start_stops_when_range_covered():
+def test_prev_page_end_stops_when_from_reached():
+    # If stepping back would land at or before from_ms, stop.
     page = [{"utcTimestampInMinutes": ts} for ts in range(1000, 1000 + 1000)]
-    to_ms = 1000 * 60_000 + 3600 * 1000  # right after the last bar's next period
-    assert next_page_start(page, from_ms=0, to_ms=to_ms, period_seconds=3600) is None
+    # from_ms sits right at the first bar: next_end = 1000*60000 - 3600000 <= from_ms
+    from_ms = 1000 * 60_000
+    assert prev_page_end(page, from_ms=from_ms, period_seconds=3600) is None
 
 
-def test_next_page_start_advances_past_last_bar():
-    page = [{"utcTimestampInMinutes": ts} for ts in range(0, 1000)]
-    to_ms = 10**12
-    next_start = next_page_start(page, from_ms=0, to_ms=to_ms, period_seconds=3600)
-    # Next request should start right after the last bar's period.
-    assert next_start == 999 * 60_000 + 3600 * 1000
+def test_prev_page_end_steps_back_past_first_bar():
+    page = [{"utcTimestampInMinutes": ts} for ts in range(1000, 2000)]
+    # first bar at minute 1000 → next_end = 1000*60000 - 3600*1000
+    next_end = prev_page_end(page, from_ms=0, period_seconds=3600)
+    assert next_end == 1000 * 60_000 - 3600 * 1000
 
 
-def test_next_page_start_empty_page_stops_pagination():
-    assert next_page_start([], from_ms=0, to_ms=10**12, period_seconds=3600) is None
+def test_prev_page_end_empty_page_stops_pagination():
+    assert prev_page_end([], from_ms=0, period_seconds=3600) is None
