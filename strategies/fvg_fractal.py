@@ -224,7 +224,7 @@ class FvgFractalStrategy(Strategy):
         """Entry for bearish short: place at the RR level, or FVG top if RR is below bottom."""
         e = (tp + self._rr * sl) / (self._rr + 1)
         if e < bottom:
-            return top      # FVG top gives better than 2RR — use it
+            return bottom   # FVG bottom gives better than 2RR for short — use it
         if e < top:
             return e        # 2RR level sits inside the FVG
         return None         # 2RR level is above the FVG — unachievable inside it
