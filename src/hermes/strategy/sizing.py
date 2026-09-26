@@ -89,3 +89,27 @@ class EquityFraction(Sizer):
         if per_unit <= 0:
             return 0.0
         return ctx.instrument.to_native_units(notional / per_unit)
+
+
+@dataclass(frozen=True, slots=True)
+class LeveragedFraction(Sizer):
+    """Allocate a fraction of *leveraged* buying power per trade.
+
+    notional = equity × leverage × fraction
+    size     = notional / (price × contract_size)
+
+    With ``fraction=1.0`` and leverage=30 on a $10k account the full $300k
+    buying power is deployed — margin used equals 100% of equity.
+    Leverage is read from the instrument (``instrument.leverage``); falls back
+    to 1.0 for unleveraged instruments.
+    """
+
+    fraction: float  # e.g. 1.0 for 100% of buying power
+
+    def resolve(self, ctx: SizingContext) -> float:
+        leverage = getattr(ctx.instrument, "leverage", 1.0) or 1.0
+        notional = ctx.equity * leverage * self.fraction
+        per_unit = ctx.price * ctx.instrument.contract_size()
+        if per_unit <= 0:
+            return 0.0
+        return ctx.instrument.to_native_units(notional / per_unit)

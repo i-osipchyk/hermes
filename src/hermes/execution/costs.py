@@ -202,5 +202,5 @@ class CostModel:
             commission=PerLotCommission(0.0),
             spread=SpreadModel(points=2 * instrument.tick_size),
             slippage=SlippageModel(ticks=1.0),
-            financing=FinancingModel(annual_rate=0.05),
+            financing=FinancingModel(annual_rate=0.005),
         )

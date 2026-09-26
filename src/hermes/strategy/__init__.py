@@ -2,7 +2,7 @@
 
 from .parameter import Parameter
 from .reference import Reference
-from .sizing import EquityFraction, NotionalCash, RiskCash, RiskPercent, Sizer, SizingContext, Units
+from .sizing import EquityFraction, LeveragedFraction, NotionalCash, RiskCash, RiskPercent, Sizer, SizingContext, Units
 from .strategy import Strategy
 
 __all__ = [
@@ -16,4 +16,5 @@ __all__ = [
     "RiskCash",
     "RiskPercent",
     "EquityFraction",
+    "LeveragedFraction",
 ]

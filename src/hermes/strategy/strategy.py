@@ -191,7 +191,7 @@ class Strategy(ABC):
         if isinstance(effective_size, Sizer):
             ctx = SizingContext(
                 instrument=self.instrument,
-                price=self.price,
+                price=limit or stop or self.price,
                 equity=self.venue.equity(),
                 stop_price=stop_loss,
             )
