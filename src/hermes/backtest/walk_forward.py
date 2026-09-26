@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import itertools
 from dataclasses import dataclass, field
@@ -153,7 +154,8 @@ class WalkForward:
                 for combo in combos:
                     merged = {**base_params, **combo}
                     is_bt = dataclasses.replace(
-                        self.template, params=merged, start=is_start, end=is_end
+                        self.template, strategy=copy.deepcopy(self.template.strategy),
+                        params=merged, start=is_start, end=is_end
                     )
                     try:
                         is_result = is_bt.run()  # type: ignore[union-attr]
@@ -166,7 +168,8 @@ class WalkForward:
 
             # OOS: run with params selected on IS --------------------------
             oos_bt = dataclasses.replace(
-                self.template, params=best_params, start=oos_start, end=oos_end
+                self.template, strategy=copy.deepcopy(self.template.strategy),
+                params=best_params, start=oos_start, end=oos_end
             )
             oos_result = oos_bt.run()  # type: ignore[union-attr]
 
@@ -238,6 +241,6 @@ def split_isoos(
     end = _as_utc(bt.end)
     split_point = start + (end - start) * is_frac
 
-    is_bt = dataclasses.replace(bt, end=split_point)
-    oos_bt = dataclasses.replace(bt, start=split_point)
+    is_bt = dataclasses.replace(bt, strategy=copy.deepcopy(bt.strategy), end=split_point)
+    oos_bt = dataclasses.replace(bt, strategy=copy.deepcopy(bt.strategy), start=split_point)
     return is_bt.run(), oos_bt.run()  # type: ignore[union-attr]

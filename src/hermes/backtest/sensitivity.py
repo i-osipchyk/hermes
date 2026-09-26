@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 
 
@@ -30,6 +31,6 @@ def cost_sensitivity(
             instrument = source.get_instrument(backtest.symbol)
             base_cost = CostModel.default_for(instrument)
         scaled = base_cost.scaled(m)
-        bt = dataclasses.replace(backtest, cost_model=scaled)
+        bt = dataclasses.replace(backtest, strategy=copy.deepcopy(backtest.strategy), cost_model=scaled)
         results[m] = bt.run()
     return results

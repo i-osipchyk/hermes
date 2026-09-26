@@ -203,7 +203,7 @@ def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:
                     m.parameter_adjusted_sharpe = m.sharpe
             downside = [r for r in rets if r < 0]
             if downside:
-                dvar = sum(r * r for r in downside) / len(downside)
+                dvar = sum(r * r for r in downside) / len(rets)
                 dstd = math.sqrt(dvar)
                 if dstd > 0:
                     m.sortino = mean / dstd * math.sqrt(steps_per_year)

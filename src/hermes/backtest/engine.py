@@ -244,7 +244,8 @@ class Backtest:
                 benchmark_equity_curve.append((t, bh_eq))
 
         if _cb:
-            _cb(_total_bars, _total_bars)
+            last_ts = bars[-1].timestamp if bars else start
+            _cb(_total_bars, _total_bars, last_ts)
         strat.on_stop()
         if bars:
             last_bar = next(b for b in reversed(bars) if b.timestamp >= start)

@@ -104,12 +104,14 @@ class PortfolioBacktest:
 
         account = Account(self.starting_cash)
         all_states = [self._wire(leg, account, self.unconstrained) for leg in self.legs]
+        kept_legs: list = []
         leg_states: list[_LegState] = []
         for leg, ls in zip(self.legs, all_states):
             if not ls.bars:
                 import warnings
                 warnings.warn(f"Skipping {leg.symbol}: no data found in cache.", stacklevel=2)
             else:
+                kept_legs.append(leg)
                 leg_states.append(ls)
 
         # Give each venue a cross-leg margin view so _can_afford rejects orders that
@@ -222,7 +224,8 @@ class PortfolioBacktest:
             equity_curve.append((ts, account.cash + total_unrealised))
 
         if _cb:
-            _cb(_total_events, _total_events)
+            last_ts_cb = events[-1][0] if events else _window_start
+            _cb(_total_events, _total_events, last_ts_cb)
 
         last_ts = events[-1][0] if events else _window_start
         for ls in leg_states:
@@ -235,7 +238,7 @@ class PortfolioBacktest:
 
         # Gather trades per symbol and build the combined BacktestResult.
         per_symbol: dict[str, list] = {}
-        for leg, ls in zip(self.legs, leg_states):
+        for leg, ls in zip(kept_legs, leg_states):
             per_symbol[str(leg.symbol)] = ls.venue.closed_trades
 
         all_trades = [t for trades in per_symbol.values() for t in trades]

@@ -350,7 +350,7 @@ def _probabilistic_sharpe(equity_curve) -> float | None:
 
     # Variance of the SR estimator (denominator under the square root).
     sr2 = sr_hat ** 2
-    denom_sq = 1.0 - skew * sr_hat + (kurt / 4.0) * sr2
+    denom_sq = 1.0 - skew * sr_hat + ((kurt + 2) / 4.0) * sr2
     if denom_sq <= 0:
         return None
 
@@ -508,7 +508,7 @@ def _deflated_sharpe(equity_curve, n_trials: int = 1) -> float | None:
 
     sr_star = _expected_max_sharpe(n_trials)
 
-    denom_sq = 1.0 - skew * sr_hat + (kurt / 4.0) * sr_hat ** 2
+    denom_sq = 1.0 - skew * sr_hat + ((kurt + 2) / 4.0) * sr_hat ** 2
     if denom_sq <= 0:
         return None
 
@@ -542,6 +542,6 @@ def _min_trl(equity_curve, confidence: float = 0.95) -> int | None:
 
     z_conf = _norm_cdf_inv(confidence)
     # MinTRL = (1 + (1 - skew*SR + (kurt/4)*SR²)) * (z_conf / SR)²
-    adj = 1.0 - skew * sr + (kurt / 4.0) * sr ** 2
+    adj = 1.0 - skew * sr + ((kurt + 2) / 4.0) * sr ** 2
     min_trl = (1 + adj) * (z_conf / sr) ** 2
     return math.ceil(max(1.0, min_trl))
