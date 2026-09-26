@@ -1,22 +1,22 @@
-"""EMA Close Crossover strategy with AI Advisor confirmation gate (daily, long-only).
+"""EMA Close Crossover strategy with AI news filter (daily, long-only).
 
 Identical edge to ``ema_crossover.py`` — ride the trend while the fast EMA stays
-above the slow EMA — but every entry must pass an AI fundamental filter before
-the order is submitted.  The AI gate can only veto; it cannot invent or resize trades.
+above the slow EMA — but every entry must pass an AI news filter before the order
+is submitted.  The AI gate can only veto; it cannot invent or resize trades.
 
 EMA periods are configurable via ``short_ema`` (default 8) and ``long_ema`` (default 32)
 parameters; the AI prompt is generated dynamically to reflect the active periods.
 
 Entry:  Golden cross (fast EMA crosses above slow EMA) on bar N close → candidate order
-        sent to the AI Advisor with PIT fundamentals, 10-K excerpts, and recent news →
-        approved: order sent; vetoed: order cancelled.  Fills at bar N+1 open.
+        sent to the AI Advisor with recent news → approved: order sent; vetoed: order
+        cancelled.  Fills at bar N+1 open.
 
 Exit:   Death cross (fast EMA crosses below slow EMA) on bar M → market close, no AI gate.
         Fills at bar M+1 open.
 
-AI goal: filter out golden crosses where the fundamental TRAJECTORY is deteriorating —
-         compressing margins, decelerating revenue, rising leverage, or a recent negative
-         catalyst — regardless of whether absolute metrics look healthy.
+AI goal: given that price is already in an uptrend confirmed by the EMA crossover, decide
+         whether recent news gives the trend a reasonable chance to persist — or contains
+         a catalyst that is likely to break it.
 
 Sizing: Defaults to ``EquityFraction(0.95)`` when no sizer is set on the Backtest.
 
@@ -28,7 +28,6 @@ from __future__ import annotations
 from hermes import (
     AIAdvisor,
     ClaudeProvider,
-    EDGARFilingEnricher,
     EMA,
     Backtest,
     EquityFraction,
@@ -37,7 +36,6 @@ from hermes import (
     Strategy,
     Symbol,
     Timeframe,
-    YFinanceFundamentalsEnricher,
 )
 from hermes.data import YFinanceSource
 
@@ -49,81 +47,54 @@ D1 = Timeframe.parse("1D")
 def _ai_prompt(short_len: int, long_len: int) -> str:
     return f"""\
 Strategy: EMA Crossover ({short_len} EMA / {long_len} EMA, daily bars, long-only)
-Signal: The {short_len}-period EMA just crossed above the {long_len}-period EMA (golden cross), \
-generating a candidate long entry.
+Signal: The {short_len}-period EMA just crossed above the {long_len}-period EMA (golden cross).
+The price is in a confirmed uptrend. The technical entry is already locked in.
 
-Your task: decide whether this crossover has fundamental backing strong enough to \
-justify entering. The default answer is VETO. APPROVE only if you find at least TWO \
-of the five signals below — each verified against a specific number or named event \
-from the data provided. You may not infer, estimate, or extrapolate signals that \
-are not directly stated in the fundamentals snapshot, 10-K excerpts, or news items.
+Your task: read the recent news and decide whether an identifiable positive catalyst \
+is driving this trend — or whether the news reveals a reason the trend is unlikely to persist.
 
-THE FIVE VALID SIGNALS — each must be verified, not inferred:
+DEFAULT TO VETO. Only approve when the news contains a clear catalyst from the APPROVE \
+list below. If the news is ambiguous, mixed, or doesn't fit any APPROVE category, VETO.
 
-  S1. MARGIN EXPANSION (last reported year vs the year before):
-      Gross margin OR operating margin improved by at least 100bps year-over-year.
-      You must state both the current and prior-year margin figures, sourced from \
-the filing. If only one year's figure is available, this signal does not count.
+────────────────────────────────────────────────────────
+APPROVE — news driven by one of these catalysts:
+  • Sector / peer momentum: the broader sector or key peers are in a confirmed uptrend,
+    with identifiable reasons (demand surge, policy tailwind, commodity move, etc.).
+  • Specific macro tailwind: a named government policy, spending programme, rate decision,
+    or macro event that directly benefits this stock — not generic "market is up" language.
+  • Recovery with catalyst: stock rebounding from a prior selloff and there is a specific
+    identifiable reason for the recovery (new management, resolved overhang, guidance raise).
+  • Regulatory win: FDA approval, contract award from a government body, favourable ruling.
+  • Earnings beat with raised guidance: reported results above consensus AND guidance raised;
+    not just an "expected beat" or analyst estimate revision.
 
-  S2. REVENUE RE-ACCELERATION (last two reported periods):
-      The YoY revenue growth rate in the most recent period is HIGHER than the \
-growth rate in the preceding period — i.e., growth is speeding up, not just positive.
-      You must state both growth rates with the source periods. Positive-but-decelerating \
-growth does NOT qualify.
+VETO — news driven by one of these catalysts (even if framed positively):
+  • M&A / deals / activism: any mention of an acquisition, merger, asset sale, activist
+    investor stake, or takeover rumour — these introduce binary event risk that breaks trends.
+  • Analyst opinion only: the reason to approve is solely an analyst upgrade, price target
+    raise, or inclusion in a stock list, with no underlying business catalyst.
+  • Product / contract announcement: a new product launch, partnership, or contract win
+    announced in the news — these are typically already priced in or fail to sustain momentum.
+  • Dividend / income framing: the stock is highlighted as a dividend payer or income vehicle
+    with no growth catalyst — income framing signals low expected momentum.
+  • Absence of bad news: the only positive signal is that no negative news was found.
+    "No catalyst either way" is not a reason to enter a momentum trade.
+  • No news available: VETO at confidence 0.35.
 
-  S3. EARNINGS BEAT AND GUIDANCE RAISE — both in the same quarter:
-      The most recent earnings release beat consensus EPS AND management raised \
-forward guidance in the same announcement. Both conditions must be explicitly \
-stated in the news window. A beat without a raise, or a raise without a beat, \
-does not qualify.
-
-  S4. LEVERAGE REDUCTION (year-over-year):
-      Debt/Equity ratio fell by at least 10% year-over-year, OR interest coverage \
-ratio improved by at least 0.5x. You must cite both the current and prior figures. \
-If only one figure is available, this signal does not count.
-
-  S5. NAMED REVENUE CATALYST (in the 30-day news window):
-      A specific, named event that directly adds measurable near-term revenue: \
-a signed contract with a stated dollar value, a regulatory approval for a product \
-already in market, or a completed acquisition with revenue already consolidated. \
-The dollar impact or approval must be explicitly stated in the news. The following \
-do NOT qualify: analyst upgrades, price target raises, strategic intent, market \
-size projections, memoranda of understanding, letters of intent, pipeline language, \
-or acquisitions where revenue is not yet consolidated.
-
-VETO if you cannot confirm two signals from the above list using the data provided.
-
-AUTOMATIC VETO regardless of signals found:
-  - Revenue declined year-over-year (negative growth rate in the most recent period).
-  - Gross or operating margin compressed more than 150bps year-over-year.
-  - The most recent earnings release was a miss AND guidance was cut.
-  - Going-concern, covenant breach, or solvency warning in the 10-K.
-  - Named negative event in the news: lost contract, regulatory enforcement action, \
-product recall, material fraud allegation, or CFO/CEO departure under adverse \
-circumstances — each explicitly stated, not inferred.
-
-If the fundamentals snapshot is absent or the filing excerpts are missing, \
-VETO at confidence 0.35.
-
-CONFIDENCE CALIBRATION — use the full 0–1 range:
-  0.0–0.2  Definitive veto: automatic veto trigger fired AND trajectory actively \
-deteriorating across multiple axes.
-  0.2–0.4  Clear veto: fewer than two confirmed signals AND at least one deteriorating \
-axis or named negative catalyst.
-  0.4–0.5  Weak veto: fewer than two confirmed signals, but no active deterioration. \
-Trajectory is flat or ambiguous.
-  0.5–0.6  Borderline approval: exactly two signals confirmed, but both are weak or \
-offset by conflicting evidence.
-  0.6–0.75 Moderate approval: two signals clearly confirmed, no conflicting evidence.
-  0.75–0.9 Strong approval: three or more signals clearly confirmed.
-  0.9–1.0  Very high conviction: four or more signals confirmed, trajectory \
-unambiguously accelerating. Reserve for rare standout cases.
+────────────────────────────────────────────────────────
+CONFIDENCE CALIBRATION:
+  0.0–0.2  Strong veto: clear negative catalyst or hard-veto news type above.
+  0.2–0.4  Clear veto: news fits a veto category, impact on trend is certain.
+  0.4–0.5  Weak veto: news is ambiguous or does not fit any approve category.
+  0.5–0.6  Borderline approval: weak match to an approve category; some doubt remains.
+  0.6–0.75 Moderate approval: clear match to an approve category.
+  0.75–1.0 Strong approval: strong, specific catalyst from the approve list above.
 
 Hard rules:
   - VETO confidence must be ≤ 0.5.
-  - Missing data → VETO at 0.35.
-  - You must state which signals you counted and why, with the specific figures.
-  - If you cannot produce the source figure, the signal does not count.\
+  - No news available → VETO at 0.35.
+  - When in doubt, veto — false negatives (missing a trade) cost less than false positives.
+  - State the specific headline or event and the category it matched.\
 """
 
 
@@ -164,7 +135,7 @@ class EmaCrossoverAI(Strategy):
         self._prev_short = short
         self._prev_long  = long
 
-    def on_bar(self, bar) -> None:  # noqa: ARG002
+    def on_bar(self, bar) -> None:
         short = self.indicator_value(self.short_ema)["value"]
         long  = self.indicator_value(self.long_ema)["value"]
 
@@ -196,13 +167,11 @@ def build_backtest(**overrides) -> Backtest:
     """Factory used by hermes-backtest and the web UI.
 
     Requires ``ANTHROPIC_API_KEY`` in the environment for live AI calls.
-    Optional env vars for PIT enrichers:
-      - ``POLYGON_API_KEY`` — enables news headlines (PolygonNewsEnricher)
-      - no key needed for EDGAR or yfinance fundamentals
+    Requires ``POLYGON_API_KEY`` for news headlines (PolygonNewsEnricher).
 
     In backtest mode all decisions are served from the deterministic content-
     addressed cache, so subsequent re-runs are free and reproducible.
-    The PIT enrichers cache their API responses to ``.cache/pit/``.
+    News API responses are cached to ``.cache/pit/``.
     """
     symbol = overrides.pop("symbol", Symbol("SPY", "yfinance"))
     starting_cash = overrides.pop("starting_cash", 100_000)
@@ -211,22 +180,17 @@ def build_backtest(**overrides) -> Backtest:
         AIAdvisor(
             ClaudeProvider(),
             system_prompt=(
-                "You are a fundamental momentum analyst and trading risk filter. "
-                "Your default answer is VETO. You APPROVE only when you can verify at least "
-                "two of five defined signals using specific numbers or named events from the "
-                "data provided — no inference, no extrapolation, no invented figures. "
-                "Analyst opinions, market projections, and strategic intent do not count. "
-                "You receive a technical entry signal (EMA golden cross on daily bars) "
-                "together with point-in-time financial metrics, 10-K filing excerpts, "
-                "and recent news. "
+                "You are a news-based trend filter for a momentum trading strategy. "
+                "A technical entry signal (EMA golden cross on daily bars) has already fired — "
+                "the stock is in an uptrend. Your only job is to read the recent news and decide "
+                "whether the trend has a reasonable chance to persist. "
+                "APPROVE if news is neutral or positive. "
+                "VETO if news contains an explicit negative catalyst likely to break the trend. "
                 "Reply with a JSON object: {\"approved\": true|false, \"confidence\": 0.0-1.0, "
-                "\"reason\": \"one sentence citing the specific signals that drove the decision\"}. "
-                "Vetos must have confidence ≤ 0.5. Missing data is a veto at 0.35. "
-                "Approvals require at least two concrete positive momentum signals."
+                "\"reason\": \"one sentence citing the specific headline or event that drove the decision\"}. "
+                "Vetos must have confidence ≤ 0.5. No news available is a veto at 0.35."
             ),
             enrichers=[
-                YFinanceFundamentalsEnricher(),   # PIT P/E, P/B, ROE, D/E — no API key
-                EDGARFilingEnricher(),             # PIT 10-K Items 1, 1A, 7 — no API key
                 PolygonNewsEnricher(days_back=30), # requires POLYGON_API_KEY
             ],
             min_confidence=0.0,
