@@ -147,7 +147,7 @@ class WalkForward:
 
             # IS optimisation: grid-search parameter combinations ----------
             base_params: dict[str, Any] = dict(self.template.params)  # type: ignore[union-attr]
-            best_params = base_params
+            best_params = dict(base_params)
 
             if combos:
                 best_metric = float("-inf")

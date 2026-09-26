@@ -80,6 +80,7 @@ class Backtest:
         strat.instrument = instrument
         strat._params = dict(self.params)  # param overrides seed before setup()
         strat.setup()
+        strat._validate_params()
 
         subscribed = set(self.timeframes) | {ind.timeframe for ind in strat.registered_indicators}
         if not subscribed:

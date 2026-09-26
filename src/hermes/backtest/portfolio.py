@@ -269,6 +269,7 @@ class PortfolioBacktest:
         strat.instrument = instrument
         strat._params = dict(bt.params)
         strat.setup()
+        strat._validate_params()
 
         subscribed = set(bt.timeframes) | {ind.timeframe for ind in strat.registered_indicators}
         if not subscribed:

@@ -8,6 +8,7 @@ only ever touch the shared interface below.
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
@@ -178,7 +179,7 @@ class Stock(Instrument):
         return 1.0
 
     def to_native_units(self, size: float) -> float:
-        return size  # whole/fractional shares; rounding policy TODO
+        return math.floor(size)  # stocks: whole shares only, round down
 
 
 @dataclass(eq=False)
@@ -297,4 +298,7 @@ class Cfd(Instrument):
         return self.lot_size
 
     def to_native_units(self, size: float) -> float:
-        return size  # size expressed in lots; conversion policy TODO
+        # CFD lots: round down to tick_size precision (e.g. 0.01 lots)
+        if self.tick_size > 0:
+            return math.floor(size / self.tick_size) * self.tick_size
+        return size

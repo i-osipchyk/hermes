@@ -96,6 +96,17 @@ class Strategy(ABC):
         self._params.setdefault(spec.name, spec.default)
         return self._params[spec.name]
 
+    def _validate_params(self) -> None:
+        """Raise if any seeded override key was not consumed by a ``param()`` call
+        during ``setup()``.  Catches typos in parameter names early."""
+        declared = set(self._param_specs)
+        supplied = set(self._params) - declared
+        if supplied:
+            raise ValueError(
+                f"Unknown parameter(s) {supplied} — declared parameters are {declared}. "
+                "Check for typos in your params dict."
+            )
+
     def declared_parameters(self) -> list[Parameter]:
         """The Parameter specs this strategy declared in :meth:`setup` — what a UI
         renders as editable controls. Requires ``setup()`` to have run."""

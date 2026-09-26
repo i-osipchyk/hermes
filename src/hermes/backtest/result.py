@@ -194,10 +194,12 @@ def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:
             steps_per_year = _annualisation(equity_curve)
             if std > 0:
                 m.sharpe = mean / std * math.sqrt(steps_per_year)
-                # Penalise for free parameters: Sharpe × √((n−k)/n).
+                # Penalise for free parameters: Sharpe × √(max(1, n−k) / n).
+                # Uses max(1, …) so under-sampled strategies are penalised
+                # but retain a non-zero signal instead of collapsing to 0.
                 n = len(trades)
                 if n > 0 and num_params > 0:
-                    penalty = max(0.0, (n - num_params) / n)
+                    penalty = max(1, n - num_params) / n
                     m.parameter_adjusted_sharpe = m.sharpe * math.sqrt(penalty)
                 else:
                     m.parameter_adjusted_sharpe = m.sharpe
