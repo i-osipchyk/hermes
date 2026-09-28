@@ -17,6 +17,8 @@ from .ai import (
     ClaudeProvider,
     ContextEnricher,
     EDGARFilingEnricher,
+    MassiveFundamentalsEnricher,
+    MassiveFundamentalsScreen,
     PolygonNewsEnricher,
     YFinanceFundamentalsEnricher,
     YFinanceFundamentalsScreen,
@@ -142,6 +144,8 @@ __all__ = [
     "ContextEnricher",
     "YFinanceFundamentalsEnricher",
     "YFinanceFundamentalsScreen",
+    "MassiveFundamentalsEnricher",
+    "MassiveFundamentalsScreen",
     "EDGARFilingEnricher",
     "PolygonNewsEnricher",
     # backtest

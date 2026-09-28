@@ -26,12 +26,22 @@ class ContextEnricher(Protocol):
 
 from .edgar import EDGARFilingEnricher
 from .fundamentals import YFinanceFundamentalsEnricher, YFinanceFundamentalsScreen
+from .massive_fundamentals import (
+    MassiveFundamentalsEnricher,
+    MassiveFundamentalsScreen,
+    latest_period,
+    screen_period,
+)
 from .news import PolygonNewsEnricher
 
 __all__ = [
     "ContextEnricher",
     "YFinanceFundamentalsEnricher",
     "YFinanceFundamentalsScreen",
+    "MassiveFundamentalsEnricher",
+    "MassiveFundamentalsScreen",
+    "latest_period",
+    "screen_period",
     "EDGARFilingEnricher",
     "PolygonNewsEnricher",
 ]
