@@ -38,6 +38,29 @@ def test_missing_ranges(tmp_path):
     assert gaps[0][1] == T0 + timedelta(hours=10)
 
 
+def test_missing_ranges_detects_internal_gap(tmp_path):
+    """Two disjoint writes (e.g. a recent window fetched first, an older window
+    fetched later) must not make the hole between them look covered just
+    because *some* row exists before it and *some* row exists after it."""
+    cache = BarCache(tmp_path)
+    inst = _btc()
+    early = _bars(3)  # hours 0..2
+    late = [
+        Bar(T0 + timedelta(hours=100 + i), H1, 100 + i, 101 + i, 99 + i, 100 + i, 1.0)
+        for i in range(3)
+    ]  # hours 100..102
+    cache.write(inst, H1, early)
+    cache.write(inst, H1, late)
+
+    # A query spanning both writes must report the middle as missing, even
+    # though it starts after `early`'s min and ends before `late`'s max.
+    gaps = cache.missing_ranges(inst, H1, T0, T0 + timedelta(hours=102))
+    assert len(gaps) == 1
+    gap_start, gap_end = gaps[0]
+    assert gap_start == T0 + timedelta(hours=2)
+    assert gap_end == T0 + timedelta(hours=100)
+
+
 def test_dedupe_on_rewrite(tmp_path):
     cache = BarCache(tmp_path)
     inst = _btc()

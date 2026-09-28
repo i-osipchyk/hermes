@@ -68,24 +68,34 @@ class BarCache:
     def missing_ranges(
         self, instrument: Instrument, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[tuple[datetime, datetime]]:
+        """Gaps in [start, end] not covered by cached bars.
+
+        Scans the cached timestamps that actually fall inside [start, end], not
+        just the cache's global min/max. Two disjoint fetches (e.g. a recent
+        window fetched first, an older window fetched later) otherwise leave a
+        hole in the middle that looked "covered" purely because *some* row
+        existed before it and *some* row existed after it -- ``read()`` then
+        silently returned a sparse slice instead of the full requested range,
+        with no error or warning.
+        """
         df = self._load(instrument, timeframe)
+        tf_seconds = timeframe.seconds if hasattr(timeframe, "seconds") else 86_400
         if df.empty:
             return [(start, end)]
-        cached_min = datetime.fromtimestamp(df["ts"].min(), tz=UTC)
-        cached_max = datetime.fromtimestamp(df["ts"].max(), tz=UTC)
+        s, e = _epoch(start), _epoch(end)
+        in_range = df.loc[(df["ts"] >= s) & (df["ts"] <= e), "ts"]
+        ts_in_range = sorted(in_range.tolist())
+
         gaps: list[tuple[datetime, datetime]] = []
-        if start < cached_min:
-            gaps.append((start, min(cached_min, end)))
-        if end > cached_max:
-            gap_start = max(cached_max, start)
-            gap_seconds = (end - gap_start).total_seconds()
-            # Skip tail gaps narrower than the timeframe's bar width: no new bar
-            # can fit inside them, so the fetch would always return empty.
-            # This avoids hitting the provider unnecessarily on every repeated
-            # run (e.g. N parallel simulations all requesting the same tiny gap).
-            tf_seconds = timeframe.seconds if hasattr(timeframe, "seconds") else 86_400
-            if gap_seconds >= tf_seconds:
-                gaps.append((gap_start, end))
+        cursor = s
+        for t in ts_in_range:
+            # Skip gaps narrower than the timeframe's bar width: no new bar can
+            # fit inside them, so fetching would always return empty.
+            if t - cursor > tf_seconds:
+                gaps.append((datetime.fromtimestamp(cursor, tz=UTC), datetime.fromtimestamp(t, tz=UTC)))
+            cursor = max(cursor, t)
+        if e - cursor >= tf_seconds:
+            gaps.append((datetime.fromtimestamp(cursor, tz=UTC) if cursor != s else start, end))
         return gaps
 
     def write(self, instrument: Instrument, timeframe: Timeframe, bars: list[Bar]) -> None:
