@@ -30,3 +30,6 @@ htmlcov/
 
 # Local Claude Code settings (skills ARE committed; local settings are not)
 .claude/settings.local.json
+
+.cache/
+.research/
