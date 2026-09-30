@@ -18,8 +18,12 @@ Normalization
 -------------
 * Uses fully-adjusted OHLCV (``adjOpen`` / ``adjClose`` etc.) which accounts
   for both splits and dividends — consistent with yfinance ``auto_adjust=True``.
-* Bars are normalized to UTC and stamped at the market-close timestamp
-  (16:00 America/New_York for US equities).
+* Bars carry Tiingo's own date stamp normalized to UTC — i.e. midnight UTC of
+  the trading day, NOT the 16:00 America/New_York session close. yfinance stamps
+  its daily bars at exchange-local midnight, so the two sources place the same
+  trading day a few hours apart; within one portfolio leg this is harmless (each
+  leg advances on its own clock) but do not assume the stamps align when mixing
+  sources.
 * Session calendar mirrors :class:`~hermes.data.sources.YFinanceSource`: US
   equities, 09:30–16:00 America/New_York.
 
@@ -43,7 +47,7 @@ from zoneinfo import ZoneInfo
 
 from ...core import Bar, Instrument, SessionCalendar, Stock, Symbol, Timeframe
 from .._ssl import ensure_system_trust
-from ..cache import BarCache
+from ..cache import BarCache, checked_through
 from ..source import DataSource
 
 _US_SESSION = SessionCalendar(
@@ -98,10 +102,11 @@ class TiingoSource(DataSource):
         for gap_start, gap_end in self.cache.missing_ranges(
             instrument, timeframe, start, end
         ):
-            self.cache.write(
-                instrument,
-                timeframe,
-                self._fetch(instrument.symbol.ticker, timeframe, gap_start, gap_end),
+            fetched = self._fetch(instrument.symbol.ticker, timeframe, gap_start, gap_end)
+            self.cache.write(instrument, timeframe, fetched)
+            self.cache.mark_checked(
+                instrument, timeframe, gap_start,
+                checked_through(fetched, timeframe, gap_start, gap_end),
             )
         return self.cache.read(instrument, timeframe, start, end)
 

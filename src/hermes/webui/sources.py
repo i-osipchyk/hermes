@@ -41,8 +41,8 @@ _FACTORIES: dict[str, Callable[[], DataSource]] = {
 # Sources that need credentials / an unfinished transport — flagged in the UI.
 NEEDS_SETUP = {PepperstoneSource.name}
 
-# Sources whose instruments carry a leverage multiplier (CFDs, perps).
-LEVERAGED_SOURCES = {PepperstoneSource.name, BinanceFuturesSource.name}
+# Sources whose instruments carry a leverage multiplier (CFDs, perps, margin stocks).
+LEVERAGED_SOURCES = {PepperstoneSource.name, BinanceFuturesSource.name, YFinanceSource.name}
 
 
 def source_names() -> list[str]:

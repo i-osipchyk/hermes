@@ -24,8 +24,15 @@
 # close in spirit, not identical. Pass use_pepperstone=True to trade the NAS100
 # CFD via PepperstoneSource instead: a closer proxy for the index itself (and
 # leveraged/shortable like the original futures), at the cost of needing
-# CTRADER_* credentials and cTrader's own cost/leverage assumptions rather than
-# real MNQ margin/commissions.
+# CTRADER_* credentials.
+#
+# Cost note (Pepperstone path): index CFDs on Pepperstone carry zero commission
+# -- the spread is the cost, plus overnight financing on positions held past a
+# session (moot here; the strategy force-closes every day at 15:55 ET). Average
+# spreads confirmed via pepperstone.com/en/markets/indices/index-fees: US500
+# ~0.4 points, NAS100 ~1.0 point. CostModel.default_for()'s generic CFD spread
+# (2x tick_size) is tuned for FX pairs and understates this badly, so the
+# Pepperstone path below builds an explicit per-symbol CostModel instead.
 #
 # Margin note: "risk 1% of equity to a 0.25*TR1 stop" sizes for a leveraged
 # instrument, where the margin required is a small fraction of notional. QQQ is
@@ -42,7 +49,6 @@
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime, time, timedelta
 
 from hermes import (
@@ -56,7 +62,14 @@ from hermes import (
     Timeframe,
 )
 from hermes.data import PepperstoneSource, YFinanceSource
-from hermes.execution import OrderStatus
+from hermes.execution import (
+    CostModel,
+    FinancingModel,
+    OrderStatus,
+    PerLotCommission,
+    SlippageModel,
+    SpreadModel,
+)
 
 GENERATED_BY = "hermes-strategy"
 
@@ -69,13 +82,29 @@ _EOD_TIME = time(15, 55)
 _YFINANCE_LOOKBACK_DAYS = 55     # yfinance's ~60-day 5m history window
 _PEPPERSTONE_LOOKBACK_DAYS = 1095  # ~3 years; confirmed available for NAS100 5m via cTrader
 
+# Average Pepperstone spread in index points (pepperstone.com/en/markets/indices/index-fees).
+# Index CFDs carry no commission there -- the spread is the entire trading cost.
+_PEPPERSTONE_AVG_SPREAD_POINTS = {"US500": 0.4, "NAS100": 1.0}
+
+
+def _pepperstone_cost_model(ticker: str) -> CostModel:
+    return CostModel(
+        commission=PerLotCommission(0.0),
+        spread=SpreadModel(points=_PEPPERSTONE_AVG_SPREAD_POINTS.get(ticker, 0.4)),
+        slippage=SlippageModel(ticks=1.0),
+        financing=FinancingModel(annual_rate=0.005),
+    )
+
 
 class OpeningRangeBreakoutTR1(Strategy):
     def setup(self) -> None:
         self._tr1_mult = self.param(
             Parameter(
                 "tr1_mult", 0.25, bounds=(0.1, 0.5),
-                description="Fraction of the prior session's true range used for both the entry offset and the stop distance (1R)",
+                description=(
+                    "Fraction of the prior session's true range used for both the "
+                    "entry offset and the stop distance (1R)"
+                ),
             )
         )
         self._risk_pct = self.param(
@@ -155,6 +184,7 @@ class OpeningRangeBreakoutTR1(Strategy):
         self._short_needs_retest = False
         self._session_open = None
         self._tr1 = None
+        self._be_applied.clear()
         self._cancel_working()
 
     def _arm_levels(self, bar) -> None:
@@ -202,6 +232,9 @@ class OpeningRangeBreakoutTR1(Strategy):
     def _maybe_breakeven(self, trade, bar) -> None:
         if trade in self._be_applied:
             return
+        # Prune closed trades so the set tracks only live ones (it is reset each
+        # day anyway, but a long session should not accumulate dead references).
+        self._be_applied.intersection_update(self.venue.open_trades())
         target = 2 * self._r  # +0.50*TR1 = +2R
         if trade.side is Side.BUY:
             hit = bar.high - trade.entry_price >= target
@@ -231,8 +264,16 @@ class OpeningRangeBreakoutTR1(Strategy):
                 return
             setattr(self, retest_attr, False)
 
-        shares = math.floor(self.venue.equity() * self._risk_pct / self._r) if self._r > 0 else 0
-        if shares < 1:
+        # Skip when the risk budget cannot buy one native unit (a share, or one
+        # volume step of a lot-sized CFD). Sizing itself is done by RiskPercent
+        # below; this only avoids submitting an order that would floor to zero.
+        if self._r <= 0:
+            return
+        risk_cash = self.venue.equity() * self._risk_pct
+        per_unit_risk = self._r * self.instrument.contract_size()
+        if per_unit_risk <= 0:
+            return
+        if self.instrument.to_native_units(risk_cash / per_unit_risk) <= 0:
             return
 
         stop_loss = level - self._r if is_long else level + self._r
@@ -278,6 +319,7 @@ def build_backtest(**overrides) -> Backtest:
     if use_pepperstone:
         source = PepperstoneSource(leverage=overrides.pop("leverage", 30.0))
         unconstrained = False  # the CFD is leveraged, so real margin checks apply
+        overrides.setdefault("cost_model", _pepperstone_cost_model(symbol.ticker))
     else:
         source = YFinanceSource(shortable=True)
         unconstrained = True  # see the margin note above -- QQQ cash shares can't

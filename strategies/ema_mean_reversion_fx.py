@@ -21,10 +21,9 @@ from datetime import UTC, datetime
 
 from hermes import (
     ADX,
-    EMA,
     Backtest,
-    Parameter,
     OrderType,
+    Parameter,
     PortfolioBacktest,
     Side,
     Strategy,
@@ -32,11 +31,11 @@ from hermes import (
     Timeframe,
 )
 from hermes.core import Bar
-from hermes.indicators.base import Indicator
-from hermes.indicators.common import _ema_running
+from hermes.data import PepperstoneSource, YFinanceSource
 from hermes.execution import Order, OrderStatus
 from hermes.execution.trade import Trade
-from hermes.data import PepperstoneSource, YFinanceSource
+from hermes.indicators.base import Indicator
+from hermes.indicators.common import _ema_running
 
 GENERATED_BY = "hermes-strategy"
 
@@ -193,11 +192,13 @@ class EMAMeanReversionFX(Strategy):
     def setup(self) -> None:
         percentile = self.param(
             Parameter("percentile", 95.0, bounds=(50.0, 99.0),
-                      description="Percentile of the 50-bar EMA-deviation distribution used as entry distance")
+                      description="Percentile of the 50-bar EMA-deviation distribution "
+                                  "used as entry distance")
         )
         self._stop_mult = self.param(
             Parameter("stop_mult", 2.0, bounds=(1.0, 20.0),
-                      description="Stop-loss distance as a multiple of the entry distance (entry ± stop_mult × entry_dist)")
+                      description="Stop-loss distance as a multiple of the entry distance "
+                                  "(entry ± stop_mult × entry_dist)")
         )
         self._adx_threshold = self.param(
             Parameter("adx_threshold", 25.0, bounds=(15.0, 40.0),

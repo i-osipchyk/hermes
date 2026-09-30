@@ -15,6 +15,7 @@ import json
 from datetime import date
 from pathlib import Path
 
+
 def _find_project_root() -> Path:
     """Walk up from this file to find the nearest directory with pyproject.toml."""
     p = Path(__file__).resolve().parent

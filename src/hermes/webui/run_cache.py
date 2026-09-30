@@ -183,7 +183,6 @@ class CachedUniverseResult:
 
 def restore_universe_result(result_dict: dict, uni_meta: dict) -> CachedUniverseResult:
     """Rebuild a CachedUniverseResult from saved dicts for display."""
-    from datetime import UTC, datetime
     from hermes.backtest.result import Metrics
 
     metrics = Metrics(**result_dict["metrics"])

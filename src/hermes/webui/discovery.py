@@ -75,7 +75,7 @@ def declared_parameters(entry: StrategyEntry):
     """The strategy's tunable Parameters (specs), by running ``setup()`` on a fresh
     instance. Returns ``list[Parameter]`` the UI renders as editable controls."""
     strat = entry.build_backtest().strategy
-    strat.setup()
+    strat.run_setup()
     return strat.declared_parameters()
 
 
@@ -100,7 +100,7 @@ def configured_backtest(
     bt = entry.build_backtest()
     source = (
         build_source(source_name, leverage=leverage)
-        if source_name and source_name != bt.source.name
+        if source_name and (source_name != bt.source.name or leverage is not None)
         else bt.source
     )
     kw = dict(

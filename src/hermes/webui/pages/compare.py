@@ -6,6 +6,7 @@ Second Streamlit page (accessible via sidebar navigation).
 from __future__ import annotations
 
 import dotenv
+
 dotenv.load_dotenv()
 
 from datetime import UTC, datetime
@@ -14,7 +15,6 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from hermes.webui import run_cache as rc
-from hermes.webui.review import load_result
 
 st.set_page_config(page_title="Compare Runs — Hermes", layout="wide")
 st.title("Compare runs")
@@ -123,6 +123,7 @@ for label, attr, is_pct, higher_is_better in METRIC_DEFS:
     })
 
 import pandas as pd
+
 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 # --- Overlaid equity curves -------------------------------------------------

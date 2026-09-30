@@ -67,3 +67,27 @@ def test_dedupe_on_rewrite(tmp_path):
     cache.write(inst, H1, _bars(3))
     cache.write(inst, H1, _bars(3))  # same timestamps again
     assert len(cache.read(inst, H1, T0, T0 + timedelta(hours=2))) == 3
+
+
+def test_mark_checked_suppresses_confirmed_empty_gap(tmp_path):
+    """A legitimately empty span (e.g. a weekend) that's already been fetched and
+    found empty must not keep showing up as "missing" on every later call --
+    otherwise every such gap gets re-queried against the provider forever."""
+    cache = BarCache(tmp_path)
+    inst = _btc()
+    # bars either side of an empty hour-100..hour-102 span
+    cache.write(inst, H1, _bars(3))  # hours 0..2
+    cache.write(
+        inst,
+        H1,
+        [Bar(T0 + timedelta(hours=100 + i), H1, 100, 101, 99, 100, 1.0) for i in range(3)],
+    )  # hours 100..102
+
+    gaps = cache.missing_ranges(inst, H1, T0, T0 + timedelta(hours=102))
+    assert len(gaps) == 1
+    gap_start, gap_end = gaps[0]
+
+    # Simulate the source fetching that gap and finding nothing there.
+    cache.mark_checked(inst, H1, gap_start, gap_end)
+
+    assert cache.missing_ranges(inst, H1, T0, T0 + timedelta(hours=102)) == []

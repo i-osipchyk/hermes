@@ -8,10 +8,11 @@ the core library does not hard-depend on ``anthropic``.
 
 from __future__ import annotations
 
-from .provider import AdvisorDecision, AIProvider, LLMUsage
-
 # Default to the latest capable model; override via MODEL env var or constructor.
 import os
+
+from .provider import AdvisorDecision, AIProvider, LLMUsage
+
 DEFAULT_MODEL = os.getenv("MODEL", "claude-opus-4-8")
 
 _DECISION_TOOL = {
@@ -72,7 +73,10 @@ class ClaudeProvider(AIProvider):
                 RuntimeWarning,
                 stacklevel=2,
             )
-            return AdvisorDecision(True, 0.0, f"API error {e.status_code}: {e.message}", self.model_id, is_error=True)
+            return AdvisorDecision(
+                True, 0.0, f"API error {e.status_code}: {e.message}",
+                self.model_id, is_error=True,
+            )
         except anthropic.APIConnectionError as e:
             import warnings
             warnings.warn(

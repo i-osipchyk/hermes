@@ -8,13 +8,11 @@ parallel execution via ProcessPoolExecutor.
 
 from __future__ import annotations
 
-import os
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
-from typing import Callable
 
 from hermes.ai.random_advisor import RandomAdvisor
-
 
 # ---------------------------------------------------------------------------
 # Worker functions — must be top-level so ProcessPoolExecutor can pickle them
@@ -23,7 +21,6 @@ from hermes.ai.random_advisor import RandomAdvisor
 def _single_sim_worker(args: tuple) -> dict:
     """Run one single-symbol simulation. Called in a worker process."""
     build_backtest_fn, p, seed, overrides = args
-    from hermes.ai.random_advisor import RandomAdvisor
     advisor = RandomAdvisor(p=p, seed=seed)
     bt = build_backtest_fn(advisor=advisor, **overrides)
     result = bt.run()
@@ -35,7 +32,6 @@ def _single_sim_worker(args: tuple) -> dict:
 def _universe_sim_worker(args: tuple) -> dict:
     """Run one universe simulation. Called in a worker process."""
     from hermes.backtest.universe import UniverseBacktest
-    from hermes.ai.random_advisor import RandomAdvisor
 
     strategy_factory, source, calendar, timeframes, start, end, \
         starting_cash, sizer, unconstrained, p, seed = args

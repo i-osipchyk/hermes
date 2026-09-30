@@ -191,11 +191,19 @@ class CostModel:
                 financing=FinancingModel(0.0),  # funding not auto-modelled; set if needed
             )
         if ac is AssetClass.STOCK:
+            # eToro: real (1x) stock/ETF positions carry no overnight fee, but a
+            # leveraged position is a CFD-style margin loan charged daily at
+            # (6.4% + benchmark) / 365 × notional -- the benchmark leg (e.g. SOFR)
+            # isn't modelled here, so this is a floor; override via FinancingModel
+            # for a specific rate. Weekend/holiday carry falls out of the actual
+            # elapsed calendar days between sessions (see SimulatedVenue), not a
+            # separate multiplier.
+            leveraged = getattr(instrument, "leverage", 1.0) > 1.0
             return cls(
                 commission=PerShareCommission(per_share=0.0),  # commission-free default
                 spread=SpreadModel(0.0),
                 slippage=SlippageModel(ticks=1.0),
-                financing=FinancingModel(0.0),  # cash account
+                financing=FinancingModel(annual_rate=0.064 if leveraged else 0.0),
             )
         # CFD: spread is the cost; carry applies overnight.
         return cls(

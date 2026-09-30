@@ -41,6 +41,14 @@ class BatchResult:
     def combined_equity_curve(self) -> list[tuple]:
         """The basket as one shared portfolio — absolute P&L aggregation.
 
+        .. warning::
+           The returned curve has a point only at each trade EXIT, not at each bar.
+           Time-series statistics over it (Sharpe, annualisation, max drawdown) are
+           therefore not comparable to a bar-resolution curve: drawdown between
+           exits is invisible and the spacing is irregular. Use
+           :class:`~hermes.backtest.PortfolioBacktest` when you want genuine
+           shared-capital portfolio metrics.
+
         Sums the net P&L of every closed trade across all sleeves in exit-time order and
         applies it to a single running equity that starts at the sum of all sleeve starting
         equities (i.e. the original ``starting_cash`` passed to ``run_universe``).

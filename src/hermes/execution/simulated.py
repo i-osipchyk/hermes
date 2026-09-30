@@ -24,7 +24,7 @@ from .account import Account
 from .costs import CostModel
 from .order import Liquidity, Order, OrderStatus, OrderType, Side
 from .trade import Position, Trade
-from .venue import ExecutionVenue, _UNSET
+from .venue import _UNSET, ExecutionVenue
 
 
 class SimulatedVenue(ExecutionVenue):
@@ -50,16 +50,21 @@ class SimulatedVenue(ExecutionVenue):
         self._vetoed: list[Order] = []          # AI-vetoed orders (never filled)
         self._last_bar: Bar | None = None
         self._last_day: object | None = None
-        # Set by PortfolioBacktest to account for other legs' margin reservations.
+        # Set by PortfolioBacktest to account for other legs' margin reservations
+        # and their open (unrealised) P&L, both of which move shared free margin.
         self._external_margin: Callable[[], float] | None = None
+        self._external_unrealised: Callable[[], float] | None = None
 
     # --- engine hook -----------------------------------------------------------
 
     def on_base_bar(self, bar: Bar) -> None:
-        # 1. Financing on a new trading day (positions carried overnight).
+        # 1. Financing on a new trading day (positions carried overnight). Charge
+        #    for every calendar night actually held, not just "a day" -- a
+        #    Friday-to-Monday session gap is 3 nights (Fri, Sat, Sun), matching a
+        #    broker's weekend carry, and a holiday gap is billed the same way.
         day = self.instrument.session.to_local(bar.timestamp).date()
         if self._last_day is not None and day != self._last_day and self._open:
-            self._accrue_financing()
+            self._accrue_financing(days=(day - self._last_day).days)
         self._last_day = day
 
         # 2. Exits decided on the previous bar fill at this bar's open.
@@ -76,13 +81,23 @@ class SimulatedVenue(ExecutionVenue):
 
         # 4. Working orders: market entries fill at open; limit/stop when touched.
         #    SL/TP is also evaluated on the fill bar so a trade can be stopped out
-        #    or take-profited on the same bar it was entered.
+        #    on the same bar it was entered.
+        #
+        #    A MARKET order fills at this bar's open, so the whole bar's range lies
+        #    after the fill and both levels are fairly reachable.  A resting
+        #    LIMIT/STOP fills somewhere INSIDE the bar and we do not know where --
+        #    the bar's favourable extreme may well have printed before the fill.
+        #    Honouring a take-profit there books a profit the trade could not have
+        #    made (a buy limit filling near the low, then "taking profit" at a high
+        #    that came first).  So on an intrabar entry only the stop-loss is
+        #    allowed to trigger, matching the conservative bias of _resolve_clash.
         for order in list(self._working):
             fill = self._try_fill_entry(order, bar)
             if fill is not None:
+                intrabar_entry = order.type is not OrderType.MARKET
                 trade = self._open_trade(order, fill, bar.timestamp)
                 self._working.remove(order)
-                hit = self._check_exit(trade, bar)
+                hit = self._check_exit(trade, bar, allow_take_profit=not intrabar_entry)
                 if hit is not None:
                     raw_price, reason = hit
                     self._close_trade(trade, raw_price, reason, bar.timestamp)
@@ -92,6 +107,13 @@ class SimulatedVenue(ExecutionVenue):
     # --- ExecutionVenue interface ---------------------------------------------
 
     def submit(self, order: Order) -> Order:
+        if order.size <= 0:
+            # A resolved size can floor to zero on a coarse lot step (e.g. a tiny
+            # risk-based size rounded to the instrument's tick_size) -- fill it as
+            # a no-op WORKING/FILLED order and it silently burns an entry slot
+            # for zero economic effect. Reject instead.
+            order.status = OrderStatus.REJECTED
+            return order
         if self._last_bar is None and order.limit_price is None and order.stop_price is None:
             order.status = OrderStatus.REJECTED
             return order
@@ -173,17 +195,25 @@ class SimulatedVenue(ExecutionVenue):
     # --- internals -------------------------------------------------------------
 
     def _can_afford(self, side: Side, size: float, price: float) -> bool:
+        net_long = sum(t.size if t.side is Side.BUY else -t.size for t in self._open)
+        reducing = (side is Side.SELL and net_long > 0) or (side is Side.BUY and net_long < 0)
+        if reducing and size <= abs(net_long) + 1e-9:
+            # Closes existing exposure -- it RELEASES margin, never consumes it.
+            # Running the margin gate here would make a fully-invested position
+            # impossible to exit with an order (only via close_trade).
+            return True
         if side is Side.SELL and not self.instrument.can_short:
             # Reject if net long size doesn't cover the sell on non-shortable instruments.
-            net_long = sum(t.size for t in self._open if t.side is Side.BUY) - sum(t.size for t in self._open if t.side is Side.SELL)
             if net_long < size:
                 return False
         if self._unconstrained:
             return True
         req = Account.margin_required(self.instrument, price, size)
         external = self._external_margin() if self._external_margin else 0.0
+        ext_pnl = self._external_unrealised() if self._external_unrealised else 0.0
         reserved = self.used_margin() + self.pending_margin()
-        return req <= self.account.free_margin(reserved + external, self.unrealised_pnl()) + 1e-9
+        equity_pnl = self.unrealised_pnl() + ext_pnl
+        return req <= self.account.free_margin(reserved + external, equity_pnl) + 1e-9
 
     def _try_fill_entry(self, order: Order, bar: Bar) -> float | None:
         """Return the RAW fill price if this bar fills the order, else None."""
@@ -228,7 +258,9 @@ class SimulatedVenue(ExecutionVenue):
         self._open.append(trade)
         return trade
 
-    def _check_exit(self, trade: Trade, bar: Bar) -> tuple[float, str] | None:
+    def _check_exit(
+        self, trade: Trade, bar: Bar, *, allow_take_profit: bool = True
+    ) -> tuple[float, str] | None:
         long = trade.side is Side.BUY
         sl, tp = trade.stop_loss, trade.take_profit
         if long:
@@ -237,6 +269,7 @@ class SimulatedVenue(ExecutionVenue):
         else:
             sl_hit = sl is not None and bar.high >= sl
             tp_hit = tp is not None and bar.low <= tp
+        tp_hit = tp_hit and allow_take_profit
 
         if sl_hit and tp_hit:
             reason = self._resolve_clash(trade, bar)
@@ -298,11 +331,11 @@ class SimulatedVenue(ExecutionVenue):
         self._open.remove(trade)
         self._closed.append(trade)
 
-    def _accrue_financing(self) -> None:
+    def _accrue_financing(self, days: int = 1) -> None:
         price = self._last_bar.close if self._last_bar else 0.0
         for t in self._open:
             notional = Account.notional(self.instrument, price, t.size)
-            fin = self.cost_model.financing.overnight_charge(self.instrument, notional, days=1)
+            fin = self.cost_model.financing.overnight_charge(self.instrument, notional, days=days)
             if fin:
                 self.account.debit(fin)
                 t.costs = (t.costs or 0.0) + fin

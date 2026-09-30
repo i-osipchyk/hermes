@@ -79,6 +79,10 @@ class BacktestResult:
     stat_validation: StatValidation | None = None
     benchmark_equity: list[tuple[datetime, float]] | None = None
     llm_log: LLMObservabilityLog | None = None
+    # Observations per year used to annualise Sharpe/Sortino/alpha/turnover.
+    # Supplied by the engine from the Instrument's session (exact); ``None`` means
+    # it was estimated from the curve itself.
+    steps_per_year: float | None = None
 
     @classmethod
     def compute(
@@ -87,12 +91,14 @@ class BacktestResult:
         trades,
         num_params: int = 0,
         vetoed_signals: list | None = None,
+        periods_per_year: float | None = None,
     ) -> BacktestResult:
         return cls(
             equity_curve=list(equity_curve),
             trades=list(trades),
             vetoed_signals=list(vetoed_signals or []),
-            metrics=_metrics(equity_curve, trades, num_params),
+            metrics=_metrics(equity_curve, trades, num_params, periods_per_year),
+            steps_per_year=periods_per_year,
         )
 
     def to_frame(self):
@@ -173,7 +179,9 @@ def _vetoed_dict(o: Order) -> dict:
     }
 
 
-def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:
+def _metrics(
+    equity_curve, trades, num_params: int = 0, periods_per_year: float | None = None
+) -> Metrics:
     m = Metrics(num_trades=len(trades), num_params=num_params)
     if len(equity_curve) >= 2:
         equities = [e for _, e in equity_curve]
@@ -191,7 +199,7 @@ def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:
             mean = sum(rets) / len(rets)
             var = sum((r - mean) ** 2 for r in rets) / len(rets)
             std = math.sqrt(var)
-            steps_per_year = _annualisation(equity_curve)
+            steps_per_year = _annualisation(equity_curve, periods_per_year)
             if std > 0:
                 m.sharpe = mean / std * math.sqrt(steps_per_year)
                 # Penalise for free parameters: Sharpe × √(max(1, n−k) / n).
@@ -273,11 +281,11 @@ def _metrics(equity_curve, trades, num_params: int = 0) -> Metrics:
             avg_equity = sum(equities) / len(equities)
             if avg_equity > 0:
                 total_notional = sum(
-                    abs(t.size * t.entry_price)
+                    abs(t.size * t.entry_price) * t.instrument.contract_size()
                     for t in trades
                     if t.size is not None and t.entry_price is not None
                 )
-                steps_per_year = _annualisation(equity_curve)
+                steps_per_year = _annualisation(equity_curve, periods_per_year)
                 n_bars = len(equity_curve)
                 m.turnover = (total_notional / avg_equity) * (steps_per_year / n_bars)
 
@@ -334,22 +342,40 @@ def _drawdown_periods(equities: list[float]) -> list[tuple[float, int, int | Non
 
 
 def _compute_exposure(equity_curve, trades) -> float:
-    """Fraction of equity curve bars with an open position."""
+    """Fraction of equity curve bars with an open position.
+
+    Swept as a sorted interval merge (O(n log n)) rather than a bar x trade
+    nested scan, which was quadratic on long intraday runs.
+    """
     if not equity_curve or not trades:
         return 0.0
 
-    curve_times = [t for t, _ in equity_curve]
-    open_bars = 0
+    curve_times = sorted(t for t, _ in equity_curve)
+    spans = sorted(
+        (t.entry_time, t.exit_time)
+        for t in trades
+        if t.entry_time is not None
+    )
+    if not spans:
+        return 0.0
 
+    # Merge overlapping open intervals; an unclosed trade runs to the curve end.
+    end_of_curve = curve_times[-1]
+    merged: list[list] = []
+    for entry, exit_t in spans:
+        stop = end_of_curve if exit_t is None else exit_t
+        if merged and entry <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], stop)
+        else:
+            merged.append([entry, stop])
+
+    open_bars = 0
+    i = 0
     for bar_time in curve_times:
-        for trade in trades:
-            entry = trade.entry_time
-            exit_t = trade.exit_time
-            if entry is None:
-                continue
-            if entry <= bar_time and (exit_t is None or exit_t >= bar_time):
-                open_bars += 1
-                break
+        while i < len(merged) and merged[i][1] < bar_time:
+            i += 1
+        if i < len(merged) and merged[i][0] <= bar_time:
+            open_bars += 1
 
     return open_bars / len(curve_times)
 
@@ -358,6 +384,7 @@ def _compute_benchmark_stats(
     equity_curve: list[tuple[datetime, float]],
     benchmark_equity: list[tuple[datetime, float]],
     description: str,
+    periods_per_year: float | None = None,
 ) -> BenchmarkStats:
     """Compute benchmark comparison with regression statistics."""
     if not benchmark_equity:
@@ -404,7 +431,7 @@ def _compute_benchmark_stats(
     if len(strat_rets) < 10:
         return stats
 
-    steps_per_year = _annualisation(equity_curve)
+    steps_per_year = _annualisation(equity_curve, periods_per_year)
     n = len(strat_rets)
 
     # OLS: beta = Σ(x_i * y_i) / Σ(x_i²) where x = bh_rets, y = strat_rets
@@ -433,10 +460,34 @@ def _compute_benchmark_stats(
     return stats
 
 
-def _annualisation(equity_curve) -> float:
-    """Estimate steps-per-year from the median spacing of the equity curve."""
+# A curve must span at least this long before its own observation density is a
+# trustworthy estimate of the yearly rate (shorter samples may contain no weekend
+# or holiday gaps at all, which would overstate it).
+_MIN_DENSITY_SPAN_DAYS = 60.0
+
+
+def _annualisation(equity_curve, periods_per_year: float | None = None) -> float:
+    """Observations per year, for annualising Sharpe/Sortino/alpha/turnover.
+
+    ``periods_per_year`` is the authoritative value when the caller knows it --
+    the engine derives it from the Instrument's Session Calendar
+    (:meth:`SessionCalendar.bars_per_year`).  Without it we estimate:
+
+    * over a long enough span, from the curve's own observation density (bars per
+      calendar year), which automatically accounts for overnight, weekend and
+      holiday gaps;
+    * over a short span, from the median bar spacing -- the old behaviour, which
+      assumes continuous trading and therefore OVERSTATES the rate for anything
+      that is not 24/7 (a 5m equity curve implies ~105k steps/year against a true
+      ~20k, inflating Sharpe by ~2.3x).  Pass ``periods_per_year`` to avoid it.
+    """
+    if periods_per_year:
+        return periods_per_year
     if len(equity_curve) < 3:
         return 252.0
+    span_days = (equity_curve[-1][0] - equity_curve[0][0]).total_seconds() / 86_400
+    if span_days >= _MIN_DENSITY_SPAN_DAYS:
+        return len(equity_curve) / (span_days / 365.25)
     deltas = [
         (equity_curve[i][0] - equity_curve[i - 1][0]).total_seconds()
         for i in range(1, len(equity_curve))

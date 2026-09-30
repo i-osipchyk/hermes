@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from .validation import _sharpe_from_rets, _sortino_from_rets
+from .validation import _sharpe_from_rets
 
 
 @dataclass(slots=True)
@@ -56,7 +56,10 @@ def regime_analysis(
     trend_ma = _rolling_mean(bench_prices, trend_lookback)
     vol_std = _rolling_std(bench_prices, vol_lookback)
 
-    # Compute median vol for high/low split
+    # Compute median vol for high/low split.
+    # NOTE: this median is taken over the FULL sample, so the High/Low Vol labels
+    # use information from the whole period. That is fine for post-hoc attribution
+    # (what this function is for) but makes the labels unusable as a live signal.
     valid_vols = [v for v in vol_std if v is not None]
     if not valid_vols:
         return RegimeAnalysis(regimes=[])
@@ -160,11 +163,14 @@ def _rolling_std(values: list[float], window: int) -> list[float | None]:
 
 
 def _closest_regime(regime_map: dict, bench_times: list, target_time) -> str | None:
-    """Find the regime label for the benchmark time closest to (and not after) target_time."""
-    best = None
-    for t in bench_times:
-        if t <= target_time:
-            best = t
-        else:
-            break
-    return regime_map.get(best) if best is not None else None
+    """Regime label for the benchmark time closest to (and not after) ``target_time``.
+
+    Binary search — ``bench_times`` is already sorted and the caller loops over
+    every trade, so a linear scan here was O(trades x bars).
+    """
+    import bisect
+
+    idx = bisect.bisect_right(bench_times, target_time) - 1
+    if idx < 0:
+        return None
+    return regime_map.get(bench_times[idx])

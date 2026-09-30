@@ -5,8 +5,6 @@ exit at market after max_hold_days if neither level is hit.
 
 from __future__ import annotations
 
-GENERATED_BY = "hermes-strategy"
-
 from hermes import (
     EMA,
     Backtest,
@@ -24,6 +22,8 @@ from hermes.execution import (
     SlippageModel,
     SpreadModel,
 )
+
+GENERATED_BY = "hermes-strategy"
 
 D1 = Timeframe.parse("1D")
 

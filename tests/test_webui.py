@@ -30,7 +30,7 @@ def _result():
 def test_to_dict_is_json_serializable():
     d = _result().to_dict()
     json.dumps(d)  # must not raise
-    assert set(d) == {"metrics", "equity_curve", "trades"}
+    assert set(d) == {"metrics", "equity_curve", "trades", "vetoed_signals"}
     assert d["trades"][0]["exit_reason"] == "take_profit"
     assert d["trades"][0]["net_pnl"] == 9.0
     assert d["equity_curve"][0][0] == T0.isoformat()

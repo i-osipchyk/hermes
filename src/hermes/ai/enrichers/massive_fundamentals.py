@@ -194,7 +194,8 @@ class MassiveFundamentalsScreen:
                 return True, (f"op margin {o1*100:.1f}% → {o0*100:.1f}% (+{bps:.0f}bps) "
                               f"[{self._label(t1)}→{self._label(t0)}]")
 
-        detail = f"gross: {g1*100:.1f}%→{g0*100:.1f}%" if g0 is not None and g1 is not None else "no margin data"
+        have_margins = g0 is not None and g1 is not None
+        detail = f"gross: {g1*100:.1f}%→{g0*100:.1f}%" if have_margins else "no margin data"
         return False, detail
 
     def _compute_s2(self, t0: dict, t1: dict, t2: dict | None,
@@ -209,7 +210,10 @@ class MassiveFundamentalsScreen:
 
         if t2 is None or not t2["revenue"]:
             if g0 >= min_growth_pct:
-                return True, f"revenue fast-growth: {g0:.1f}% YoY (≥{min_growth_pct:.0f}%, no prior YoY to check re-accel)"
+                return True, (
+                    f"revenue fast-growth: {g0:.1f}% YoY "
+                    f"(≥{min_growth_pct:.0f}%, no prior YoY to check re-accel)"
+                )
             return None, "missing prior-prior period for re-accel check"
 
         r2 = t2["revenue"]
@@ -234,7 +238,11 @@ def _period_by_year_quarter(periods: list[dict], fiscal_year: int, fiscal_period
     """
     timeframe = "annual" if fiscal_period == "FY" else "quarterly"
     for p in periods:
-        if p["timeframe"] == timeframe and p["fiscal_year"] == fiscal_year and p["fiscal_period"] == fiscal_period:
+        if (
+            p["timeframe"] == timeframe
+            and p["fiscal_year"] == fiscal_year
+            and p["fiscal_period"] == fiscal_period
+        ):
             return p
     return None
 

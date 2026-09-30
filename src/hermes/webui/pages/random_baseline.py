@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import dotenv
+
 dotenv.load_dotenv()
 
 import plotly.graph_objects as go
@@ -85,6 +86,7 @@ _is_universe = sel_meta.universe is not None
 st.subheader("Step 2 — Simulation settings")
 
 import os as _os
+
 _max_workers = _os.cpu_count() or 4
 
 sc1, sc2, sc3, sc4 = st.columns(4)
@@ -147,7 +149,8 @@ run_sims = st.button("Run simulations", type="primary", disabled=bool(_cached_si
 
 def _parse_sizer(s: str):
     import re
-    from hermes.strategy import EquityFraction, NotionalCash, RiskCash, RiskPercent, Units
+
+    from hermes.strategy import EquityFraction, NotionalCash, RiskPercent, Units
     if s.startswith("EquityFraction"):
         m = re.search(r"fraction=([\d.]+)", s)
         return EquityFraction(float(m.group(1))) if m else EquityFraction(0.95)
@@ -199,9 +202,9 @@ if run_sims:
         if _is_universe:
             # --- Universe path -------------------------------------------
             from hermes.backtest.random_baseline import run_universe_random_simulations
-            from hermes.webui.universes import load_calendar
             from hermes.data import YFinanceSource
-            from strategies.ema_crossover_ai import EmaCrossoverAI, D1
+            from hermes.webui.universes import load_calendar
+            from strategies.ema_crossover_ai import D1, EmaCrossoverAI
 
             sim_results = run_universe_random_simulations(
                 strategy_factory=EmaCrossoverAI,
@@ -222,9 +225,9 @@ if run_sims:
 
         else:
             # --- Single-symbol path --------------------------------------
+            from hermes import Symbol
             from hermes.backtest.random_baseline import run_random_simulations
             from strategies.ema_crossover_ai import build_backtest
-            from hermes import Symbol
 
             symbol = Symbol(sim_symbol, sel_meta.source)
             sim_results = run_random_simulations(
@@ -357,6 +360,7 @@ for key, label, is_pct in TABLE_METRICS:
     })
 
 import pandas as pd
+
 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------

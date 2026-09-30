@@ -140,7 +140,9 @@ def validate(
     equity_curve = result.equity_curve
     metrics = result.metrics
 
-    ci = _bootstrap_ci(equity_curve, trades, n_bootstrap, level, rng)
+    ci = _bootstrap_ci(
+        equity_curve, trades, n_bootstrap, level, rng, result.steps_per_year
+    )
     mc = _monte_carlo(trades, equity_curve, n_mc, rng) if trades else None
     psr = _probabilistic_sharpe(equity_curve)
     sq = _sample_quality(metrics)
@@ -159,11 +161,14 @@ def validate(
 
 # ── bootstrap confidence intervals ───────────────────────────────────────────
 
-def _bootstrap_ci(equity_curve, trades, n: int, level: float, rng: random.Random) -> MetricsCI:
+def _bootstrap_ci(
+    equity_curve, trades, n: int, level: float, rng: random.Random,
+    periods_per_year: float | None = None,
+) -> MetricsCI:
     alpha = (1.0 - level) / 2.0
 
     # --- bar-level bootstrap for curve-based metrics (Sharpe, Sortino, max DD, CAGR) ---
-    curve_ci = _bar_bootstrap(equity_curve, n, level, alpha, rng)
+    curve_ci = _bar_bootstrap(equity_curve, n, level, alpha, rng, periods_per_year)
 
     # --- trade-level bootstrap for trade-based metrics (win rate, profit factor) ---
     trade_ci = _trade_bootstrap(trades, n, level, alpha, rng)
@@ -178,11 +183,14 @@ def _bootstrap_ci(equity_curve, trades, n: int, level: float, rng: random.Random
     )
 
 
-def _bar_bootstrap(equity_curve, n: int, level: float, alpha: float, rng: random.Random) -> dict:
+def _bar_bootstrap(
+    equity_curve, n: int, level: float, alpha: float, rng: random.Random,
+    periods_per_year: float | None = None,
+) -> dict:
     if len(equity_curve) < 3:
         return {}
 
-    steps_per_year = _annualisation(equity_curve)
+    steps_per_year = _annualisation(equity_curve, periods_per_year)
     equities = [e for _, e in equity_curve]
     rets = [equities[i] / equities[i - 1] - 1.0 for i in range(1, len(equities)) if equities[i - 1] > 0]
     if not rets:
@@ -274,11 +282,12 @@ def _monte_carlo(trades, equity_curve, n: int, rng: random.Random) -> MonteCarlo
         return None
 
     # Build (entry_time, fractional_return) for each trade.
+    curve_times = [ts for ts, _ in equity_curve]
     frac_returns: list[float] = []
     for t in trades:
         if t.entry_time is None or t.net_pnl is None:
             continue
-        eq_at_entry = _equity_at(equity_curve, t.entry_time)
+        eq_at_entry = _equity_at(equity_curve, t.entry_time, curve_times)
         if eq_at_entry > 0:
             frac_returns.append(t.net_pnl / eq_at_entry)
 
@@ -406,13 +415,18 @@ def _sharpe_from_rets(rets: list[float], steps_per_year: float) -> float | None:
 
 
 def _sortino_from_rets(rets: list[float], steps_per_year: float) -> float | None:
+    """Sortino using the standard downside deviation: the sum of squared negative
+    returns divided by the TOTAL number of observations, not just the negative
+    ones.  (Dividing by ``len(downside)`` produced a different statistic here than
+    ``result._metrics`` reports, so the bootstrap CI was not centred on the value
+    it was supposed to bracket.)"""
     if not rets:
         return None
     mean = sum(rets) / len(rets)
     downside = [r for r in rets if r < 0]
     if not downside:
         return None
-    dvar = sum(r * r for r in downside) / len(downside)
+    dvar = sum(r * r for r in downside) / len(rets)
     dstd = math.sqrt(dvar)
     if dstd <= 0:
         return None
@@ -429,15 +443,16 @@ def _max_dd(equities: list[float]) -> float:
     return dd
 
 
-def _equity_at(curve: list[tuple], ts) -> float:
-    """Equity at-or-before ts (mirrors batch._equity_at)."""
-    val = curve[0][1]
-    for t, e in curve:
-        if t <= ts:
-            val = e
-        else:
-            break
-    return val
+def _equity_at(curve: list[tuple], ts, times: list | None = None) -> float:
+    """Equity at-or-before ``ts``.  Binary search: the caller loops over trades, so
+    a linear scan here made the Monte Carlo setup O(trades x bars).  Pass ``times``
+    (the curve's timestamps, extracted once) to keep each lookup O(log n)."""
+    import bisect
+
+    if times is None:
+        times = [t for t, _ in curve]
+    idx = bisect.bisect_right(times, ts) - 1
+    return curve[max(0, idx)][1]
 
 
 def _skewness(rets: list[float], mean: float, std: float, n: int) -> float:
@@ -475,17 +490,33 @@ def _norm_cdf_inv(p: float, tol: float = 1e-9) -> float:
 _EULER_MASCHERONI = 0.5772156649015328
 
 
-def _expected_max_sharpe(n_trials: int) -> float:
-    """SR* = expected maximum Sharpe from n_trials independent trials (Bailey & López de Prado 2014)."""
+def _expected_max_sharpe(n_trials: int, sr_std: float = 1.0) -> float:
+    """SR* = expected maximum Sharpe across ``n_trials`` trials (Bailey & López de
+    Prado 2014), expressed in the same units as the measured Sharpe.
+
+    The bracketed term is a pure z-score, so it must be scaled by ``sr_std`` --
+    the dispersion of Sharpe ratios ACROSS trials.  Without that scaling an
+    un-annualised per-step Sharpe (typically ~0.01) was being compared against a
+    raw z of ~2, which drove the Deflated Sharpe to ~0 for any ``n_trials > 1``.
+    """
     if n_trials <= 1:
         return 0.0
     gamma = _EULER_MASCHERONI
     n = float(n_trials)
-    return (1 - gamma) * _norm_cdf_inv(1 - 1 / n) + gamma * _norm_cdf_inv(1 - 1 / (n * math.e))
+    z = (1 - gamma) * _norm_cdf_inv(1 - 1 / n) + gamma * _norm_cdf_inv(1 - 1 / (n * math.e))
+    return sr_std * z
 
 
-def _deflated_sharpe(equity_curve, n_trials: int = 1) -> float | None:
-    """Deflated Sharpe Ratio: P(true SR > SR*) correcting for multiple trials."""
+def _deflated_sharpe(
+    equity_curve, n_trials: int = 1, trial_sharpe_std: float | None = None
+) -> float | None:
+    """Deflated Sharpe Ratio: P(true SR > SR*) correcting for multiple trials.
+
+    ``trial_sharpe_std`` is the standard deviation of the Sharpe ratios of the
+    ``n_trials`` variants that were tried.  When it is unknown (the usual case --
+    we only hold one run) it falls back to the standard error of this run's own
+    Sharpe estimator, which is the conventional substitute.
+    """
     if len(equity_curve) < 10:
         return None
 
@@ -506,11 +537,17 @@ def _deflated_sharpe(equity_curve, n_trials: int = 1) -> float | None:
     skew = _skewness(rets, mean_r, std_r, n)
     kurt = _excess_kurtosis(rets, mean_r, std_r, n)
 
-    sr_star = _expected_max_sharpe(n_trials)
-
     denom_sq = 1.0 - skew * sr_hat + ((kurt + 2) / 4.0) * sr_hat ** 2
     if denom_sq <= 0:
         return None
+
+    # Both SR* and SR-hat must be in per-step Sharpe units.
+    sr_std = (
+        trial_sharpe_std
+        if trial_sharpe_std is not None
+        else math.sqrt(denom_sq / (n - 1))
+    )
+    sr_star = _expected_max_sharpe(n_trials, sr_std)
 
     z = (sr_hat - sr_star) * math.sqrt(n - 1) / math.sqrt(denom_sq)
     return _norm_cdf(z)
@@ -541,7 +578,8 @@ def _min_trl(equity_curve, confidence: float = 0.95) -> int | None:
     kurt = _excess_kurtosis(rets, mean_r, std_r, n)
 
     z_conf = _norm_cdf_inv(confidence)
-    # MinTRL = (1 + (1 - skew*SR + (kurt/4)*SR²)) * (z_conf / SR)²
+    # MinTRL = 1 + [1 - skew*SR + ((kurt+2)/4)*SR²] * (z_conf / SR)²
+    # The leading 1 is an additive term, not part of the bracket that gets scaled.
     adj = 1.0 - skew * sr + ((kurt + 2) / 4.0) * sr ** 2
-    min_trl = (1 + adj) * (z_conf / sr) ** 2
+    min_trl = 1.0 + adj * (z_conf / sr) ** 2
     return math.ceil(max(1.0, min_trl))

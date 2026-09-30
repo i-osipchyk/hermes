@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 
 from ..core import Bar, Instrument, Timeframe
 from ..execution import Order, OrderStatus, OrderType, Side, Trade
+from ..execution.venue import _UNSET
 from ..indicators import Indicator
 from .parameter import Parameter
 from .reference import Reference
@@ -88,6 +89,20 @@ class Strategy(ABC):
     def setup(self) -> None:
         """Declare Parameters and Indicators, subscribe Timeframes. Called once
         before any data flows."""
+
+    def run_setup(self) -> None:
+        """Clear previously declared state, then call :meth:`setup`.
+
+        ``setup()`` appends to ``_indicators``/``_references``, so calling it twice
+        on the same instance (a parameter sweep, a walk-forward grid discovery, a
+        UI introspection pass followed by a run) would otherwise leave duplicate
+        indicators and duplicate reference feeds behind.  The framework always
+        enters ``setup()`` through here.
+        """
+        self._indicators = []
+        self._references = []
+        self._param_specs = {}
+        self.setup()
 
     def param(self, spec: Parameter):
         """Declare a tunable Parameter and return its current value (an override seeded
@@ -194,7 +209,13 @@ class Strategy(ABC):
         """Close a specific open Trade at market."""
         self.venue.close_trade(trade)
 
-    def modify(self, trade: Trade, *, stop_loss=None, take_profit=None) -> None:
+    def modify(self, trade: Trade, *, stop_loss=_UNSET, take_profit=_UNSET) -> None:
+        """Change a live Trade's protective levels.
+
+        An argument you omit is left **unchanged**; pass ``None`` explicitly to
+        clear that level.  (Defaulting to ``None`` would silently wipe whichever
+        level the caller did not mention.)
+        """
         self.venue.modify_trade(trade, stop_loss=stop_loss, take_profit=take_profit)
 
     def _order(self, side, size, type, limit, stop, stop_loss, take_profit, tag) -> Order:

@@ -72,9 +72,13 @@ def bucket_bounds(
 
     if timeframe.seconds % _WEEK == 0:
         ref = _day_anchor_ref(local, session)
-        # Walk back to the start of the week (weekday 0 = Monday for stocks,
-        # Sunday for forex when day_anchor shifts the reference).
-        week_start = ref - timedelta(days=ref.weekday())
+        # Walk back to the start of the trading week. Stocks/crypto start Monday.
+        # An anchored session (forex/CFD) starts at the Sunday 17:00 rollover:
+        # subtracting ref.weekday() unconditionally sent a Sunday-evening ref
+        # (weekday 6) back a full six days, filing those bars under the PREVIOUS
+        # week's bucket.
+        week_start_dow = 6 if session.day_anchor is not None else 0
+        week_start = ref - timedelta(days=(ref.weekday() - week_start_dow) % 7)
         open_local = week_start
         close_local = open_local + timedelta(seconds=timeframe.seconds)
         return open_local.astimezone(_UTC), close_local.astimezone(_UTC)

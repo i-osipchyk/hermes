@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 from .cache import DecisionCache
@@ -89,8 +89,9 @@ class AIAdvisor:
                 cache_creation_tokens=0,
                 latency_ms=decision.usage.latency_ms if decision.usage else 0.0,
                 cost_usd=None,
-                approved=True,
-                confidence=0.0,
+                # Log what was actually returned, not an assumed approval.
+                approved=decision.approved,
+                confidence=decision.confidence,
                 reason=f"[ERROR] {decision.reason}",
                 system_prompt=self.system_prompt,
                 user_prompt=user_prompt,
@@ -130,12 +131,23 @@ class AIAdvisor:
         return final
 
     def _apply_threshold(self, decision: AdvisorDecision) -> AdvisorDecision:
-        """Downgrade an approval to a veto if confidence < min_confidence."""
+        """Downgrade an approval to a veto if confidence < min_confidence.
+
+        An error decision is exempt: it carries ``confidence=0.0`` by construction,
+        so applying the threshold would turn the documented fail-OPEN behaviour
+        into a silent fail-closed whenever ``min_confidence`` was set — while the
+        observability log still recorded the trade as approved.
+        """
+        if getattr(decision, "is_error", False):
+            return decision
         if decision.approved and self.min_confidence > 0.0 and decision.confidence < self.min_confidence:
             return AdvisorDecision(
                 approved=False,
                 confidence=decision.confidence,
-                reason=f"confidence {decision.confidence:.0%} below threshold {self.min_confidence:.0%}: {decision.reason}",
+                reason=(
+                    f"confidence {decision.confidence:.0%} below threshold "
+                    f"{self.min_confidence:.0%}: {decision.reason}"
+                ),
                 model_id=decision.model_id,
                 prompt=decision.prompt,
                 from_cache=decision.from_cache,
@@ -211,12 +223,11 @@ class AIAdvisor:
         return "\n".join(lines)
 
     @staticmethod
-    def _as_of(strategy) -> "date":
+    def _as_of(strategy) -> date:
         """Extract the current bar date from the strategy's view (look-ahead-safe)."""
-        from datetime import date
         view = strategy._view
         base_tf = min(view.series.keys())
         bars = view[base_tf].bars_for_compute()
         if bars:
             return bars[-1].timestamp.date()
-        return date.today()
+        return datetime.now(UTC).date()

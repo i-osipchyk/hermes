@@ -106,18 +106,20 @@ def test_combined_compounds_sequential_trades():
     assert round(curve[-1][1], 2) == 104.04
 
 
-def test_combined_compounds_across_symbols():
+def test_combined_sums_pnl_across_symbols():
     from hermes.backtest import BatchResult
     from hermes.backtest.result import BacktestResult
 
     t0, t1, t2 = T0, T0 + timedelta(hours=1), T0 + timedelta(hours=2)
-    # two symbols, 50 each (total 100), each a +2% trade -> the shared pool compounds:
-    # 100 -> 102 -> 104.04 (NOT 104 from summing independent sleeves).
+    # Two independent sleeves of 50 each (total 100), each booking +1.
+    # BatchResult is a SCAN: the sleeves share no capital, so their P&L is summed
+    # in exit order rather than compounded against a shared pool. 100 -> 101 -> 102.
+    # Use PortfolioBacktest when you want a genuinely shared, compounding pool.
     a = BacktestResult.compute([(t0, 50.0), (t1, 51.0)], [_trade(t0, t1, 1.0)])
     b = BacktestResult.compute([(t0, 50.0), (t2, 51.0)], [_trade(t0, t2, 1.0)])
     curve = BatchResult(results={"A": a, "B": b}).combined_equity_curve()
     assert curve[0][1] == 100.0
-    assert round(curve[-1][1], 2) == 104.04
+    assert round(curve[-1][1], 2) == 102.0
 
 
 def test_combined_result_pools_all_trades():
@@ -155,7 +157,7 @@ def build_backtest(**overrides):
 '''
 
 
-def test_run_universe_splits_total_cash(tmp_path):
+def test_run_universe_shares_one_capital_pool(tmp_path):
     from hermes.webui import discovery
 
     sdir = tmp_path / "strategies"
@@ -163,16 +165,16 @@ def test_run_universe_splits_total_cash(tmp_path):
     (sdir / "u.py").write_text(_UNIVERSE_STRATEGY)
     entry = discovery.discover(sdir)[0]
 
-    batch = discovery.run_universe(
+    ur = discovery.run_universe(
         entry, tickers=["A", "B"], source_name=None,
         start=datetime(2023, 1, 1, tzinfo=UTC), end=datetime(2023, 1, 1, 3, tzinfo=UTC),
         starting_cash=1_000,
     )
-    # each sleeve funded with total / N = 500
-    for r in batch.results.values():
-        assert r.equity_curve[0][1] == 500.0
-    # combined portfolio starts at the full total
-    assert batch.combined_equity_curve()[0][1] == 1_000.0
+    # One shared pool via PortfolioBacktest -- not N sleeves of total / N.
+    assert ur.universe_size == 2
+    assert set(ur.portfolio_result.per_symbol) == {"memory:A", "memory:B"}
+    curve = ur.portfolio_result.result.equity_curve
+    assert curve[0][1] == 1_000.0
 
 
 # --- universe (ticker list) loading ----------------------------------------

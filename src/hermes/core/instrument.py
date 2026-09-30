@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from enum import Enum
 from zoneinfo import ZoneInfo
 
@@ -65,6 +65,12 @@ class SessionCalendar:
     def to_local(self, moment_utc: datetime) -> datetime:
         return moment_utc.astimezone(self.timezone)
 
+    @property
+    def is_overnight(self) -> bool:
+        """True when the session wraps past local midnight (open_time > close_time),
+        e.g. a 17:00 -> 16:00 futures/CFD day."""
+        return not self.is_24_7 and self.open_time > self.close_time
+
     def is_open(self, moment_utc: datetime) -> bool:
         """Whether the market is open at ``moment_utc`` (tz-aware UTC)."""
         local = self.to_local(moment_utc)
@@ -73,7 +79,36 @@ class SessionCalendar:
         if self.is_24_7:
             return True
         naive = local.time()
+        if self.is_overnight:
+            # Two disjoint windows in local wall-clock terms: [open, midnight)
+            # and [midnight, close). Comparing open <= t < close is empty here.
+            return naive >= self.open_time or naive < self.close_time
         return self.open_time <= naive < self.close_time
+
+    def bars_per_year(self, timeframe) -> float:
+        """How many bars of ``timeframe`` this session actually produces per year.
+
+        Annualising a Sharpe ratio needs the number of *observations* per year, not
+        the number of ``timeframe`` intervals in a calendar year.  A 5-minute bar on
+        a 6.5-hour, 5-day-a-week equity session yields ~20k bars/year, not the
+        ~105k that 365.25 x 86400 / 300 implies -- using the latter overstates every
+        annualised statistic by ~2.3x.
+
+        The result is capped at the continuous-trading rate, which is what a 24/7
+        instrument (crypto) legitimately hits.
+        """
+        trading_days = 365.25 * len(self.weekdays) / 7.0
+        if self.is_24_7:
+            seconds_per_day = 86_400.0
+        else:
+            open_s = self.open_time.hour * 3600 + self.open_time.minute * 60
+            close_s = self.close_time.hour * 3600 + self.close_time.minute * 60
+            seconds_per_day = float((close_s - open_s) % 86_400) or 86_400.0
+        # A bar longer than one session still yields at least one bar per trading
+        # day; the cap then corrects timeframes that span several days (e.g. 1w).
+        per_day = max(1.0, seconds_per_day / timeframe.seconds)
+        continuous = 365.25 * 86_400.0 / timeframe.seconds
+        return min(trading_days * per_day, continuous)
 
     def session_open_utc(self, moment_utc: datetime) -> datetime | None:
         """UTC datetime of the session OPEN for the trading day containing
@@ -84,6 +119,9 @@ class SessionCalendar:
         open_local = local.replace(
             hour=self.open_time.hour, minute=self.open_time.minute, second=0, microsecond=0
         )
+        if self.is_overnight and local.time() < self.close_time:
+            # Still inside the session that began yesterday evening.
+            open_local -= timedelta(days=1)
         return open_local.astimezone(UTC)
 
     def session_close_utc(self, moment_utc: datetime) -> datetime | None:
@@ -95,6 +133,9 @@ class SessionCalendar:
         close_local = local.replace(
             hour=self.close_time.hour, minute=self.close_time.minute, second=0, microsecond=0
         )
+        if self.is_overnight and local.time() >= self.close_time:
+            # This session runs on into tomorrow.
+            close_local += timedelta(days=1)
         return close_local.astimezone(UTC)
 
 
@@ -148,7 +189,13 @@ class Instrument(ABC):
 
 @dataclass(eq=False)
 class Stock(Instrument):
-    """An equity (yfinance). Split-adjusted prices; dividends as cash on ex-date."""
+    """An equity (yfinance / Tiingo).
+
+    Prices are fully adjusted (splits AND dividends), so total return is already
+    embedded in the series; dividends are NOT credited separately as cash.
+    """
+
+    leverage: float = 1.0
 
     def __init__(
         self,
@@ -157,6 +204,7 @@ class Stock(Instrument):
         session: SessionCalendar,
         tick_size: float = 0.01,
         shortable: bool = False,
+        leverage: float = 1.0,
     ):
         super().__init__(
             symbol,
@@ -166,6 +214,7 @@ class Stock(Instrument):
             price_basis=PriceBasis.LAST,
         )
         self._shortable = shortable
+        self.leverage = leverage
 
     @property
     def asset_class(self) -> AssetClass:
@@ -262,10 +311,18 @@ class CryptoPerpetual(Instrument):
 @dataclass(eq=False)
 class Cfd(Instrument):
     """A contract for difference (Pepperstone / MT5). Leveraged, bid-based bars,
-    sized in lots, near-24/5, dividend-adjusted for share CFDs."""
+    sized in lots, near-24/5, dividend-adjusted for share CFDs.
+
+    ``tick_size`` (the minimum PRICE increment) and ``volume_step`` (the minimum
+    ORDER SIZE increment, in lots) are independent broker facts. Rounding size to
+    ``tick_size`` conflated them: NAS100 prices to 0.1 but trades in 0.01 lots, so
+    every order was quantised 10x coarser than the broker requires — and any size
+    below 0.1 lots floored to zero and was rejected outright.
+    """
 
     lot_size: float = 100_000.0
     leverage: float = 30.0
+    volume_step: float = 0.01
 
     def __init__(
         self,
@@ -275,6 +332,7 @@ class Cfd(Instrument):
         tick_size: float,
         lot_size: float,
         leverage: float,
+        volume_step: float = 0.01,
     ):
         super().__init__(
             symbol,
@@ -285,6 +343,7 @@ class Cfd(Instrument):
         )
         self.lot_size = lot_size
         self.leverage = leverage
+        self.volume_step = volume_step
 
     @property
     def asset_class(self) -> AssetClass:
@@ -298,7 +357,9 @@ class Cfd(Instrument):
         return self.lot_size
 
     def to_native_units(self, size: float) -> float:
-        # CFD lots: round down to tick_size precision (e.g. 0.01 lots)
-        if self.tick_size > 0:
-            return math.floor(size / self.tick_size) * self.tick_size
+        # CFD lots: round down to the broker's volume step (e.g. 0.01 lots).
+        if self.volume_step > 0:
+            # Re-round to kill float dust like 0.30000000000000004.
+            steps = math.floor(round(size / self.volume_step, 9))
+            return round(steps * self.volume_step, 9)
         return size

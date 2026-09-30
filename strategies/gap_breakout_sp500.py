@@ -24,7 +24,7 @@ from pathlib import Path
 # Allow running from the repo root without installing the package.
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from hermes import UniverseBacktest, Timeframe
+from hermes import Timeframe, UniverseBacktest
 from hermes.data import ConstituentCalendar, YFinanceSource
 from strategies.gap_breakout import COST_MODEL, GapBreakout
 

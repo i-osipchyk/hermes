@@ -12,7 +12,13 @@ Parameters: 4
 """
 
 from hermes import (
-    EMA, Backtest, EquityFraction, Parameter, Strategy, Symbol, Timeframe,
+    EMA,
+    Backtest,
+    EquityFraction,
+    Parameter,
+    Strategy,
+    Symbol,
+    Timeframe,
     YFinanceFundamentalsScreen,
 )
 from hermes.data import YFinanceSource

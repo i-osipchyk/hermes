@@ -96,7 +96,8 @@ class PortfolioBacktest:
     legs: list[Backtest]
     starting_cash: float = 10_000.0
     unconstrained: bool = False  # skip capital check — orders never rejected for insufficient funds
-    progress_callback: object | None = None  # Callable[[int, int], None] | None — called as (done, total)
+    # Callable[[int, int, datetime], None] | None — called as (done, total, current_bar_time)
+    progress_callback: object | None = None
 
     def run(self) -> PortfolioResult:
         if not self.legs:
@@ -118,7 +119,11 @@ class PortfolioBacktest:
         # would exceed the shared capital pool.
         for i, ls in enumerate(leg_states):
             others = [lx.venue for j, lx in enumerate(leg_states) if j != i]
-            ls.venue._external_margin = lambda vs=others: sum(v.used_margin() + v.pending_margin() for v in vs)
+            ls.venue._external_margin = lambda vs=others: sum(
+                v.used_margin() + v.pending_margin() for v in vs
+            )
+            # Other legs' open losses shrink the shared equity this leg can draw on.
+            ls.venue._external_unrealised = lambda vs=others: sum(v.unrealised_pnl() for v in vs)
 
         # Unified sorted event stream: (timestamp, leg_index, bar).
         # Ties broken by leg order so deterministic.
@@ -165,6 +170,13 @@ class PortfolioBacktest:
                             for ind in inds:
                                 ind.on_bar_closed(closed)
                             rc[tf] = new_count
+                        elif rv[tf].forming is not None:
+                            # Mirrors engine.py: `latest`-mode reference indicators
+                            # also advance on the forming bar.
+                            bfc = rv[tf].bars_for_compute()
+                            for ind in inds:
+                                if ind.mode == "latest":
+                                    ind.on_forming_bar(bfc)
 
             prev_closed = prev_closed_counts[idx]
             ls.venue.on_base_bar(bar)
@@ -177,7 +189,8 @@ class PortfolioBacktest:
 
             if ts < ls.start:
                 continue
-            if not _warm(ls.view, ls.warm_needed, ls.tf_to_indicators):
+            if not _warm(ls.view, ls.warm_needed, ls.tf_to_indicators,
+                         ls.ref_feeds, ls.ref_tf_indicators):
                 continue
 
             if not ls.trading:
@@ -247,14 +260,18 @@ class PortfolioBacktest:
             (len(ls.strategy.declared_parameters()) for ls in leg_states),
             default=0,
         )
-        # Resample to one point per calendar day: multiple legs share the same
-        # date, so the raw curve has N-stocks entries per day. Keeping only the
-        # last value per day restores correct per-period return spacing for
-        # Sharpe, VaR, drawdown, and all other time-series metrics.
-        daily_curve = _last_per_day(equity_curve)
+        # Legs sharing a bar time each append an entry, so collapse duplicate
+        # timestamps before any per-period statistic is computed.
+        curve = _dedupe_timestamps(equity_curve)
+        # Annualise off the fastest leg -- it is what sets the curve's resolution.
+        periods = [
+            ls.venue.instrument.session.bars_per_year(min(ls.view.series))
+            for ls in leg_states
+        ]
         result = BacktestResult.compute(
-            daily_curve, all_trades, num_params=num_params,
+            curve, all_trades, num_params=num_params,
             vetoed_signals=all_vetoed,
+            periods_per_year=max(periods) if periods else None,
         )
         return PortfolioResult(result=result, per_symbol=per_symbol)
 
@@ -268,7 +285,7 @@ class PortfolioBacktest:
         strat = bt.strategy
         strat.instrument = instrument
         strat._params = dict(bt.params)
-        strat.setup()
+        strat.run_setup()
         strat._validate_params()
 
         subscribed = set(bt.timeframes) | {ind.timeframe for ind in strat.registered_indicators}
@@ -340,23 +357,38 @@ class PortfolioBacktest:
         )
 
 
-def _last_per_day(
+def _dedupe_timestamps(
     curve: list[tuple[datetime, float]],
 ) -> list[tuple[datetime, float]]:
-    """Resample an equity curve to one point per calendar day (last value wins).
+    """Collapse repeated timestamps in an equity curve (last value wins).
 
-    PortfolioBacktest appends one equity entry per leg bar, so N stocks on the
-    same date produce N same-timestamp entries.  Keeping only the last value per
-    day restores correct per-period return spacing for Sharpe, VaR, drawdown,
-    and every other time-series metric.
+    PortfolioBacktest appends one equity entry per leg bar, so N legs sharing a bar
+    time produce N identical-timestamp entries; left in, they are read as N
+    zero-length periods and wreck every time-series metric.
+
+    This deliberately keeps the curve at BAR resolution.  Collapsing to one point
+    per calendar day (the previous behaviour) discarded intraday structure: a
+    single-day intraday run reduced to one point and produced no metrics at all,
+    the first point became end-of-day-1 rather than starting cash (so
+    ``total_return`` was wrong), and intraday drawdown became invisible.
     """
-    by_day: dict = {}
+    by_ts: dict = {}
     for ts, eq in curve:
-        by_day[ts.date()] = (ts, eq)
-    return list(by_day.values())
+        by_ts[ts] = eq
+    return sorted(by_ts.items())
 
 
-def _warm(view: MultiTimeframeView, warm_needed: dict, tf_to_indicators: dict | None = None) -> bool:
+def _warm(
+    view: MultiTimeframeView,
+    warm_needed: dict,
+    tf_to_indicators: dict | None = None,
+    ref_feeds: list | None = None,
+    ref_tf_indicators: list | None = None,
+) -> bool:
+    """True once every declared Indicator -- on the traded Instrument AND on each
+    Reference feed -- has enough history.  Mirrors ``Backtest._warm``; omitting the
+    reference check let a leg start trading while its reference indicators were
+    still empty."""
     if tf_to_indicators is not None:
         for tf, inds in tf_to_indicators.items():
             series = view[tf]
@@ -364,6 +396,17 @@ def _warm(view: MultiTimeframeView, warm_needed: dict, tf_to_indicators: dict | 
                 check = series.closed() if ind.mode == "latest_confirmed" else series.bars_for_compute()
                 if len(check) < ind.lookback:
                     return False
+        for feed, rtf in zip(ref_feeds or [], ref_tf_indicators or []):
+            ref_view = feed[0]
+            for tf, inds in rtf.items():
+                series = ref_view[tf]
+                for ind in inds:
+                    check = (
+                        series.closed() if ind.mode == "latest_confirmed"
+                        else series.bars_for_compute()
+                    )
+                    if len(check) < ind.lookback:
+                        return False
         return True
     for tf, need in warm_needed.items():
         if len(view[tf].bars_for_compute()) < need:

@@ -75,6 +75,14 @@ ignore = [
     "E741",  # `l` reads clearly as (low) / (loss) in local OHLC/math contexts
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Streamlit requires set_page_config()/logging setup to run before other imports.
+"src/hermes/webui/app.py" = ["E402"]
+"src/hermes/webui/pages/*.py" = ["E402"]
+# The ContextEnricher Protocol must be defined before the submodules that
+# implement it are re-exported, or the imports go circular.
+"src/hermes/ai/enrichers/__init__.py" = ["E402"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

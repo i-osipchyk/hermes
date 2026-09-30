@@ -12,8 +12,8 @@ at most once per ticker/date combination.
 
 from __future__ import annotations
 
-from typing import Protocol
 from datetime import date
+from typing import Protocol
 
 
 class ContextEnricher(Protocol):

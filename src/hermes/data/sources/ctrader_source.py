@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 from ...core import Bar, Cfd, Instrument, SessionCalendar, Symbol, Timeframe
 from ..aggregation import MultiTimeframeView
-from ..cache import BarCache
+from ..cache import BarCache, checked_through, complete_bars
 from ..source import DataSource
 
 _H1 = Timeframe.parse("1h")
@@ -50,6 +50,23 @@ _CFD_SESSION = SessionCalendar(
     weekdays=(0, 1, 2, 3, 4, 6),    # Mon-Fri + Sunday evening open
     day_anchor=time(17, 0),         # 17:00 NY day rollover (aligns 4h/1d)
 )
+
+# The constructor's tick_size/lot_size default to FX conventions (0.00001 pip,
+# 100_000-unit standard lot), which are wrong for other asset classes on the same
+# account -- an index CFD isn't quoted or sized like a forex pair. Confirmed
+# live against a Pepperstone cTrader account via ProtoOASymbolByIdReq
+# (digits=1 -> tick_size=0.1, lotSize=100 for both): index CFDs price to one
+# decimal and size in lots of 100 units, not FX pip/100k-lot conventions.
+# Extend this table (ticker -> (tick_size, lot_size, volume_step)) as other
+# non-FX symbols are traded through CTraderSource/PepperstoneSource.
+# volume_step is the minimum ORDER SIZE increment in lots and is unrelated to
+# tick_size (the price increment) -- Pepperstone's index CFDs trade in 0.01 lots
+# while pricing to 0.1, and FX trades in 0.01 lots while pricing to 0.00001.
+_DEFAULT_VOLUME_STEP = 0.01
+_SYMBOL_SPECS: dict[str, tuple[float, float, float]] = {
+    "US500": (0.1, 100.0, 0.01),
+    "NAS100": (0.1, 100.0, 0.01),
+}
 
 
 def trendbar_to_bar(
@@ -303,6 +320,7 @@ class CTraderSource(DataSource):
         tick_size: float = 0.00001,
         lot_size: float = 100_000.0,
         leverage: float = 30.0,
+        volume_step: float = _DEFAULT_VOLUME_STEP,
     ) -> None:
         # Explicit args win; otherwise fall back to the environment so
         # CTraderSource()/PepperstoneSource() work with no arguments.
@@ -317,14 +335,19 @@ class CTraderSource(DataSource):
         self.tick_size = tick_size
         self.lot_size = lot_size
         self.leverage = leverage
+        self.volume_step = volume_step
 
     def get_instrument(self, symbol: Symbol) -> Cfd:
+        tick_size, lot_size, volume_step = _SYMBOL_SPECS.get(
+            symbol.ticker, (self.tick_size, self.lot_size, self.volume_step)
+        )
         return Cfd(
             symbol,
             session=self.session,
-            tick_size=self.tick_size,
-            lot_size=self.lot_size,
+            tick_size=tick_size,
+            lot_size=lot_size,
             leverage=self.leverage,
+            volume_step=volume_step,
         )
 
     def history(
@@ -340,8 +363,16 @@ class CTraderSource(DataSource):
             else:
                 # No native mapping (e.g. 4h): rebuild from 1h (see ADR-0006).
                 hourly = self._fetch_native(instrument, _H1, gap_start, gap_end)
+                # resample_from_hourly returns only SEALED buckets, so the trailing
+                # partial bucket of every gap is absent -- mark_checked must not
+                # claim it or it is never fetched again (see checked_through).
                 fetched = resample_from_hourly(hourly, instrument, timeframe)
+            fetched = complete_bars(fetched, timeframe)
             self.cache.write(instrument, timeframe, fetched)
+            self.cache.mark_checked(
+                instrument, timeframe, gap_start,
+                checked_through(fetched, timeframe, gap_start, gap_end),
+            )
         return self.cache.read(instrument, timeframe, start, end)
 
     def supported_timeframes(self) -> set[Timeframe]:

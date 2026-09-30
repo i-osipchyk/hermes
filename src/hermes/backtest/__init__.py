@@ -7,6 +7,7 @@ from .regime import RegimeAnalysis, RegimeStats, regime_analysis
 from .reporting import plot_equity, plot_trades, tearsheet
 from .result import BacktestResult, BenchmarkComparison, BenchmarkStats, Metrics
 from .sensitivity import cost_sensitivity
+from .universe import UniverseBacktest, UniverseResult
 from .validation import (
     ConfidenceInterval,
     MetricsCI,
@@ -15,7 +16,6 @@ from .validation import (
     StatValidation,
     validate,
 )
-from .universe import UniverseBacktest, UniverseResult
 from .walk_forward import WalkForward, WalkForwardResult, WalkForwardWindow, split_isoos
 
 __all__ = [

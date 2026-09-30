@@ -17,16 +17,16 @@ from datetime import timedelta
 
 from hermes import (
     ATR,
-    Backtest,
     EMA,
+    Backtest,
     Parameter,
     RiskPercent,
     Strategy,
     Symbol,
     Timeframe,
 )
-from hermes.execution import CostModel
 from hermes.data import YFinanceSource
+from hermes.execution import CostModel
 
 GENERATED_BY = "hermes-strategy"
 

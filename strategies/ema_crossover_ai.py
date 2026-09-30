@@ -32,10 +32,10 @@ Sizing: Defaults to ``EquityFraction(0.95)`` when no sizer is set on the Backtes
 from __future__ import annotations
 
 from hermes import (
-    AIAdvisor,
-    ClaudeProvider,
     EMA,
+    AIAdvisor,
     Backtest,
+    ClaudeProvider,
     EquityFraction,
     MassiveFundamentalsEnricher,
     Parameter,

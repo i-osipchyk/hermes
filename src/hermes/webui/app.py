@@ -8,7 +8,9 @@ absolute.
 from __future__ import annotations
 
 import logging
+
 import dotenv
+
 dotenv.load_dotenv()
 
 logging.basicConfig(
@@ -28,14 +30,16 @@ import streamlit as st
 
 from hermes.backtest import BacktestResult
 from hermes.strategy import EquityFraction, LeveragedFraction, NotionalCash, RiskCash, RiskPercent, Units
-from hermes.webui import discovery, review, run_cache as _rc, sources, universes
+from hermes.webui import discovery, review, sources, universes
+from hermes.webui import run_cache as _rc
 
 st.set_page_config(page_title="Hermes Backtester", layout="wide")
 st.title("Hermes — backtesting")
 
 
 def _make_progress_cb(bar_widget, text_widget, label: str):
-    """Return a callback(done, total, current_date=None) that updates a Streamlit progress bar + ETA caption."""
+    """Return a callback(done, total, current_date=None) that updates a Streamlit
+    progress bar + ETA caption."""
     import time
     _state: dict = {"start": None}
 
@@ -90,12 +94,31 @@ def _param_widget(spec):
 
 
 _SIZER_TYPES = {
-    "Risk % of equity":        ("risk_pct",    "Risk per trade (%)",          1.0,     0.01,  10.0,  "e.g. 1.0 means 1% of equity risked. Requires a stop loss."),
-    "Leveraged fraction":      ("lev_frac",    "Buying power used (%)",       100.0,   1.0,   100.0, "notional = equity × leverage × fraction. Uses the instrument's leverage. No stop loss needed."),
-    "Equity fraction":         ("equity_frac", "Fraction of equity (%)",      95.0,    1.0,   100.0, "e.g. 95 invests 95% of current equity. No stop loss needed."),
-    "Fixed notional ($)":      ("notional",    "Notional per trade ($)",      10000.0, 1.0,   1e9,   "Fixed dollar amount per trade regardless of equity."),
-    "Fixed shares (n)":        ("units",       "Shares / contracts per trade", 100.0,  1.0,   1e7,   "Always trade exactly this many units."),
-    "Risk cash ($)":           ("risk_cash",   "Cash at risk per trade ($)",  100.0,   0.01,  1e9,   "Fixed dollar amount to risk per trade. Requires a stop loss."),
+    "Risk % of equity": (
+        "risk_pct", "Risk per trade (%)", 1.0, 0.01, 10.0,
+        "e.g. 1.0 means 1% of equity risked. Requires a stop loss.",
+    ),
+    "Leveraged fraction": (
+        "lev_frac", "Buying power used (%)", 100.0, 1.0, 100.0,
+        "notional = equity × leverage × fraction. Uses the instrument's leverage. "
+        "No stop loss needed.",
+    ),
+    "Equity fraction": (
+        "equity_frac", "Fraction of equity (%)", 95.0, 1.0, 100.0,
+        "e.g. 95 invests 95% of current equity. No stop loss needed.",
+    ),
+    "Fixed notional ($)": (
+        "notional", "Notional per trade ($)", 10000.0, 1.0, 1e9,
+        "Fixed dollar amount per trade regardless of equity.",
+    ),
+    "Fixed shares (n)": (
+        "units", "Shares / contracts per trade", 100.0, 1.0, 1e7,
+        "Always trade exactly this many units.",
+    ),
+    "Risk cash ($)": (
+        "risk_cash", "Cash at risk per trade ($)", 100.0, 0.01, 1e9,
+        "Fixed dollar amount to risk per trade. Requires a stop loss.",
+    ),
 }
 
 
@@ -110,7 +133,9 @@ def _sizer_widget() -> tuple[object, bool]:
     )
     key, label, default, min_v, max_v, hint = _SIZER_TYPES[sizer_type]
     col_type.caption(hint)
-    value = float(col_val.number_input(label, value=default, min_value=min_v, max_value=max_v, key=f"sizer_val_{key}"))
+    value = float(col_val.number_input(
+        label, value=default, min_value=min_v, max_value=max_v, key=f"sizer_val_{key}"
+    ))
     unconstrained = col_flag.selectbox(
         "Unconstrained capital",
         ["No", "Yes"],
@@ -188,14 +213,20 @@ def _show_metrics(result):
     r2[2].metric("Profit factor", _fmt_num(m.profit_factor))
     r2[3].metric("Trades", m.num_trades)
     r3 = st.columns(4)
-    r3[0].metric("Adj. Sharpe", _fmt_num(m.parameter_adjusted_sharpe), help="Sharpe penalised for free parameters: Sharpe × √((n−k)/n)")
+    r3[0].metric(
+        "Adj. Sharpe", _fmt_num(m.parameter_adjusted_sharpe),
+        help="Sharpe penalised for free parameters: Sharpe × √((n−k)/n)",
+    )
     r3[1].metric("Calmar", _fmt_num(m.calmar), help="CAGR / |max drawdown|")
     r3[2].metric("Omega ratio", _fmt_num(m.omega_ratio), help="Sum of gains / sum of losses")
     r3[3].metric("VaR 95%", _fmt_pct(m.var_95), help="5th-percentile single-bar return")
     r4 = st.columns(4)
     r4[0].metric("CVaR 95%", _fmt_pct(m.cvar_95), help="Mean return of the worst 5% of bars")
     r4[1].metric("Exposure", _fmt_pct(m.exposure_pct), help="Fraction of bars with an open position")
-    r4[2].metric("Turnover (ann.)", _fmt_num(m.turnover), help="Total traded notional / avg equity, annualised")
+    r4[2].metric(
+        "Turnover (ann.)", _fmt_num(m.turnover),
+        help="Total traded notional / avg equity, annualised",
+    )
     r4[3].metric("Avg drawdown", _fmt_pct(m.avg_drawdown), help="Mean depth across all drawdown episodes")
     r5 = st.columns(4)
     r5[0].metric("PnL ratio", _fmt_num(m.pnl_ratio), help="Avg win / avg loss per trade (payoff ratio)")
@@ -244,12 +275,18 @@ def _show_stat_validation(result) -> None:
         c1.metric(
             "Probabilistic Sharpe",
             _fmt_num(sv.get("probabilistic_sharpe")),
-            help="P(SR > 0) corrected for skewness and kurtosis (Lopez de Prado 2012). >0.95 = strong evidence of edge.",
+            help=(
+                "P(SR > 0) corrected for skewness and kurtosis (Lopez de Prado 2012). "
+                ">0.95 = strong evidence of edge."
+            ),
         )
         c2.metric(
             "Deflated Sharpe",
             _fmt_num(sv.get("deflated_sharpe")),
-            help="P(true SR > SR*) after correcting for multiple strategy trials (Bailey & Lopez de Prado 2014).",
+            help=(
+                "P(true SR > SR*) after correcting for multiple strategy trials "
+                "(Bailey & Lopez de Prado 2014)."
+            ),
         )
         min_trl = sv.get("min_trl")
         c3.metric(
@@ -444,6 +481,7 @@ sizer, unconstrained = _sizer_widget()
 st.markdown("**Date & Cash**")
 dc1, dc2, dc3, dc4 = st.columns(4)
 import datetime as _dt
+
 start = dc1.date_input("Start", value=defaults.start.date(), min_value=_dt.date(1990, 1, 1), key="start")
 end = dc2.date_input("End", value=defaults.end.date(), min_value=_dt.date(1990, 1, 1), key="end")
 cash = dc3.number_input(
@@ -514,6 +552,7 @@ def _apply_model_override(bt, model_choice: str):
     if bt.advisor is None or model_choice == "claude":
         return bt
     from dataclasses import replace as _dc_replace
+
     from hermes.ai import AIAdvisor
     from hermes.ai.deepseek import DeepSeekProvider
     orig = bt.advisor
@@ -543,7 +582,6 @@ if run or st.session_state.pop("_auto_run", False):
                 rid = review.run_id(_cached_dict)
             review.save_last_rid(rid)
             st.session_state.update(result=result, rid=rid, ai=entry.is_ai_generated, mode="single")
-            st.session_state.pop("batch", None)
         else:
             bt = discovery.configured_backtest(
                 entry, source_name=source_name, ticker=ticker,
@@ -583,7 +621,6 @@ if run or st.session_state.pop("_auto_run", False):
                 ),
             )
             st.session_state.update(result=result, rid=rid, ai=entry.is_ai_generated, mode="single")
-            st.session_state.pop("batch", None)
     elif universes.is_calendar_universe(universe):
         _cached = _rc.load_run(_ck)
         _uni_meta = _rc.load_universe_meta(_ck) if _cached else None
@@ -592,7 +629,6 @@ if run or st.session_state.pop("_auto_run", False):
             universe_result = _rc.restore_universe_result(_cached_dict, _uni_meta)
             st.session_state.update(universe_result=universe_result, mode="universe")
             st.session_state.pop("result", None)
-            st.session_state.pop("batch", None)
         else:
             from hermes.backtest import UniverseBacktest
             from hermes.webui.sources import build_source as _build_source
@@ -601,7 +637,7 @@ if run or st.session_state.pop("_auto_run", False):
             defaults = discovery.default_config(entry)
             source = (
                 _build_source(source_name, leverage=_leverage_arg)
-                if source_name and source_name != defaults.source.name
+                if source_name and (source_name != defaults.source.name or _leverage_arg is not None)
                 else defaults.source
             )
 
@@ -657,7 +693,6 @@ if run or st.session_state.pop("_auto_run", False):
             )
             st.session_state.update(universe_result=universe_result, mode="universe")
             st.session_state.pop("result", None)
-            st.session_state.pop("batch", None)
     else:
         src_override, tickers = universes.load_universe(universe)
         _cached = _rc.load_run(_ck)
@@ -667,7 +702,6 @@ if run or st.session_state.pop("_auto_run", False):
             universe_result = _rc.restore_universe_result(_cached_dict, _uni_meta)
             st.session_state.update(universe_result=universe_result, mode="universe")
             st.session_state.pop("result", None)
-            st.session_state.pop("batch", None)
         else:
             try:
                 _prog = st.progress(0.0)
@@ -680,7 +714,9 @@ if run or st.session_state.pop("_auto_run", False):
                     start=start_dt, end=end_dt, starting_cash=cash, params=param_values,
                     unconstrained=unconstrained, sizer=sizer, advisor=_uni_advisor,
                     leverage=_leverage_arg,
-                    progress_callback=_make_progress_cb(_prog, _prog_txt, f"{universe} ({len(tickers)} symbols)"),
+                    progress_callback=_make_progress_cb(
+                        _prog, _prog_txt, f"{universe} ({len(tickers)} symbols)"
+                    ),
                 )
                 _prog.empty()
                 _prog_txt.empty()
@@ -715,55 +751,29 @@ if run or st.session_state.pop("_auto_run", False):
 
             st.session_state.update(universe_result=universe_result, mode="universe")
             st.session_state.pop("result", None)
-            st.session_state.pop("batch", None)
 
 # --- results ---------------------------------------------------------------
 
 mode = st.session_state.get("mode")
-batch = st.session_state.get("batch")
 result = None
 rid = None
 
-if mode == "batch" and batch is not None:
-    agg = batch.aggregate()
-    st.subheader("Universe scan — by symbol")
-    a = st.columns(5)
-    a[0].metric("Symbols", agg["symbols"])
-    a[1].metric("Mean return / symbol", _fmt_pct(agg["mean_return"]))
-    a[2].metric("Median Sharpe", _fmt_num(agg["median_sharpe"]))
-    a[3].metric("% profitable", _fmt_pct(agg["pct_profitable"]))
-    a[4].metric("Total trades", agg["total_trades"])
-    st.dataframe(batch.summary_rows(), use_container_width=True, hide_index=True)
-    if batch.errors:
-        with st.expander(f"⚠️ {len(batch.errors)} symbol(s) failed"):
-            for t, e in batch.errors.items():
-                st.write(f"**{t}** — {e}")
-    if not batch.results:
-        st.stop()
-
-    st.divider()
-    view = st.selectbox("Equity curve, metrics & review for", ["Combined portfolio", *batch.results])
-    if view == "Combined portfolio":
-        result = batch.combined_result()
-        st.caption(
-            "One shared, compounding capital pool — each trade risks a % of the *current* "
-            "equity, so a win on one symbol grows the capital for the next trade on any symbol."
-        )
-    else:
-        result = batch.results[view]
-    rid = review.run_id(result.to_dict())
-    review.write_result(result.to_dict(), rid)
-    st.session_state["rid"] = rid
-    _show_split_or_full(result)
-
-elif mode == "universe" and st.session_state.get("universe_result") is not None:
+# NOTE: the old ``mode == "batch"`` view (BatchResult / run_batch) was unreachable —
+# nothing has set st.session_state["batch"] since universe runs moved to
+# PortfolioBacktest, and its caption claimed a "shared, compounding capital pool"
+# that BatchResult explicitly does not provide (its sleeves never interact).
+# run_batch()/BatchResult remain available as library API.
+if mode == "universe" and st.session_state.get("universe_result") is not None:
     ur = st.session_state["universe_result"]
     pr = ur.portfolio_result
 
     _universe_label = st.session_state.get("universe", "universe")
     st.subheader(f"{_universe_label} — portfolio summary")
     a = st.columns(4)
-    a[0].metric("Universe size", ur.universe_size, help="Distinct tickers ever in the index during the period")
+    a[0].metric(
+        "Universe size", ur.universe_size,
+        help="Distinct tickers ever in the index during the period",
+    )
     a[1].metric("Legs with trades", sum(1 for rows in pr.per_symbol.values() if rows))
     a[2].metric("Total trades", sum(len(v) for v in pr.per_symbol.values()))
     a[3].metric("Symbols (no data)", sum(1 for rows in pr.per_symbol.values() if not rows))

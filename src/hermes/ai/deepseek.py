@@ -168,7 +168,10 @@ class DeepSeekProvider(AIProvider):
             logging.getLogger(__name__).warning(
                 "DeepSeek JSON parse failed (%s): %r", exc, content[:200]
             )
-            return AdvisorDecision(True, 0.0, f"unparseable response: {content[:120]}", self.model_id, usage=usage)
+            return AdvisorDecision(
+                True, 0.0, f"unparseable response: {content[:120]}",
+                self.model_id, usage=usage,
+            )
 
     def _usage(self, response, latency_ms: float) -> LLMUsage:
         return LLMUsage(

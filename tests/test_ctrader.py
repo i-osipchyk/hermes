@@ -27,6 +27,23 @@ def _cfd():
                lot_size=100_000, leverage=30)
 
 
+def test_get_instrument_uses_fx_defaults_for_unlisted_symbol():
+    source = PepperstoneSource(client_id="x", client_secret="x", access_token="x", account_id=1)
+    inst = source.get_instrument(Symbol("EURUSD", "pepperstone"))
+    assert inst.tick_size == 1e-5
+    assert inst.lot_size == 100_000
+
+
+def test_get_instrument_uses_confirmed_index_specs():
+    # digits=1 -> tick_size=0.1, lotSize=100 -- confirmed live via
+    # ProtoOASymbolByIdReq against a Pepperstone account for both tickers.
+    source = PepperstoneSource(client_id="x", client_secret="x", access_token="x", account_id=1)
+    for ticker in ("US500", "NAS100"):
+        inst = source.get_instrument(Symbol(ticker, "pepperstone"))
+        assert inst.tick_size == 0.1
+        assert inst.lot_size == 100.0
+
+
 def test_trendbar_decode_prices():
     # low=110000 -> 1.10000; open=+500 -> 1.10500; high=+800; close=+200
     bar = trendbar_to_bar(110_000, 500, 800, 200, 1234, ts_minutes=0, timeframe=H1)

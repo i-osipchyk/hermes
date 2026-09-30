@@ -76,7 +76,11 @@ class WalkForward:
         strat = bt.strategy
         strat.instrument = instrument
         strat._params = dict(bt.params)
-        strat.setup()
+        # run_setup() clears prior declarations first: this pass runs setup() on the
+        # TEMPLATE strategy, which every window then deep-copies. Without the reset
+        # each copy entered its run already holding this pass's indicators and
+        # reference feeds, and setup() appended a second set on top.
+        strat.run_setup()
 
         grid: dict[str, list] = {}
         steps = max(2, self.bounds_steps)

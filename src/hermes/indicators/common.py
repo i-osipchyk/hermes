@@ -21,7 +21,6 @@ from collections import deque
 from ..core import Bar, Timeframe
 from .base import Indicator
 
-
 # ---------------------------------------------------------------------------
 # EMA helpers (shared by EMA, MACD)
 # ---------------------------------------------------------------------------
@@ -493,6 +492,11 @@ class BollingerBands(Indicator):
         self._current = self._value_from_window()
 
     def on_forming_bar(self, bars: list[Bar]) -> None:
+        # period == 1 would make the slice `[-0:]` (the WHOLE window), yielding a
+        # 2-element window divided by 1 — mirrors the same guard in SMA.
+        if self.period == 1:
+            self._current = self._bb([bars[-1].close])
+            return
         if len(self._window) < self.period - 1:
             self._current = {"upper": None, "middle": None, "lower": None}
             return

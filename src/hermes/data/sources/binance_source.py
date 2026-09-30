@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 from ...core import Bar, CryptoPair, Instrument, Symbol, Timeframe
 from .._ssl import ensure_system_trust
-from ..cache import BarCache
+from ..cache import BarCache, checked_through, complete_bars
 from ..source import DataSource
 
 _SUPPORTED = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
@@ -54,8 +54,16 @@ class BinanceSource(DataSource):
         self, instrument: Instrument, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[Bar]:
         for gap_start, gap_end in self.cache.missing_ranges(instrument, timeframe, start, end):
-            fetched = self._fetch(instrument.symbol.ticker, timeframe, gap_start, gap_end)
+            # Binance returns the in-progress kline as the last row; caching it
+            # would freeze a partial bar into the cache forever.
+            fetched = complete_bars(
+                self._fetch(instrument.symbol.ticker, timeframe, gap_start, gap_end), timeframe
+            )
             self.cache.write(instrument, timeframe, fetched)
+            self.cache.mark_checked(
+                instrument, timeframe, gap_start,
+                checked_through(fetched, timeframe, gap_start, gap_end),
+            )
         return self.cache.read(instrument, timeframe, start, end)
 
     def supported_timeframes(self) -> set[Timeframe]:

@@ -3,8 +3,11 @@
 P&L-based accounting (works uniformly across cash and leveraged instruments):
 cash holds realised equity; open Trades contribute unrealised P&L to equity and
 reserve margin = notional / leverage. Orders that exceed free margin are rejected;
-there is no auto-liquidation in v1 — risk is managed via Stop Loss. Dividend cash
-from held stock Trades is credited here on ex-dates.
+there is no auto-liquidation in v1 — risk is managed via Stop Loss.
+
+Dividends are not credited as cash: every stock DataSource serves dividend-adjusted
+prices, so the payout is already in the price series and crediting it again would
+double-count.
 """
 
 from __future__ import annotations

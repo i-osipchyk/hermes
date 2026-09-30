@@ -29,7 +29,7 @@ from ..data import DataSource, MultiTimeframeView
 from ..execution import Account, CostModel, SimulatedVenue
 from ..indicators import Indicator
 from ..strategy import Sizer, Strategy
-from .result import BacktestResult, BenchmarkStats, _compute_benchmark_stats
+from .result import BacktestResult, _compute_benchmark_stats
 from .validation import validate as _validate
 
 _UTC = UTC
@@ -67,8 +67,10 @@ class Backtest:
     params: dict[str, object] = field(default_factory=dict)
     validate: bool = False                 # run StatValidation after the backtest
     unconstrained: bool = False            # skip capital check — orders never rejected for insufficient funds
-    sizer: Sizer | None = None             # backtest-level sizer; overrides the strategy's own sizing when set
-    progress_callback: object | None = None  # Callable[[int, int], None] | None — called as (done, total)
+    # backtest-level sizer; overrides the strategy's own per-order sizing when set
+    sizer: Sizer | None = None
+    # Callable[[int, int, datetime], None] | None — called as (done, total, current_bar_time)
+    progress_callback: object | None = None
 
     def run(self) -> BacktestResult:
         start = _as_utc(self.start)
@@ -79,7 +81,7 @@ class Backtest:
         strat = self.strategy
         strat.instrument = instrument
         strat._params = dict(self.params)  # param overrides seed before setup()
-        strat.setup()
+        strat.run_setup()
         strat._validate_params()
 
         subscribed = set(self.timeframes) | {ind.timeframe for ind in strat.registered_indicators}
@@ -211,7 +213,7 @@ class Backtest:
                         ind.precompute(closed)
                     closed_counts[tf] = len(closed)
                 # Precompute all reference indicators.
-                for i, (ref, ref_view, *_) in enumerate(refs):
+                for i, (_ref, ref_view, *_) in enumerate(refs):
                     for tf, inds in ref_tf_indicators[i].items():
                         closed = ref_view[tf].closed()
                         for ind in inds:
@@ -254,9 +256,13 @@ class Backtest:
                 venue.force_close_all(last_bar.timestamp)
                 equity_curve.append((last_bar.timestamp, venue.equity()))
         num_params = len(strat.declared_parameters())
+        # Annualise against the bars this Instrument's session actually produces,
+        # not against continuous 24/7 time (see SessionCalendar.bars_per_year).
+        periods_per_year = instrument.session.bars_per_year(base)
         result = BacktestResult.compute(
             equity_curve, venue.closed_trades, num_params=num_params,
             vetoed_signals=venue.vetoed_orders,
+            periods_per_year=periods_per_year,
         )
 
         # --- LLM observability log -------------------------------------------
@@ -268,7 +274,7 @@ class Backtest:
             description = f"Buy-and-hold {instrument.symbol.ticker}"
             result.benchmark_equity = benchmark_equity_curve
             result.benchmark = _compute_benchmark_stats(
-                equity_curve, benchmark_equity_curve, description
+                equity_curve, benchmark_equity_curve, description, periods_per_year
             )
 
         # --- optional statistical validation ---------------------------------
@@ -299,7 +305,7 @@ class Backtest:
                 check = series.closed() if ind.mode == "latest_confirmed" else series.bars_for_compute()
                 if len(check) < need:
                     return False
-        for (ref, ref_view, *_), rtf in zip(refs, ref_tf_indicators):
+        for (_ref, ref_view, *_), rtf in zip(refs, ref_tf_indicators):
             for tf, inds in rtf.items():
                 series = ref_view[tf]
                 for ind in inds:

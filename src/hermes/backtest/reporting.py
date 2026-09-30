@@ -40,7 +40,13 @@ def plot_trades(result: BacktestResult, bars=None, ax=None):
     if bars:
         ax.plot([b.timestamp for b in bars], [b.close for b in bars], color="black", lw=0.8)
     for t in result.trades:
-        ax.scatter(t.entry_time, t.entry_price, marker="^", color="green", zorder=3)
+        # Marker points the way the trade does: ^ for a long entry, v for a short.
+        long_entry = getattr(t.side, "value", t.side) == "buy"
+        ax.scatter(
+            t.entry_time, t.entry_price,
+            marker="^" if long_entry else "v",
+            color="green", zorder=3,
+        )
         if t.exit_time is not None:
             color = "red" if (t.net_pnl or 0) < 0 else "blue"
             ax.scatter(t.exit_time, t.exit_price, marker="v", color=color, zorder=3)
