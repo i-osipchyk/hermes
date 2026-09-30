@@ -3,6 +3,7 @@
 from .batch import BatchResult, run_batch
 from .engine import Backtest
 from .portfolio import PortfolioBacktest, PortfolioResult
+from .random_baseline import run_random_simulations, run_universe_random_simulations
 from .regime import RegimeAnalysis, RegimeStats, regime_analysis
 from .reporting import plot_equity, plot_trades, tearsheet
 from .result import BacktestResult, BenchmarkComparison, BenchmarkStats, Metrics
@@ -28,6 +29,8 @@ __all__ = [
     "run_batch",
     "PortfolioBacktest",
     "PortfolioResult",
+    "run_random_simulations",
+    "run_universe_random_simulations",
     "plot_equity",
     "plot_trades",
     "tearsheet",

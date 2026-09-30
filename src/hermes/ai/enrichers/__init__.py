@@ -4,7 +4,7 @@ An enricher is any object with an ``enrich(ticker, as_of) -> str`` method.
 Pass a list of enrichers to ``AIAdvisor(enrichers=[...])``; the advisor appends
 their text output to the assembled context before calling the LLM.
 
-All built-in enrichers cache results to ``.cache/pit/`` so API calls are made
+All built-in enrichers cache results to ``.hermes_cache/pit/`` so API calls are made
 at most once per ticker/date combination.
 
     from hermes.ai.enrichers import YFinanceFundamentalsEnricher, EDGARFilingEnricher, PolygonNewsEnricher

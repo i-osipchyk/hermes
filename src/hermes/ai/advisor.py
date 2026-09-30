@@ -95,6 +95,9 @@ class AIAdvisor:
                 reason=f"[ERROR] {decision.reason}",
                 system_prompt=self.system_prompt,
                 user_prompt=user_prompt,
+                # Surfaces as llm_summary.fail_open_calls on the BacktestResult,
+                # so a run whose gate silently failed open is detectable.
+                is_error=True,
             )
         else:
             latency = decision.usage.latency_ms if decision.usage else None
@@ -104,23 +107,32 @@ class AIAdvisor:
                       latency or 0, tokens, decision.reason[:80])
             self.cache.put(key, decision, user_prompt, self.system_prompt)
         final = self._apply_threshold(dataclasses.replace(decision, prompt=user_prompt, from_cache=False))
-        if not decision.is_error and decision.usage is not None:
+        if not decision.is_error:
+            # Record every live call, even when the provider reports no usage
+            # (a stub, a local model, or an SDK that omits it). Gating this on
+            # `usage is not None` silently dropped those calls from the log, so
+            # total_calls / approval_rate / fail_open_rate all read as if the
+            # advisor had never run.
             u = decision.usage
-            cost = compute_cost(
-                final.model_id,
-                u.input_tokens,
-                u.output_tokens,
-                u.cache_read_tokens,
-                u.cache_creation_tokens,
+            cost = (
+                compute_cost(
+                    final.model_id,
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_read_tokens,
+                    u.cache_creation_tokens,
+                )
+                if u is not None
+                else None
             )
             self._obs_log.record_live_call(
                 request_time=request_time,
                 model_id=final.model_id,
-                input_tokens=u.input_tokens,
-                output_tokens=u.output_tokens,
-                cache_read_tokens=u.cache_read_tokens,
-                cache_creation_tokens=u.cache_creation_tokens,
-                latency_ms=u.latency_ms,
+                input_tokens=u.input_tokens if u else None,
+                output_tokens=u.output_tokens if u else None,
+                cache_read_tokens=u.cache_read_tokens if u else None,
+                cache_creation_tokens=u.cache_creation_tokens if u else None,
+                latency_ms=u.latency_ms if u else None,
                 cost_usd=cost,
                 approved=final.approved,
                 confidence=final.confidence,

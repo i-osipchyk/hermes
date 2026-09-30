@@ -58,7 +58,7 @@ def _is_reasoning_model(model_id: str) -> bool:
 class DeepSeekProvider(AIProvider):
     def __init__(self, model_id: str = DEFAULT_MODEL, max_tokens: int | None = None) -> None:
         self.model_id = model_id
-        self.max_tokens = max_tokens or int(os.getenv("MAX_TOKENS", "1024"))
+        self.max_tokens = max_tokens or int(os.getenv("HERMES_AI_MAX_TOKENS", "1024"))
         self._client = None  # lazy: import openai on first use
 
     def _get_client(self):

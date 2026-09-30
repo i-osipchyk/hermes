@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from hermes import CryptoPair, Side, Symbol, Timeframe
 from hermes.backtest.result import BacktestResult
@@ -133,3 +134,41 @@ def test_discover_and_configure(tmp_path):
     )
     assert configured.starting_cash == 5_000
     assert configured.strategy is not default.strategy  # fresh instance per build
+
+
+def test_discover_survives_a_broken_strategy_file(tmp_path):
+    """One unimportable file must not hide every working strategy.
+
+    An agent writing strategies will produce a broken one sooner or later; before
+    this, a single syntax error aborted the whole scan.
+    """
+    sdir = tmp_path / "strategies"
+    sdir.mkdir()
+    (sdir / "buy.py").write_text(_STRATEGY_FILE)
+    (sdir / "syntax_error.py").write_text("def build_backtest(:\n")
+    (sdir / "bad_import.py").write_text("import a_module_that_does_not_exist\n")
+
+    entries, broken = discovery.discover_all(sdir)
+
+    assert [e.name for e in entries] == ["buy"]
+    assert sorted(b.name for b in broken) == ["bad_import", "syntax_error"]
+    by_name = {b.name: b for b in broken}
+    assert "SyntaxError" in by_name["syntax_error"].error
+    assert "ModuleNotFoundError" in by_name["bad_import"].error
+    assert "Traceback" in by_name["bad_import"].traceback
+
+    # the back-compatible entry point still returns only the working ones
+    assert [e.name for e in discovery.discover(sdir)] == ["buy"]
+
+
+def test_discover_all_on_missing_directory():
+    entries, broken = discovery.discover_all(Path("does/not/exist"))
+    assert entries == [] and broken == []
+
+
+def test_a_file_without_a_factory_is_neither_working_nor_broken(tmp_path):
+    sdir = tmp_path / "strategies"
+    sdir.mkdir()
+    (sdir / "helpers.py").write_text("CONSTANT = 1\n")
+    entries, broken = discovery.discover_all(sdir)
+    assert entries == [] and broken == []

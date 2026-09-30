@@ -22,10 +22,25 @@ The loop most work travels — an idea, made real, then judged.
 2. **`hermes-backtest`** (fires on its own) — run that strategy over historical data
    and report headline metrics, the trade blotter, and equity/trade plots.
 3. **`hermes-analyze-results`** (fires on its own) — diagnose *why* it wins or loses:
-   drawdowns, trade patterns, cost sensitivity, look-ahead/overfitting smells,
-   benchmark. Its findings send you back to **`/hermes-strategy`** to iterate.
+   P&L concentration, cost sensitivity, out-of-sample decay, statistical validation,
+   regime split, and whether any AI gate was in effect. Its findings send you back to
+   **`/hermes-strategy`** to iterate.
 
 Keep looping 1→2→3 until the edge holds up (or doesn't).
+
+Steps 2 and 3 are `hermes` commands, not bespoke scripts:
+
+```bash
+.venv/bin/hermes strategies        # what can I run?
+.venv/bin/hermes run <name>        # run it; recorded in the ledger
+.venv/bin/hermes runs              # what have I already tried?
+.venv/bin/hermes analyze <key>     # execute the rubric; writes analysis.json
+.venv/bin/hermes review <key>      # a written verdict over that evidence
+```
+
+Add `--json` to any of them for one parseable document on stdout. Runs are cached by
+input hash, so repeating a configuration costs nothing and `hermes runs` is a real
+experiment log — check it before re-running something you may have already tried.
 
 ## Supports
 
@@ -43,7 +58,17 @@ Feed into the main flow rather than sitting on it.
 
 The single sources of truth every skill reads instead of duplicating:
 
-- **`CONTEXT.md`** — the ubiquitous language (Instrument, Bar, Timeframe, Forming
-  Bar, Trade, Sizer, Cost Model, AI Advisor…). Use the same words the code does.
+- **`CONTEXT.md`** — the ubiquitous language. Two sections: the v1 terms for **one**
+  backtest (Instrument, Bar, Timeframe, Forming Bar, Trade, Sizer, Cost Model, AI
+  Advisor…), then the terms for **running many** (Universe/Portfolio Backtest,
+  Walk-forward, Cost Sensitivity, Regime Analysis, Random Baseline, Statistical
+  Validation). Use the same words the code does.
 - **`docs/adr/`** — the load-bearing semantics: the forming-bar model (0002), the
-  fill model (0004), the AI gate (0005), cTrader alignment (0006).
+  fill model (0004), the AI gate (0005), cTrader alignment (0006), maker/taker costs
+  (0009), and the agent-first direction (0010).
+- **`CLAUDE.md`** — repo conventions: which gates are authoritative, the strategy-file
+  contract, what never to commit.
+- **`src/hermes/__init__.py`** — the complete public inventory. Every capability in
+  Hermes is importable from `hermes` directly, so
+  `python -c "import hermes; print(hermes.__all__)"` is an honest list of what you can
+  reach for. If a rubric axis needs a primitive, it is probably already there.

@@ -4,7 +4,7 @@ Fetches the most recent 10-K whose EDGAR ``acceptedDate`` is on or before
 ``as_of``, extracts Items 1, 1A, and 7, and returns them as a text block.
 Uses the public SEC EDGAR REST API — no API key required.
 
-Results are cached to ``.cache/pit/`` so EDGAR is only hit once per
+Results are cached to ``.hermes_cache/pit/`` so EDGAR is only hit once per
 ticker/date combination.
 """
 
@@ -19,7 +19,7 @@ import requests
 from ._cache import cache_get, cache_set
 
 _EDGAR_HEADERS = {"User-Agent": f"hermes-trading {os.getenv('EDGAR_CONTACT_EMAIL', 'research@example.com')}"}
-_CHARS_PER_SECTION = int(os.getenv("CHARS_PER_SECTION", "3000"))
+_CHARS_PER_SECTION = int(os.getenv("HERMES_EDGAR_CHARS_PER_SECTION", "3000"))
 
 _SECTION_PATTERNS = [
     ("Item 1",  r"item\s*1[\.\s\u2014\-]+business"),

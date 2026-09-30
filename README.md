@@ -1,35 +1,51 @@
 # Hermes
 
 A Python framework for developing, backtesting, and (later) deploying **intraday and swing**
-trading strategies on **candlestick data** — unifying stocks (yfinance), CFDs (Pepperstone), and
-crypto (Binance) behind one format so a strategy is written once and runs against any source.
+trading strategies on **candlestick data** — unifying stocks (yfinance/Tiingo), CFDs
+(Pepperstone via cTrader), and crypto (Binance spot + futures) behind one format so a strategy
+is written once and runs against any source.
 
 > **Not** high-frequency and **not** tick/L2/tape. Bars only.
+
+Hermes is built to be driven by an **AI research agent** as much as by a person: the library is
+a set of composable primitives, the vocabulary is written down, and the honest-backtest rules
+are recorded as decisions rather than folklore. See [Using Hermes with Claude Code](#using-hermes-with-claude-code).
 
 ## Design status
 
 The domain model is **settled**. Start here before reading code:
 
-- [`CONTEXT.md`](./CONTEXT.md) — the glossary / ubiquitous language (~27 terms).
+- [`CONTEXT.md`](./CONTEXT.md) — the glossary / ubiquitous language (~40 terms). Two sections:
+  the v1 vocabulary for **one** backtest, then the terms for **running many** (universe,
+  walk-forward, cost sensitivity, random baseline, statistical validation).
 - [`docs/adr/`](./docs/adr) — the load-bearing architectural decisions:
   1. [Event-driven engine with a two-interface parity seam](./docs/adr/0001-event-driven-engine-with-two-interface-parity-seam.md)
   2. [Multi-timeframe forming-bar model](./docs/adr/0002-multi-timeframe-forming-bar-model.md)
   3. [Single-instrument, multi-Trade scope for v1](./docs/adr/0003-single-instrument-multi-trade-scope-v1.md)
   4. [Conservative OHLC fill model with opt-in magnifier](./docs/adr/0004-conservative-ohlc-fill-model-with-opt-in-magnifier.md)
   5. [AI Advisor as a cached confirmation gate](./docs/adr/0005-ai-advisor-as-cached-confirmation-gate.md)
+  6. [Pepperstone via cTrader: rebuild above 1h](./docs/adr/0006-pepperstone-via-ctrader-rebuild-above-1h.md)
+  7. [Companion Claude Code skills in-repo](./docs/adr/0007-companion-claude-code-skills-in-repo.md)
+  8. [Backtesting web UI with Claude Code review](./docs/adr/0008-backtesting-web-ui-with-claude-code-review.md)
+  9. [Liquidity-aware costs (maker/taker)](./docs/adr/0009-liquidity-aware-costs.md)
+  10. [Agent-first research surface](./docs/adr/0010-agent-first-research-surface.md) — the current direction
 
 ## Core ideas in one breath
 
 - A **Strategy** reacts **bar-by-bar** (`on_bar`) — the *same code* runs in backtest and live.
 - It sits between two swappable interfaces: a **`DataSource`** (market data in) and an
   **`ExecutionVenue`** (orders out). Backtest = replay source + `SimulatedVenue`.
-- One uniform **`Bar`**; a polymorphic **`Instrument`** (`Stock` / `CryptoPair` / `Cfd`) hides every
-  source-specific difference. Strategies never branch on subtype.
+- One uniform **`Bar`**; a polymorphic **`Instrument`** (`Stock` / `CryptoPair` /
+  `CryptoPerpetual` / `Cfd`) hides every source-specific difference. Strategies never branch
+  on subtype.
 - **Multi-timeframe**: a Strategy sees several timeframes at once; higher ones are visible as
   **Forming Bars** and recompute each base step (parity-safe "repaint").
 - **Multiple concurrent Trades** per instrument, each with a mutable Stop Loss / Take Profit.
 - Honest fills (next-open, OHLC-touch, conservative SL/TP-clash) with an opt-in **bar magnifier**.
-- Full **Cost Model** (commission + spread + slippage + financing) and margin-aware **Account**.
+- Full **Cost Model** (commission + spread + slippage + financing), **liquidity-aware**
+  (maker vs taker), and a margin-aware **Account**.
+- A run is a pure function of **(Parameters, data, config)** — which is what lets everything in
+  *Running many* below compose without touching the engine.
 - An optional **AI Advisor** that can only *confirm or veto* an already-formed trade, with a
   deterministic response cache so backtests stay reproducible.
 
@@ -38,52 +54,164 @@ The domain model is **settled**. Start here before reading code:
 ```
 src/hermes/
 ├── core/         # Bar, Timeframe, Symbol, Instrument (+ Stock/CryptoPair/Cfd), SessionCalendar
-├── data/         # DataSource ABC, Parquet cache, forming-bar aggregation, provider adapters
+├── data/         # DataSource ABC, Parquet cache, forming-bar aggregation, provider adapters,
+│                 #   ConstituentCalendar (point-in-time index membership)
 ├── indicators/   # Indicator ABC, built-ins, library wrappers
-├── strategy/     # Strategy base + lifecycle hooks, Parameters, Sizers
+├── strategy/     # Strategy base + lifecycle hooks, Parameters, Sizers, Reference feeds
 ├── execution/    # Order, Trade, Position, Account, CostModel, ExecutionVenue, SimulatedVenue
-├── ai/           # AIAdvisor, provider interface, Claude provider, response cache
-└── backtest/     # Engine (the clock), BacktestResult, reporting
+├── ai/           # AIAdvisor, provider interface, Claude/DeepSeek providers, response cache,
+│                 #   point-in-time ContextEnrichers, LLM observability
+├── backtest/     # Engine (the clock), BacktestResult, the research primitives, reporting
+├── research/     # The loop: strategy discovery, the run ledger, the rubric, the review
+├── cli.py        # `hermes` — the loop as commands, with --json everywhere
+└── webui/        # Local Streamlit app over the same primitives
 ```
+
+Everything public is re-exported from the top level, so
+`python -c "import hermes; print(hermes.__all__)"` is a complete inventory (136 names), not a
+subset. A test enforces that (`tests/test_public_api.py`).
 
 ## Install (dev)
 
 ```bash
-pip install -e ".[dev,yfinance,binance,ai,report]"
+pip install -e ".[dev,yfinance,binance,ai,report,ui]"
 ```
+
+Extras: `yfinance`, `binance`, `pepperstone`, `ai` (Anthropic — the default advisor provider),
+`deepseek` (OpenAI-compatible client), `indicators` (pandas-ta), `report`
+(matplotlib/quantstats), `ui` (Streamlit/plotly), `dev`.
 
 Behind a **corporate TLS proxy** (self-signed root in the chain)? Data fetches trust the
 OS certificate store automatically via `truststore` — no `SSL_CERT_FILE` needed. Opt out
 with `HERMES_NO_TRUSTSTORE=1`.
 
+Local caches all live under one root, `.hermes_cache/` — `bars/` (Parquet), `ai/` (advisor
+decisions), `pit/` (point-in-time enricher responses), `runs/`, `reviews/`,
+`random_baselines/`. Delete the root to start cold; nothing in it is ever committed.
+
 ## Status
 
-**Usable.** The core is implemented and tested (28 tests):
+**Usable.** 282 tests, fully offline, ~2.4s.
+
+### One backtest
 
 - ✅ Multi-timeframe **forming-bar aggregation** (wall-clock/exchange-local bucketing,
-  session-bounded, partial first bars) — the keystone, with your 15m→1h scenario pinned in tests.
-- ✅ Indicators (SMA/EMA/RSI/ATR/MACD/Bollinger) + a pandas-ta/TA-Lib wrapper.
+  session-bounded, partial first bars) — the keystone, with the 15m→1h scenario pinned in tests.
+- ✅ Indicators: SMA/EMA/RSI/ATR/MACD/Bollinger/ADX/Fractals/FairValueGap + a pandas-ta/TA-Lib
+  wrapper.
 - ✅ Event-driven **backtest engine**: next-open + OHLC-touch fills, resting orders,
   multiple concurrent Trades with mutable SL/TP, SL/TP-clash → Stop-first (+ opt-in magnifier),
-  full Cost Model (commission/spread/slippage/financing), margin-aware Account, Sizers.
+  full liquidity-aware Cost Model, margin-aware Account, Sizers (incl. `LeveragedFraction`).
 - ✅ `Lead-in ≠ Trading Window` warmup, `BacktestResult` metrics, plots + quantstats hook.
-- ✅ **AI Advisor** confirm/veto gate with deterministic content-addressed cache; Claude provider.
-- ✅ **Data**: Binance (public REST, no dep) and yfinance (split-only adjust) sources, Parquet cache,
-  and an `InMemorySource` for offline/synthetic runs.
-- ✅ **Pepperstone CFDs via cTrader**: timestamp/price decode, whole-hour offset correction, and
-  17:00-NY day-anchored bucketing that rebuilds 4h/1d from 1h to match TradingView (all tested);
-  the Spotware Protobuf transport is the one live-only seam.
+- ✅ **Reference feeds** — observe an instrument (e.g. SPY for a regime filter) without
+  trading it, stepped in lockstep so it stays look-ahead-safe.
+
+### Running many — the research primitives
+
+All exported from `hermes` directly:
+
+| What you want to know | Primitive |
+|---|---|
+| Does it generalise across instruments? | `run_batch` → `BatchResult` |
+| Could I have held all of these at once? | `PortfolioBacktest` (one shared Account) |
+| Does it survive survivorship bias? | `UniverseBacktest` + `ConstituentCalendar` |
+| Do the parameters hold out of sample? | `WalkForward`, `split_isoos` |
+| Does the edge survive real friction? | `cost_sensitivity` |
+| Was it the strategy or the bull market? | `regime_analysis` |
+| Is it distinguishable from luck? | `validate` → `StatValidation` (bootstrap CIs, Monte Carlo, PSR/DSR, sample quality) |
+| Does the AI gate beat a weighted coin? | `run_random_simulations` |
+
+### AI
+
+- ✅ **AI Advisor** confirm/veto gate with a deterministic content-addressed cache; Claude
+  (default) and DeepSeek providers; per-call observability with token/cost accounting and a
+  **fail-open count** so a run whose gate silently errored is detectable.
+- ✅ **Point-in-time Context Enrichers** — fundamentals as reported, 10-K sections, news
+  windows — keyed on `(ticker, as_of)` so they cannot leak the future into a decision.
+
+### Data
+
+- ✅ Binance spot + futures (public REST, no dep), yfinance (split-only adjust), Tiingo,
+  Parquet cache with gap-aware incremental fetch, and an `InMemorySource` for offline runs.
+- ✅ **Pepperstone CFDs via cTrader**: timestamp/price decode, whole-hour offset correction,
+  and 17:00-NY day-anchored bucketing that rebuilds 4h/1d from 1h to match TradingView (all
+  tested); the Spotware Protobuf transport is the one live-only seam.
 
 Try it: `python examples/sma_crossover_with_ai.py`
 
+## The `hermes` CLI — the research loop as commands
+
+The point of the pivot (ADR-0010): an agent shouldn't have to write a script per
+question. Every command takes `--json` and puts **one** JSON document on stdout, with
+progress on stderr — so piping is always safe. Exit codes: `0` fine, `2` ran but
+produced nothing usable (e.g. zero trades), `1` bad request.
+
+```bash
+hermes strategies                 # what can I run? (broken files listed with their error)
+hermes run ema_crossover --symbol AAPL --start 2021-01-01 -p fast=10
+hermes runs                       # what have I already tried?
+hermes show 35fc --trades         # a stored run (key prefixes work)
+hermes analyze 35fc               # execute the rubric; writes analysis.json
+hermes review 35fc                # a written verdict over that evidence
+```
+
+**Runs are recorded and input-keyed.** The key hashes the strategy's *file contents*
+plus symbol, window, parameters and sizer, so re-running an identical configuration is
+free (`"from_cache": true`) and editing the strategy invalidates its old runs rather
+than serving a result the current code wouldn't produce. That makes `hermes runs` a real
+experiment log — the memory that lets a research agent resume instead of re-deriving.
+
+### `hermes analyze` — the rubric, computed
+
+The eight axes, cheapest first. The first six run by default; the last two are opt-in
+because they cost many backtests.
+
+| Axis | Question |
+|---|---|
+| `trades` | Is the P&L an edge, or two lucky trades? |
+| `costs` | Does it survive 1x and 2x friction? |
+| `oos` | Does it hold on data the parameters didn't see? |
+| `validation` | Is it distinguishable from luck? (CIs, Monte Carlo, PSR/DSR, sample quality) |
+| `regime` | The strategy, or being long in a bull market? |
+| `gate` | Was the AI gate actually in effect, or did it fail open? |
+| `walkforward` | Do *fitted* parameters hold out of sample? |
+| `baseline` | Does the AI gate beat a coin weighted to the same approval rate? |
+
+An axis that can't run reports `ran: false` with the reason rather than failing the
+whole analysis — a partial answer beats an exception. Real output, on a run whose
+headline looked healthy (24.7% return, Sharpe 0.54):
+
+```
+  ✓ trades       the top 5 trades are 100% of all winning P&L; every trade is buy
+  ✓ costs        edge survives 1x and 2x costs
+  ✓ oos          in-sample Sharpe 0.39 does not carry out of sample (-0.40)
+  ✓ validation   Only 13 trades — need ≥ 30…; deflated Sharpe 82% once the search is accounted for
+  ✓ regime       all profit comes from Bull regimes (bull 28,573 vs bear -3,880)
+  · gate         no AI advisor on this run
+```
+
+### `hermes review` — interpretation, not calculation
+
+`review` hands `result.json` **and** `analysis.json` to Claude Code running headlessly
+(`claude -p`, your subscription — no API key, no billed request) and asks for a verdict.
+It deliberately runs **without Bash**: Hermes computes every number, the reviewer only
+reads and judges them. An LLM shelling out to work out whether an edge survives costs
+would be slower, unauditable, and non-reproducible. If no `analysis.json` is attached,
+the prompt tells the reviewer the axes are *unmeasured* and names the command that would
+measure them — so a review can never quietly imply it checked something it didn't.
+
 ### Known gaps / next up
 
+- **Universe runs are not in the CLI yet.** `hermes run` covers single-symbol backtests;
+  `UniverseBacktest` / `PortfolioBacktest` runs are still library- or UI-only. Discovery
+  recognises `build_backtest` but not yet `build_universe_backtest`.
 - **cTrader live transport** (`_request_trendbars`) needs Spotware credentials + network — the
   decode/normalise/resample/anchoring pipeline around it is implemented and tested.
 - **Dividend-as-cash** on ex-dates: yfinance surfaces the data; wiring it into the Account is a TODO.
 - **Live deployment** (streaming `DataSource` + real broker `ExecutionVenue`) is deliberately out of
   scope — the seam exists, the adapters don't.
-- **Optimization** (grid/walk-forward) deferred by design; the pure `(params, data) → result` core is ready.
+- **Typing**: `mypy` is configured `strict` over `src/hermes` (the Streamlit layer is exempt)
+  but is **not yet green** — ~340 pre-existing errors. The enforced gates are `pytest` and `ruff check .`. See [`CLAUDE.md`](./CLAUDE.md).
 
 ## Using Hermes with Claude Code
 
@@ -103,7 +231,10 @@ for a router that explains the flow; the short version:
 Main flow: **`/hermes-strategy` → run → analyse → iterate.** The four `automatic` skills
 fire on their own in conversation; `hermes-strategy` and `ask-hermes` you invoke by name.
 The skills read the repo's living docs (`CONTEXT.md`, `examples/`, ADRs), so they stay in
-step with the code.
+step with the code — which is why those docs are treated as source, not commentary.
+
+[`CLAUDE.md`](./CLAUDE.md) records the repo conventions an agent needs (which gates are
+authoritative, the strategy-file contract, what never to commit).
 
 **Using the skills in another project.** Claude Code doesn't auto-load skills from
 installed packages, so they're bundled in the wheel and materialised on demand:
@@ -122,9 +253,7 @@ hermes.install_skills()        # or hermes.install_skills(user=True)
 
 This copies the five user-facing skills plus a `hermes-reference/` folder (CONTEXT.md,
 ADRs, the example) the ported skills point at. `hermes-extend` stays repo-only (it targets
-the library's own source). Afterwards all three consumers work in that project: **you**
-(`/hermes-strategy`), **Claude Code** (the model-invoked utilities fire on their own), and
-the **UI's headless review** (`hermes-analyze-results` resolves in the project's cwd).
+the library's own source).
 
 ## Web UI
 
@@ -140,5 +269,22 @@ Run. You get an interactive **equity curve + drawdown**, **metric cards**, a **t
 table**, and a **Claude review** — an AI diagnosis of the run produced by driving *Claude
 Code headlessly* (`claude -p`, reusing the `hermes-analyze-results` skill and your
 subscription — no API key, no billed request), written to `.hermes_cache/reviews/` and
-shown on refresh. AI-generated strategies auto-review; others review on a button. If the
-headless call isn't available, the page shows a copy-paste prompt to run it by hand.
+shown on refresh. Runs are cached by input hash in `.hermes_cache/runs/`, so re-opening a
+previous configuration is instant. A strategy file that fails to import is reported inline
+rather than taking the whole picker down.
+
+> Per ADR-0010 the UI is becoming one of several front-ends over the same library
+> primitives, not the only place some of them exist.
+
+## Strategy files
+
+`strategies/*.py` follow a discovery contract so they drop straight into the UI, the skills,
+and (soon) the CLI:
+
+- `GENERATED_BY = "hermes-strategy"` — provenance marker, when written by the skill;
+- `build_backtest(**overrides) -> Backtest` — a factory returning a fully-configured run,
+  building a **fresh** Strategy each call so re-runs are clean;
+- `if __name__ == "__main__":` for direct CLI use.
+
+A universe-scale run returns a `UniverseBacktest` rather than a `Backtest`, so it exposes
+`build_universe_backtest(**overrides)` instead — see `strategies/gap_breakout_sp500.py`.

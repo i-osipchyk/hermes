@@ -2,8 +2,15 @@
 trading strategies on candlestick data.
 
 See ``CONTEXT.md`` for the ubiquitous language and ``docs/adr/`` for the load-bearing
-architectural decisions. The public surface below is the intended entry point for
-strategy authors.
+architectural decisions.
+
+This module is the library's **map**: every name a strategy author or a research
+agent needs is re-exported here, grouped by the same seams the package layout uses
+(core / data / indicators / strategy / execution / ai / backtest). If a capability
+exists in Hermes, it is importable from ``hermes`` directly — so
+``python -c "import hermes; print(hermes.__all__)"`` is an honest inventory rather
+than a subset. Sub-packages remain importable (``from hermes.backtest import ...``)
+for anyone who prefers the narrower namespace.
 """
 
 from __future__ import annotations
@@ -16,22 +23,48 @@ from .ai import (
     AIProvider,
     ClaudeProvider,
     ContextEnricher,
+    DecisionCache,
+    DeepSeekProvider,
     EDGARFilingEnricher,
+    LLMCallRecord,
+    LLMObservabilityLog,
     MassiveFundamentalsEnricher,
     MassiveFundamentalsScreen,
     PolygonNewsEnricher,
+    RandomAdvisor,
     YFinanceFundamentalsEnricher,
     YFinanceFundamentalsScreen,
 )
 from .backtest import (
     Backtest,
     BacktestResult,
+    BatchResult,
     BenchmarkComparison,
+    BenchmarkStats,
+    ConfidenceInterval,
+    Metrics,
+    MetricsCI,
+    MonteCarloStats,
     PortfolioBacktest,
     PortfolioResult,
+    RegimeAnalysis,
+    RegimeStats,
+    SampleQuality,
     StatValidation,
     UniverseBacktest,
     UniverseResult,
+    WalkForward,
+    WalkForwardResult,
+    WalkForwardWindow,
+    cost_sensitivity,
+    plot_equity,
+    plot_trades,
+    regime_analysis,
+    run_batch,
+    run_random_simulations,
+    run_universe_random_simulations,
+    split_isoos,
+    tearsheet,
     validate,
 )
 from .core import (
@@ -48,17 +81,41 @@ from .core import (
     Timeframe,
 )
 from .data import (
+    BarCache,
     BinanceFuturesSource,
     BinanceSource,
     ConstituentCalendar,
     CTraderSource,
     DataSource,
+    InMemorySource,
+    MultiTimeframeView,
     PepperstoneSource,
     TiingoSource,
+    TimeframeSeries,
     YFinanceSource,
 )
 from .data._ssl import ensure_system_trust as use_system_certs
-from .execution import Order, OrderType, Position, Side, Trade
+from .execution import (
+    Account,
+    CommissionModel,
+    CostModel,
+    ExecutionVenue,
+    FinancingModel,
+    Liquidity,
+    MakerTakerCommission,
+    Order,
+    OrderStatus,
+    OrderType,
+    PercentCommission,
+    PerLotCommission,
+    PerShareCommission,
+    Position,
+    Side,
+    SimulatedVenue,
+    SlippageModel,
+    SpreadModel,
+    Trade,
+)
 from .indicators import (
     ADX,
     ATR,
@@ -71,6 +128,31 @@ from .indicators import (
     FairValueGap,
     Fractals,
     Indicator,
+    LibraryIndicator,
+)
+from .research import (
+    Analysis,
+    AxisResult,
+    BrokenStrategy,
+    LedgerEntry,
+    RestoredResult,
+    ReviewStatus,
+    RunLedger,
+    RunMeta,
+    RunRecord,
+    StrategyEntry,
+    analyze,
+    build_source,
+    cache_key,
+    configured_backtest,
+    declared_parameters,
+    default_config,
+    discover,
+    discover_all,
+    restore_result,
+    run_universe,
+    source_names,
+    strategy_hash,
 )
 from .skilltools import install_skills
 from .strategy import (
@@ -81,13 +163,15 @@ from .strategy import (
     Reference,
     RiskCash,
     RiskPercent,
+    Sizer,
+    SizingContext,
     Strategy,
     Units,
 )
 
 __all__ = [
     "__version__",
-    # core
+    # --- core: the vocabulary every other seam speaks ------------------------
     "Bar",
     "Timeframe",
     "Symbol",
@@ -99,17 +183,22 @@ __all__ = [
     "AssetClass",
     "PriceBasis",
     "SessionCalendar",
-    # data
+    # --- data: market data in (the read half of the parity seam) -------------
     "DataSource",
-    "ConstituentCalendar",
     "YFinanceSource",
     "BinanceSource",
     "BinanceFuturesSource",
     "CTraderSource",
     "PepperstoneSource",
     "TiingoSource",
-    # indicators
+    "InMemorySource",
+    "ConstituentCalendar",
+    "BarCache",
+    "MultiTimeframeView",
+    "TimeframeSeries",
+    # --- indicators ----------------------------------------------------------
     "Indicator",
+    "LibraryIndicator",
     "SMA",
     "EMA",
     "RSI",
@@ -120,27 +209,48 @@ __all__ = [
     "FairValueGap",
     "FVG",
     "ADX",
-    # strategy
+    # --- strategy: user-authored logic + its declared inputs -----------------
     "Strategy",
     "Parameter",
     "Reference",
+    "Sizer",
+    "SizingContext",
     "Units",
     "NotionalCash",
     "EquityFraction",
     "LeveragedFraction",
     "RiskCash",
     "RiskPercent",
-    # execution
+    # --- execution: orders out (the write half of the parity seam) -----------
+    "ExecutionVenue",
+    "SimulatedVenue",
     "Order",
     "OrderType",
+    "OrderStatus",
     "Side",
     "Trade",
     "Position",
-    # ai
+    "Account",
+    "Liquidity",
+    "CostModel",
+    "CommissionModel",
+    "PercentCommission",
+    "PerShareCommission",
+    "PerLotCommission",
+    "MakerTakerCommission",
+    "SpreadModel",
+    "SlippageModel",
+    "FinancingModel",
+    # --- ai: the optional confirm/veto gate ----------------------------------
     "AIAdvisor",
     "AIProvider",
     "AdvisorDecision",
     "ClaudeProvider",
+    "DeepSeekProvider",
+    "RandomAdvisor",
+    "DecisionCache",
+    "LLMCallRecord",
+    "LLMObservabilityLog",
     "ContextEnricher",
     "YFinanceFundamentalsEnricher",
     "YFinanceFundamentalsScreen",
@@ -148,17 +258,64 @@ __all__ = [
     "MassiveFundamentalsScreen",
     "EDGARFilingEnricher",
     "PolygonNewsEnricher",
-    # backtest
+    # --- backtest: running one ------------------------------------------------
     "Backtest",
     "BacktestResult",
+    "Metrics",
     "BenchmarkComparison",
+    "BenchmarkStats",
+    # --- backtest: running many (the research primitives) --------------------
     "PortfolioBacktest",
     "PortfolioResult",
-    "StatValidation",
     "UniverseBacktest",
     "UniverseResult",
+    "run_batch",
+    "BatchResult",
+    "WalkForward",
+    "WalkForwardResult",
+    "WalkForwardWindow",
+    "split_isoos",
+    "cost_sensitivity",
+    "regime_analysis",
+    "RegimeAnalysis",
+    "RegimeStats",
+    "run_random_simulations",
+    "run_universe_random_simulations",
+    # --- backtest: judging one ------------------------------------------------
     "validate",
-    # tooling
+    "StatValidation",
+    "MetricsCI",
+    "ConfidenceInterval",
+    "MonteCarloStats",
+    "SampleQuality",
+    # --- reporting ------------------------------------------------------------
+    "plot_equity",
+    "plot_trades",
+    "tearsheet",
+    # --- research loop: enumerate, record, judge (ADR-0010) -------------------
+    "discover",
+    "discover_all",
+    "StrategyEntry",
+    "BrokenStrategy",
+    "default_config",
+    "declared_parameters",
+    "configured_backtest",
+    "run_universe",
+    "RunLedger",
+    "RunMeta",
+    "RunRecord",
+    "LedgerEntry",
+    "RestoredResult",
+    "restore_result",
+    "cache_key",
+    "strategy_hash",
+    "analyze",
+    "Analysis",
+    "AxisResult",
+    "ReviewStatus",
+    "build_source",
+    "source_names",
+    # --- tooling --------------------------------------------------------------
     "install_skills",
     "use_system_certs",
 ]

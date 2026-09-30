@@ -29,9 +29,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from hermes.backtest import BacktestResult
+from hermes.research import discovery, review, sources, universes
+from hermes.research import ledger as _rc
 from hermes.strategy import EquityFraction, LeveragedFraction, NotionalCash, RiskCash, RiskPercent, Units
-from hermes.webui import discovery, review, sources, universes
-from hermes.webui import run_cache as _rc
 
 st.set_page_config(page_title="Hermes Backtester", layout="wide")
 st.title("Hermes — backtesting")
@@ -404,7 +404,10 @@ def _split_result(result, is_frac: float):
 
 # --- pick a strategy -------------------------------------------------------
 
-entries = discovery.discover()
+entries, broken = discovery.discover_all()
+for b in broken:
+    with st.expander(f"⚠️ `{b.path.name}` failed to load — {b.error}", expanded=False):
+        st.code(b.traceback, language="text")
 if not entries:
     st.info(
         "No strategies found in `strategies/`. Create one with the **`/hermes-strategy`** "
@@ -460,9 +463,11 @@ _has_advisor = defaults.advisor is not None
 _AI_MODELS = ["claude", "deepseek"]
 selected_ai_model: str = "claude"
 if _has_advisor:
-    import os as _os
-    _claude_label = f"Claude ({_os.getenv('MODEL', 'claude-opus-4-8')})"
-    _deepseek_label = f"DeepSeek ({_os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')})"
+    # Label from the providers' own defaults so the UI can't drift from the code.
+    from ..ai.claude import _default_model as _claude_default
+    from ..ai.deepseek import DEFAULT_MODEL as _deepseek_default
+    _claude_label = f"Claude ({_claude_default()})"
+    _deepseek_label = f"DeepSeek ({_deepseek_default})"
     selected_ai_model = st.selectbox(
         "Model",
         _AI_MODELS,
@@ -631,7 +636,7 @@ if run or st.session_state.pop("_auto_run", False):
             st.session_state.pop("result", None)
         else:
             from hermes.backtest import UniverseBacktest
-            from hermes.webui.sources import build_source as _build_source
+            from hermes.research.sources import build_source as _build_source
 
             cal = universes.load_calendar(universe)
             defaults = discovery.default_config(entry)

@@ -25,17 +25,37 @@ from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Pricing table — USD per million tokens (MTok).
-# Add rows for new models; the longest prefix match wins.
+#
+# Matching is LONGEST-PREFIX, so a more specific row always wins over a less
+# specific one ("claude-opus-4-8" must not be priced by the "claude-opus-4" row)
+# and dated snapshots ("claude-opus-5-20260401") still resolve. There is
+# deliberately NO bare "claude-*" catch-all: an unknown model must return None
+# so callers can show "unpriced" rather than silently bill it at another
+# generation's rates.
+#
+# Verified against Anthropic's published rates on 2026-09-30. Cache rates follow
+# the standard 0.1x (read) / 1.25x (write) of input, except where a model
+# documents its own read rate. Re-check before trusting a cost figure.
 # ---------------------------------------------------------------------------
+PRICING_VERIFIED_ON = "2026-09-30"
+
 _PRICING: list[tuple[str, dict[str, float]]] = [
+    # --- Claude 5 generation --------------------------------------------------
+    ("claude-fable-5-1",   {"input": 10.00, "output": 50.00, "cache_read": 0.25,  "cache_write": 12.50}),
+    ("claude-fable-5",     {"input": 10.00, "output": 50.00, "cache_read": 1.00,  "cache_write": 12.50}),
+    ("claude-opus-5",      {"input":  5.00, "output": 25.00, "cache_read": 0.50,  "cache_write":  6.25}),
+    ("claude-sonnet-5",    {"input":  2.00, "output": 10.00, "cache_read": 0.20,  "cache_write":  2.50}),
+    # --- Claude 4.6-4.8 -------------------------------------------------------
+    ("claude-opus-4-8",    {"input":  5.00, "output": 25.00, "cache_read": 0.50,  "cache_write":  6.25}),
+    ("claude-opus-4-7",    {"input":  5.00, "output": 25.00, "cache_read": 0.50,  "cache_write":  6.25}),
+    ("claude-opus-4-6",    {"input":  5.00, "output": 25.00, "cache_read": 0.50,  "cache_write":  6.25}),
+    ("claude-sonnet-4-6",  {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
+    ("claude-haiku-4-5",   {"input":  1.00, "output":  5.00, "cache_read": 0.10,  "cache_write":  1.25}),
+    # --- Claude 4 generation (kept so old cached runs still price) -------------
     ("claude-opus-4",      {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75}),
     ("claude-sonnet-4",    {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
     ("claude-haiku-4",     {"input":  0.80, "output":  4.00, "cache_read": 0.08,  "cache_write":  1.00}),
-    # Legacy / fallback Claude
-    ("claude-opus",        {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75}),
-    ("claude-sonnet",      {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
-    ("claude-haiku",       {"input":  0.80, "output":  4.00, "cache_read": 0.08,  "cache_write":  1.00}),
-    # DeepSeek
+    # --- DeepSeek -------------------------------------------------------------
     ("deepseek-reasoner",  {"input":  0.55, "output":  2.19, "cache_read": 0.14,  "cache_write":  0.55}),
     ("deepseek-chat",      {"input":  0.27, "output":  1.10, "cache_read": 0.07,  "cache_write":  0.27}),
     ("deepseek",           {"input":  0.27, "output":  1.10, "cache_read": 0.07,  "cache_write":  0.27}),
@@ -43,11 +63,13 @@ _PRICING: list[tuple[str, dict[str, float]]] = [
 
 
 def _price_for(model_id: str) -> dict[str, float] | None:
+    """Longest-prefix lookup, or None when the model is not in the table."""
     lower = model_id.lower()
+    best: tuple[int, dict[str, float]] | None = None
     for prefix, rates in _PRICING:
-        if lower.startswith(prefix):
-            return rates
-    return None
+        if lower.startswith(prefix) and (best is None or len(prefix) > best[0]):
+            best = (len(prefix), rates)
+    return None if best is None else best[1]
 
 
 def compute_cost(
@@ -98,6 +120,10 @@ class LLMCallRecord:
     # Prompts (full text)
     system_prompt: str
     user_prompt: str
+
+    # True when the provider errored and the gate failed OPEN (approved without a
+    # real decision). Defaulted so logs written before this field still load.
+    is_error: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -156,17 +182,19 @@ class LLMObservabilityLog:
         *,
         request_time: datetime,
         model_id: str,
-        input_tokens: int,
-        output_tokens: int,
-        cache_read_tokens: int,
-        cache_creation_tokens: int,
-        latency_ms: float,
+        # None when the provider reports no usage (stub / local / SDK omission).
+        input_tokens: int | None,
+        output_tokens: int | None,
+        cache_read_tokens: int | None,
+        cache_creation_tokens: int | None,
+        latency_ms: float | None,
         cost_usd: float | None,
         approved: bool,
         confidence: float,
         reason: str,
         system_prompt: str,
         user_prompt: str,
+        is_error: bool = False,
     ) -> None:
         self.calls.append(LLMCallRecord(
             request_time=request_time,
@@ -183,6 +211,7 @@ class LLMObservabilityLog:
             reason=reason,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            is_error=is_error,
         ))
 
     # --- aggregate properties -------------------------------------------------
@@ -225,6 +254,21 @@ class LLMObservabilityLog:
         return sum(live) / len(live) if live else None
 
     @property
+    def fail_open_calls(self) -> int:
+        """Calls where the provider errored and the trade was approved anyway.
+
+        Non-zero means the AI gate was partially or wholly absent for this run:
+        the metrics describe a *less gated* strategy than the one configured.
+        """
+        return sum(1 for c in self.calls if c.is_error)
+
+    @property
+    def fail_open_rate(self) -> float | None:
+        if not self.calls:
+            return None
+        return self.fail_open_calls / len(self.calls)
+
+    @property
     def approval_rate(self) -> float | None:
         if not self.calls:
             return None
@@ -243,6 +287,9 @@ class LLMObservabilityLog:
             "total_cost_usd": self.total_cost_usd,
             "avg_latency_ms": self.avg_latency_ms,
             "approval_rate": self.approval_rate,
+            # Non-zero => the gate failed open; treat the run's metrics with suspicion.
+            "fail_open_calls": self.fail_open_calls,
+            "fail_open_rate": self.fail_open_rate,
         }
 
     # --- persistence ----------------------------------------------------------

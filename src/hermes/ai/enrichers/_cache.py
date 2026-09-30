@@ -1,7 +1,10 @@
 """Disk cache for PIT enricher API responses.
 
 Cache layout:
-  <hermes_root>/.cache/pit/<ticker>/<YYYY-MM-DD>/<key>.json
+  <hermes_root>/.hermes_cache/pit/<ticker>/<YYYY-MM-DD>/<key>.json
+
+Lives under ``.hermes_cache/`` with every other Hermes cache (bars, ai, runs,
+reviews) so there is exactly one cache root to inspect, clear, or ignore.
 
 Keys used by the built-in enrichers:
   yf_fundamentals   — yfinance income/balance sheet metrics
@@ -25,7 +28,8 @@ def _find_project_root() -> Path:
         p = p.parent
     return Path(__file__).resolve().parents[5]  # fallback
 
-_CACHE_ROOT = _find_project_root() / ".cache" / "pit"
+
+_CACHE_ROOT = _find_project_root() / ".hermes_cache" / "pit"
 
 
 def _path(ticker: str, as_of: date, key: str) -> Path:

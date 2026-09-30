@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import traceback
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,21 @@ from ..backtest import Backtest
 from ..core import Symbol
 
 DEFAULT_STRATEGIES_DIR = Path("strategies")
+
+
+@dataclass(frozen=True, slots=True)
+class BrokenStrategy:
+    """A ``strategies/*.py`` that could not be imported.
+
+    Discovery never raises on a bad file: one unimportable strategy must not hide
+    every working one. Callers (the UI, and any agent enumerating runnable work)
+    render these alongside the healthy entries so the failure is visible and
+    attributable instead of silent.
+    """
+    name: str
+    path: Path
+    error: str          # "ExcType: message"
+    traceback: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,15 +59,43 @@ def _load_module(path: Path):
 
 
 def discover(directory: Path = DEFAULT_STRATEGIES_DIR) -> list[StrategyEntry]:
-    """Return the strategies in ``directory`` that expose ``build_backtest``."""
+    """Return the strategies in ``directory`` that expose ``build_backtest``.
+
+    Import failures are skipped, not raised — use :func:`discover_all` to see them.
+    """
+    entries, _ = discover_all(directory)
+    return entries
+
+
+def discover_all(
+    directory: Path = DEFAULT_STRATEGIES_DIR,
+) -> tuple[list[StrategyEntry], list[BrokenStrategy]]:
+    """Return ``(working, broken)`` for every ``*.py`` in ``directory``.
+
+    Loading a strategy executes its module, so a syntax error or a bad import in
+    one file used to abort the whole scan. Each file is now isolated: failures
+    become :class:`BrokenStrategy` records and the rest still load.
+    """
     directory = Path(directory)
     entries: list[StrategyEntry] = []
+    broken: list[BrokenStrategy] = []
     if not directory.exists():
-        return entries
+        return entries, broken
     for path in sorted(directory.glob("*.py")):
         if path.name.startswith("_"):
             continue
-        module = _load_module(path)
+        try:
+            module = _load_module(path)
+        except Exception as e:  # noqa: BLE001 — any import-time failure is a broken file
+            broken.append(
+                BrokenStrategy(
+                    name=path.stem,
+                    path=path,
+                    error=f"{type(e).__name__}: {e}",
+                    traceback=traceback.format_exc(),
+                )
+            )
+            continue
         factory = getattr(module, "build_backtest", None)
         if not callable(factory):
             continue
@@ -63,7 +107,7 @@ def discover(directory: Path = DEFAULT_STRATEGIES_DIR) -> list[StrategyEntry]:
                 generated_by=getattr(module, "GENERATED_BY", None),
             )
         )
-    return entries
+    return entries, broken
 
 
 def default_config(entry: StrategyEntry) -> Backtest:

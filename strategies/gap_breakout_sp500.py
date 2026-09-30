@@ -21,8 +21,10 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-# Allow running from the repo root without installing the package.
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Allow running as a script from anywhere: the repo root makes `strategies.*`
+# importable, and `src` covers the case where hermes isn't installed.
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path[:0] = [str(_ROOT), str(_ROOT / "src")]
 
 from hermes import Timeframe, UniverseBacktest
 from hermes.data import ConstituentCalendar, YFinanceSource
@@ -30,10 +32,33 @@ from strategies.gap_breakout import COST_MODEL, GapBreakout
 
 D1 = Timeframe.parse("1d")
 
-CALENDAR_PATH = Path(__file__).parent.parent / "sp500_history.csv"
+CALENDAR_PATH = _ROOT / "sp500_history.csv"
 START = datetime(2017, 1, 1, tzinfo=UTC)
 END   = datetime(2024, 12, 31, tzinfo=UTC)
 CASH  = 1_000_000.0
+
+
+def build_universe_backtest(**overrides) -> UniverseBacktest:
+    """A fully-configured S&P 500 UniverseBacktest.
+
+    Mirrors the ``build_backtest`` convention used by the single-symbol
+    strategies (see ``.claude/skills/hermes-strategy``); the name differs because
+    a universe run is a :class:`UniverseBacktest`, not a :class:`Backtest`.
+    ``overrides`` accepts any UniverseBacktest field (start/end/starting_cash/...).
+    """
+    cal = ConstituentCalendar.from_snapshot_csv(CALENDAR_PATH)
+    kw = dict(
+        strategy_factory=GapBreakout,
+        source=YFinanceSource(),
+        calendar=cal,
+        timeframes=[D1],
+        start=START,
+        end=END,
+        starting_cash=CASH,
+        cost_model=COST_MODEL,
+    )
+    kw.update(overrides)
+    return UniverseBacktest(**kw)
 
 
 def main() -> None:
@@ -47,23 +72,10 @@ def main() -> None:
         )
         sys.exit(1)
 
-    print("Loading constituent calendar …")
-    cal = ConstituentCalendar.from_snapshot_csv(CALENDAR_PATH)
-
-    universe = cal.ever_member(START, END)
-    print(f"Universe: {len(universe)} tickers ever in the S&P 500 during {START.year}–{END.year}")
-
     print("Building UniverseBacktest …")
-    ub = UniverseBacktest(
-        strategy_factory=GapBreakout,
-        source=YFinanceSource(),
-        calendar=cal,
-        timeframes=[D1],
-        start=START,
-        end=END,
-        starting_cash=CASH,
-        cost_model=COST_MODEL,
-    )
+    ub = build_universe_backtest()
+    universe = ub.calendar.ever_member(START, END)
+    print(f"Universe: {len(universe)} tickers ever in the S&P 500 during {START.year}–{END.year}")
 
     print("Running … (first run fetches bars from yfinance, may take 10–20 min)")
     result = ub.run()

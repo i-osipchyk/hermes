@@ -1,19 +1,31 @@
 """ClaudeProvider: the default AI Advisor backend (Anthropic SDK).
 
-Uses tool-use / structured output for a reliable approve/veto decision, prompt
-caching on the static system prompt to cut cost, and temperature 0 for stability
-(the DecisionCache guarantees full reproducibility regardless). Import-guarded so
-the core library does not hard-depend on ``anthropic``.
+Uses tool-use / structured output for a reliable approve/veto decision and prompt
+caching on the static system prompt to cut cost. Sampling params are left at the
+API default (a forced ``tool_choice`` disallows ``temperature``); reproducibility
+comes from the DecisionCache, not from sampling. Import-guarded so the core library
+does not hard-depend on ``anthropic``.
 """
 
 from __future__ import annotations
 
-# Default to the latest capable model; override via MODEL env var or constructor.
 import os
 
 from .provider import AdvisorDecision, AIProvider, LLMUsage
 
-DEFAULT_MODEL = os.getenv("MODEL", "claude-opus-4-8")
+# Default to the latest capable model. Override per-instance via the constructor,
+# or globally via HERMES_AI_MODEL. (Read at call time, not import time, so setting
+# the variable after `import hermes` still takes effect.)
+DEFAULT_MODEL = "claude-opus-5"
+
+
+def _default_model() -> str:
+    return os.getenv("HERMES_AI_MODEL") or DEFAULT_MODEL
+
+
+def _default_max_tokens() -> int:
+    return int(os.getenv("HERMES_AI_MAX_TOKENS", "1024"))
+
 
 _DECISION_TOOL = {
     "name": "record_decision",
@@ -31,9 +43,9 @@ _DECISION_TOOL = {
 
 
 class ClaudeProvider(AIProvider):
-    def __init__(self, model_id: str = DEFAULT_MODEL, max_tokens: int | None = None) -> None:
-        self.model_id = model_id
-        self.max_tokens = max_tokens or int(os.getenv("MAX_TOKENS", "1024"))
+    def __init__(self, model_id: str | None = None, max_tokens: int | None = None) -> None:
+        self.model_id = model_id or _default_model()
+        self.max_tokens = max_tokens or _default_max_tokens()
         self._client = None  # lazy: import anthropic on first use
 
     def _get_client(self):

@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from hermes import Backtest, CryptoPair, Strategy, Symbol, Timeframe
 from hermes.ai import AdvisorDecision, AIAdvisor, AIProvider, DecisionCache
 from hermes.core import Bar
@@ -98,3 +100,72 @@ def test_decision_cache_roundtrip_and_reuse(tmp_path):
     advisor.cache.put(key, d)
     got = advisor.cache.get(key)
     assert got == d
+
+
+# --- pricing table ---------------------------------------------------------
+
+def test_pricing_uses_longest_prefix_not_first_match():
+    """``claude-opus-4-8`` must not be priced by the ``claude-opus-4`` row.
+
+    The old first-match lookup billed Opus 4.8 and Opus 5 at Opus 4's
+    $15/$75 — a 3x overstatement on every AI-gated run.
+    """
+    from hermes.ai.observability import compute_cost
+
+    one_m = 1_000_000
+    assert compute_cost("claude-opus-5", one_m, one_m) == pytest.approx(30.0)
+    assert compute_cost("claude-opus-4-8", one_m, one_m) == pytest.approx(30.0)
+    assert compute_cost("claude-sonnet-5", one_m, one_m) == pytest.approx(12.0)
+    assert compute_cost("claude-haiku-4-5", one_m, one_m) == pytest.approx(6.0)
+    # the older generation still prices at its own (higher) rates
+    assert compute_cost("claude-opus-4", one_m, one_m) == pytest.approx(90.0)
+
+
+def test_pricing_resolves_dated_snapshots():
+    from hermes.ai.observability import compute_cost
+
+    assert compute_cost("claude-opus-5-20260401", 1_000_000, 0) == pytest.approx(5.0)
+
+
+def test_unknown_model_is_unpriced_rather_than_guessed():
+    """No bare ``claude-*`` catch-all: an unknown id must return None so callers
+    can show 'unpriced' instead of silently billing another generation's rates."""
+    from hermes.ai.observability import compute_cost
+
+    assert compute_cost("claude-something-unreleased", 1_000, 1_000) is None
+    assert compute_cost("gpt-4", 1_000, 1_000) is None
+
+
+# --- fail-open visibility --------------------------------------------------
+
+class ErroringProvider(AIProvider):
+    model_id = "stub-err"
+
+    def decide(self, system_prompt: str, user_prompt: str) -> AdvisorDecision:
+        return AdvisorDecision(True, 0.0, "boom", self.model_id, is_error=True)
+
+
+def test_provider_error_fails_open_but_is_counted(tmp_path):
+    """A provider outage approves the trade (documented fail-open) — and the run
+    must say so, or an ungated run is indistinguishable from a gated one."""
+    advisor = AIAdvisor(ErroringProvider(), cache=DecisionCache(tmp_path))
+    result = _run(advisor)
+
+    assert len(result.trades) == 1, "fail-open should let the trade through"
+    summary = result.to_dict()["llm_summary"]
+    assert summary["fail_open_calls"] == 1
+    assert summary["fail_open_rate"] == pytest.approx(1.0)
+
+
+def test_clean_run_reports_zero_fail_open(tmp_path):
+    advisor = AIAdvisor(StubProvider(approved=True), cache=DecisionCache(tmp_path))
+    summary = _run(advisor).to_dict()["llm_summary"]
+    assert summary["fail_open_calls"] == 0
+    assert summary["fail_open_rate"] == pytest.approx(0.0)
+
+
+def test_error_decisions_are_never_cached(tmp_path):
+    """An error must not poison the DecisionCache — the next run has to retry."""
+    cache = DecisionCache(tmp_path)
+    _run(AIAdvisor(ErroringProvider(), cache=cache))
+    assert list(tmp_path.rglob("*.json")) == []

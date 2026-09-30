@@ -185,7 +185,7 @@ class YFinanceFundamentalsScreen:
     """Deterministic S1/S2 filter using yfinance annual financials + 90-day PIT lag.
 
     screen() returns a dict with boolean signals and detail strings.
-    Reuses the same .cache/pit/ disk cache as YFinanceFundamentalsEnricher.
+    Reuses the same .hermes_cache/pit/ disk cache as YFinanceFundamentalsEnricher.
     """
 
     CACHE_KEY = "fund_screen"

@@ -89,6 +89,10 @@ drops straight into `hermes-backtest` and the web UI (`hermes-ui`):
   pass them only if the strategy needs a specific window;
 - `if __name__ == "__main__": build_backtest().run()` for direct CLI use.
 
+A **universe-scale** strategy (every ever-member of an index, via `ConstituentCalendar`)
+returns a `UniverseBacktest` rather than a `Backtest`, so it exposes
+`build_universe_backtest(**overrides)` instead — mirror `strategies/gap_breakout_sp500.py`.
+
 Completion criterion: the file imports only names that exist in `hermes`'s public API
 (verify against `src/hermes/__init__.py`), exposes `GENERATED_BY` + `build_backtest`, and
 reflects every interview answer.

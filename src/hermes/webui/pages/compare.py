@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 import plotly.graph_objects as go
 import streamlit as st
 
-from hermes.webui import run_cache as rc
+from hermes.research import ledger as rc
 
 st.set_page_config(page_title="Compare Runs — Hermes", layout="wide")
 st.title("Compare runs")

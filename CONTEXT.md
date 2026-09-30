@@ -69,7 +69,7 @@ A backtest's **Trading Window** is the date range you want results for. The engi
 _Avoid_: Warmup period (as the trading range), burn-in
 
 **AI Advisor**:
-An optional, pluggable component a Strategy can consult to **confirm or veto an already-formed candidate trade** (entry + Stop Loss + Take Profit + size). It receives a structured **text** context assembled from the strategy's current look-ahead-safe view (candlestick/OHLC windows per Timeframe, indicator values, trade params, Instrument metadata) filled into the author's prompt template, and returns a structured **Advisor Decision** (approve/veto + confidence + reason). It can only block a trade, never invent, size, or adjust one. Provider interface is pluggable with Anthropic Claude as the default (prompt caching on static parts, structured output, temperature 0).
+An optional, pluggable component a Strategy can consult to **confirm or veto an already-formed candidate trade** (entry + Stop Loss + Take Profit + size). It receives a structured **text** context assembled from the strategy's current look-ahead-safe view (candlestick/OHLC windows per Timeframe, indicator values, trade params, Instrument metadata) filled into the author's prompt template, and returns a structured **Advisor Decision** (approve/veto + confidence + reason). It can only block a trade, never invent, size, or adjust one. Provider interface is pluggable with Anthropic Claude as the default (prompt caching on static parts, forced-tool structured output). Reproducibility comes from the [[advisor-decision]] cache, not from sampling settings. When the provider errors the gate **fails open** — see [[fail-open]].
 _Avoid_: AI signal, LLM strategy, model (overloaded)
 
 **Advisor Decision**:
@@ -85,7 +85,7 @@ An AI-written diagnosis of a `BacktestResult` — is the edge real, biggest risk
 _Avoid_: Analysis, critique, AI report
 
 **Optimization**:
-Running the core backtest repeatedly over a space of Strategy Parameters (grid search, walk-forward). **Deferred from v1** but the design stays ready for it: a backtest run is a pure function of (Parameters, data), so an optimizer can later sit on top of the engine without bypassing its fill/cost logic.
+Running the core backtest repeatedly over a space of Strategy Parameters. **Implemented** — a run is a pure function of (Parameters, data), so the optimizer sits on top of the engine without bypassing its fill/cost logic. The grid is either given explicitly or auto-discovered from each Strategy Parameter's `choices`/`bounds`. Optimization **only ever happens in-sample**: the selected parameters are then judged on data the search never saw (see [[walk-forward-analysis]]). Picking parameters on the whole sample and reporting that number is the thing this vocabulary exists to prevent.
 _Avoid_: Tuning, Sweep, Backtest (optimization is many backtests)
 
 **BacktestResult**:
@@ -114,3 +114,57 @@ _Avoid_: Trading hours, market hours
 
 **Bar bucketing rule**:
 Higher-Timeframe bars anchor to **wall-clock/calendar boundaries in the Instrument's exchange-local timezone** (US stock → ET hours 09:00–10:00…; Binance → UTC hours), but are **session-bounded** — a bar never spans an overnight/weekend gap. Consequence: the first bar of a session is the partial one (09:00–10:00 holds only 09:30–10:00 of data); a bar is force-closed at session end. Bars are stored/compared in UTC internally; only the bucketing boundaries are local.
+
+## Language — running many
+
+The v1 vocabulary above describes **one** backtest. These terms describe the
+research loop built on top of it: a run is a pure function of (Parameters, data),
+so anything that runs it many times composes without touching the engine.
+
+**Reference Feed**:
+An Instrument a Strategy **observes but never trades** — SPY for a market-regime filter, DXY for a currency cross. The engine steps it in lockstep with the trading clock, so its values are look-ahead-safe, and Indicators declared on it count toward the Lead-in. Still single-instrument trading (ADR-0003): the Strategy trades its one Instrument and merely reads the Reference. Indicators on a Reference default to `latest_confirmed` (closed bars only) rather than including the Forming Bar.
+_Avoid_: Secondary instrument, benchmark (a benchmark is for comparison, a Reference is an input)
+
+**Constituent Calendar**:
+A point-in-time record of which Symbols belonged to an index over time, built from a historical-membership snapshot. Answers two questions: who was *ever* a member during a window, and what was each member's `membership_window`. It exists solely to kill **survivorship bias** — a universe fixed to today's index members silently deletes every company that was delisted or removed, leaving only winners.
+_Avoid_: Index list, ticker list (those are point-in-*now*, which is the bug)
+
+**Universe Backtest**:
+A bias-free portfolio backtest over an index. Consults a [[constituent-calendar]] for every ever-member in the window, clips each leg to that Symbol's membership period so the Strategy never trades a stock before it joined or after it left, and delegates to a [[portfolio-backtest]] over one shared capital pool.
+_Avoid_: Screener, multi-asset backtest
+
+**Portfolio Backtest**:
+Many single-Instrument backtests ("legs") sharing **one** Account, so the legs compete for the same capital and margin exactly as they would live. Distinct from running N independent backtests and adding the equity curves — that overstates capacity by assuming unlimited money.
+_Avoid_: Multi-strategy, basket
+
+**Batch Run**:
+The same Strategy run across a list of Symbols as **independent** backtests, each with its own capital, summarised into a comparison table. The right tool for "does this edge generalise across instruments?"; the wrong tool for "could I actually have held all of these at once" — that's a [[portfolio-backtest]].
+_Avoid_: Sweep (that is parameter space, not symbol space)
+
+**Walk-forward Analysis**:
+The honest form of [[optimization]]. The window is cut into successive in-sample/out-of-sample pairs; parameters are chosen on each IS block and scored only on the OOS block that follows, then the OOS blocks are stitched into a single equity curve. Rolling (fixed-length IS) or anchored (expanding IS). The stitched OOS result is the only number worth quoting — the IS result is, by construction, the best the search could find.
+_Avoid_: Backtest (the OOS curve is the result; the IS fits are scaffolding), cross-validation (time order matters here)
+
+**Cost Sensitivity**:
+Re-running one backtest with the [[cost-model]] scaled by several multipliers (typically 0x / 1x / 2x) to see how much of the edge survives realistic and pessimistic friction. An edge that exists only at 0x costs is a data artifact, not a strategy.
+_Avoid_: Slippage test (it covers all four cost components, not just slippage)
+
+**Regime Analysis**:
+Partitioning a run's Trades by the market state they were taken in (trend vs chop, high vs low volatility, benchmark up vs down) and reporting per-regime statistics. Separates "this strategy has an edge" from "this strategy was long during a bull market".
+_Avoid_: Market conditions, segmentation
+
+**Random Baseline**:
+A distribution of backtests in which the [[ai-advisor]]'s confirm/veto is replaced by approving each signal with fixed probability *p*. It answers the only question that matters about a gate: does the AI's selectivity beat a coin weighted to the same approval rate? An AI gate that lands inside its own random distribution has no demonstrated skill — it is just trading less.
+_Avoid_: Control group, null model
+
+**Statistical Validation**:
+The set of checks that ask whether a result is distinguishable from luck, rather than merely positive: bootstrap confidence intervals on the headline metrics, Monte Carlo reshuffling of the trade sequence, Probabilistic and Deflated Sharpe (the latter penalising the number of configurations tried), a minimum-track-record length, and a sample-quality verdict. Attaches to a [[backtestresult]] as `stat_validation`.
+_Avoid_: Significance testing (too narrow), p-value
+
+**Context Enricher**:
+A pluggable source of **point-in-time** text appended to the [[ai-advisor]]'s prompt — fundamentals as reported at the time, 10-K section text, a news window. `enrich(ticker, as_of) -> str`. The `as_of` argument is the whole point: an enricher that returns today's fundamentals for a 2019 decision has silently inserted look-ahead into the backtest. Responses are cached to `.hermes_cache/pit/` per (ticker, date).
+_Avoid_: Data feed, plugin, context (unqualified)
+
+**Fail-open**:
+The [[ai-advisor]]'s behaviour when its provider errors: the candidate trade is **approved** without a real decision, because the gate's only power is to block and an outage must not silently rewrite the strategy into one that never trades. Fail-open decisions are never written to the decision cache, are exempt from the confidence threshold, and are counted in the run's `llm_summary.fail_open_calls` — a non-zero count means the run's metrics describe a *less gated* strategy than the one configured, and should not be compared against a clean run.
+_Avoid_: Fallback, default approve (without the audit trail those imply no record)

@@ -23,7 +23,7 @@ from ._cache import cache_get, cache_set
 
 _BASE_URL = "https://api.polygon.io"
 _DEFAULT_DAYS_BACK = 30
-_DEFAULT_NEWS_COUNT = int(os.getenv("NEWS_COUNT", "10"))
+_DEFAULT_NEWS_COUNT = int(os.getenv("HERMES_NEWS_COUNT", "10"))
 
 
 def _get_key() -> str:

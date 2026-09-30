@@ -15,7 +15,7 @@ venv/
 .coverage
 htmlcov/
 
-# Hermes local caches (data + AI responses) — never commit
+# Hermes local caches — one root: bars/, ai/, pit/, runs/, reviews/. Never commit.
 .hermes_cache/
 *.parquet
 
@@ -31,5 +31,6 @@ htmlcov/
 # Local Claude Code settings (skills ARE committed; local settings are not)
 .claude/settings.local.json
 
-.cache/
-.research/
+
+# Ad-hoc research scripts' bulk outputs (hundreds of MB of CSVs)
+research/output/
