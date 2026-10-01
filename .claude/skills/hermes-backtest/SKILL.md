@@ -29,6 +29,12 @@ you never get a stale result for changed code. `--no-cache` forces a re-run.
 Before reporting "there's no such strategy", check `hermes strategies` — a file that
 fails to import is listed as broken with its error, and that's usually the real problem.
 
+**A zero-trade run exits 2 and diagnoses itself.** `hermes run` reports `coverage`
+(bars stepped, window actually covered) and a `zero_trade_diagnosis` naming the cause:
+no bars stepped (a symbol/window/Lead-in problem), bars stepped but every signal vetoed
+(the AI gate), or bars stepped and the entry condition never true (the thresholds).
+Report the stated cause — don't restate all three as possibilities.
+
 ## Steps
 
 1. **Locate the strategy** — `hermes strategies`. If several fit and the user was vague,
@@ -41,8 +47,8 @@ fails to import is listed as broken with its error, and that's usually the real 
      profit factor, number of trades;
    - the trade blotter (`hermes show <key> --trades`);
    - plots via `hermes.backtest.reporting` — equity+drawdown and trades-on-price.
-4. **Flag the obvious** — a zero-trade run (warmup too long / entry never true), a
-   suspiciously perfect equity curve, or too few trades to mean anything — and point the
+4. **Flag the obvious** — a suspiciously perfect equity curve, or too few trades to
+   mean anything — and point the
    user at `hermes-analyze-results` for a real diagnosis. For an AI-gated run, check
    `result.to_dict()["llm_summary"]["fail_open_calls"]`: non-zero means the provider
    errored and trades were approved without a real decision, so the metrics describe a

@@ -190,3 +190,44 @@ def test_analysis_lookup_and_summaries():
     assert a["trades"].note == "fine"
     assert a.ran == ["trades"] and a.failed == ["costs"]
     assert a.notes == ["trades: fine", "costs: nope"]
+
+
+# --- run coverage / zero-trade diagnosis ------------------------------------
+
+from hermes.research.analysis import diagnose_zero_trades, run_coverage  # noqa: E402
+
+_CURVE = [["2021-01-04T00:00:00+00:00", 10_000.0], ["2023-12-29T00:00:00+00:00", 10_500.0]]
+
+
+def test_coverage_reports_steps_and_window():
+    c = run_coverage({"equity_curve": _CURVE, "trades": [_t(1)], "vetoed_signals": []})
+    assert c["steps"] == 2 and c["trades"] == 1
+    assert c["first_step"].startswith("2021-01-04")
+
+
+def test_coverage_on_an_empty_result():
+    c = run_coverage({})
+    assert c == {"steps": 0, "first_step": None, "last_step": None,
+                 "trades": 0, "vetoed_signals": 0}
+
+
+def test_zero_trades_with_no_bars_blames_the_data():
+    why = diagnose_zero_trades({"equity_curve": [], "trades": []})
+    assert "ZERO bars" in why
+    assert "symbol" in why and "Lead-in" in why
+
+
+def test_zero_trades_with_bars_blames_the_entry_logic():
+    """The distinction that matters: the data arrived, so the window is not the bug."""
+    why = diagnose_zero_trades({"equity_curve": _CURVE, "trades": [], "vetoed_signals": []})
+    assert "never became true" in why
+    assert "2021-01-04" in why and "2023-12-29" in why
+    assert "thresholds, not the window" in why
+
+
+def test_zero_trades_with_everything_vetoed_blames_the_gate():
+    why = diagnose_zero_trades({
+        "equity_curve": _CURVE, "trades": [],
+        "vetoed_signals": [{"symbol": "AAPL"}, {"symbol": "AAPL"}],
+    })
+    assert "vetoed" in why and "entry logic works" in why

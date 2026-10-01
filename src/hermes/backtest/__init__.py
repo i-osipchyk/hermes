@@ -1,7 +1,21 @@
 """Backtesting: the engine, the result, and reporting."""
 
 from .batch import BatchResult, run_batch
+from .correlation import (
+    DIVERSIFYING_BELOW,
+    MIN_OVERLAP,
+    REDUNDANT_ABOVE,
+    CorrelationMatrix,
+    correlate_curves,
+    correlate_results,
+)
 from .engine import Backtest
+from .param_sensitivity import (
+    ParamCurve,
+    ParamPoint,
+    ParamSensitivity,
+    param_sensitivity,
+)
 from .portfolio import PortfolioBacktest, PortfolioResult
 from .random_baseline import run_random_simulations, run_universe_random_simulations
 from .regime import RegimeAnalysis, RegimeStats, regime_analysis
@@ -10,6 +24,10 @@ from .result import BacktestResult, BenchmarkComparison, BenchmarkStats, Metrics
 from .sensitivity import cost_sensitivity
 from .universe import UniverseBacktest, UniverseResult
 from .validation import (
+    TIER_CREDIBLE,
+    TIER_DEPLOYABLE,
+    TIER_EXPLORATORY,
+    TIER_UNKNOWN,
     ConfidenceInterval,
     MetricsCI,
     MonteCarloStats,
@@ -27,8 +45,18 @@ __all__ = [
     "BenchmarkStats",
     "BatchResult",
     "run_batch",
+    "correlate_curves",
+    "correlate_results",
+    "CorrelationMatrix",
+    "REDUNDANT_ABOVE",
+    "DIVERSIFYING_BELOW",
+    "MIN_OVERLAP",
     "PortfolioBacktest",
     "PortfolioResult",
+    "param_sensitivity",
+    "ParamSensitivity",
+    "ParamCurve",
+    "ParamPoint",
     "run_random_simulations",
     "run_universe_random_simulations",
     "plot_equity",
@@ -39,6 +67,10 @@ __all__ = [
     "ConfidenceInterval",
     "MonteCarloStats",
     "SampleQuality",
+    "TIER_EXPLORATORY",
+    "TIER_CREDIBLE",
+    "TIER_DEPLOYABLE",
+    "TIER_UNKNOWN",
     "validate",
     "WalkForward",
     "WalkForwardResult",

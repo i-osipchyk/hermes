@@ -17,12 +17,15 @@ from pathlib import Path
 # hermes-extend targets the library's own source, so it only makes sense in the repo.
 PORTABLE_SKILLS = [
     "ask-hermes",
+    "hermes-research",
+    "hermes-ideas",
+    "hermes-portfolio",
     "hermes-strategy",
     "hermes-explore-data",
     "hermes-backtest",
     "hermes-analyze-results",
 ]
-_REFERENCE_ITEMS = ["CONTEXT.md", "docs/adr", "examples"]
+_REFERENCE_ITEMS = ["CONTEXT.md", "docs/MANUAL.md", "docs/adr", "examples"]
 
 _PKG = Path(__file__).resolve().parent  # the installed `hermes` package dir
 

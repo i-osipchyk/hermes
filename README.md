@@ -11,10 +11,34 @@ Hermes is built to be driven by an **AI research agent** as much as by a person:
 a set of composable primitives, the vocabulary is written down, and the honest-backtest rules
 are recorded as decisions rather than folklore. See [Using Hermes with Claude Code](#using-hermes-with-claude-code).
 
+## The process
+
+The repo is organised around an explicit five-step research process (ADR-0011), because an
+agent with good tools and no process optimises for the wrong thing — given a backtest and a
+free hand it will find a number that looks good, since finding numbers is what search does.
+Each step is backed by something computed rather than suggested:
+
+| Step | What it is | Tooling |
+|---|---|---|
+| **1 Idea generation** | Books, discretionary screen time, other traders, the data | `hermes ideas` — a committed backlog with provenance and a per-source hit rate |
+| **2 Quantification** | English → unambiguous if/and rules, with units | `hermes-strategy` — hunt the ambiguity, name every invented number |
+| **3 Testing** | Historical → robustness → out-of-sample → forward | `hermes analyze` — evidence tiers, parameter sensitivity, Monte Carlo, costs, walk-forward |
+| **4 Portfolio** | Combine *uncorrelated* strategies | `hermes correlate` — the matrix and the diversification ratio |
+| **5 Repeat** | Name the gap, go back to step 1 | `hermes-portfolio` + `hermes ideas --open` |
+
+The last rung of step 3, **forward testing** on paper or minimum size, is outside Hermes —
+there is no live venue (ADR-0001: the seam exists, the adapter doesn't). A strategy that
+survives the whole rubric is *ready to forward test*, never "deployable".
+
 ## Design status
+
+**New here? Read [`docs/MANUAL.md`](./docs/MANUAL.md)** — how to run all five stages,
+with an AI agent driving and entirely by hand, with every command and the Python
+equivalent.
 
 The domain model is **settled**. Start here before reading code:
 
+- [`docs/MANUAL.md`](./docs/MANUAL.md) — the user manual: the five stages, end to end.
 - [`CONTEXT.md`](./CONTEXT.md) — the glossary / ubiquitous language (~40 terms). Two sections:
   the v1 vocabulary for **one** backtest, then the terms for **running many** (universe,
   walk-forward, cost sensitivity, random baseline, statistical validation).
@@ -28,7 +52,8 @@ The domain model is **settled**. Start here before reading code:
   7. [Companion Claude Code skills in-repo](./docs/adr/0007-companion-claude-code-skills-in-repo.md)
   8. [Backtesting web UI with Claude Code review](./docs/adr/0008-backtesting-web-ui-with-claude-code-review.md)
   9. [Liquidity-aware costs (maker/taker)](./docs/adr/0009-liquidity-aware-costs.md)
-  10. [Agent-first research surface](./docs/adr/0010-agent-first-research-surface.md) — the current direction
+  10. [Agent-first research surface](./docs/adr/0010-agent-first-research-surface.md)
+  11. [The five-step research process](./docs/adr/0011-five-step-research-process.md) — the current direction
 
 ## Core ideas in one breath
 
@@ -62,13 +87,14 @@ src/hermes/
 ├── ai/           # AIAdvisor, provider interface, Claude/DeepSeek providers, response cache,
 │                 #   point-in-time ContextEnrichers, LLM observability
 ├── backtest/     # Engine (the clock), BacktestResult, the research primitives, reporting
-├── research/     # The loop: strategy discovery, the run ledger, the rubric, the review
+├── research/     # The loop: the idea backlog, strategy discovery, the run ledger,
+│                 #   the rubric, the review
 ├── cli.py        # `hermes` — the loop as commands, with --json everywhere
 └── webui/        # Local Streamlit app over the same primitives
 ```
 
 Everything public is re-exported from the top level, so
-`python -c "import hermes; print(hermes.__all__)"` is a complete inventory (136 names), not a
+`python -c "import hermes; print(hermes.__all__)"` is a complete inventory (156 names), not a
 subset. A test enforces that (`tests/test_public_api.py`).
 
 ## Install (dev)
@@ -91,7 +117,7 @@ decisions), `pit/` (point-in-time enricher responses), `runs/`, `reviews/`,
 
 ## Status
 
-**Usable.** 282 tests, fully offline, ~2.4s.
+**Usable.** 337 tests, fully offline, ~2.8s.
 
 ### One backtest
 
@@ -120,6 +146,8 @@ All exported from `hermes` directly:
 | Was it the strategy or the bull market? | `regime_analysis` |
 | Is it distinguishable from luck? | `validate` → `StatValidation` (bootstrap CIs, Monte Carlo, PSR/DSR, sample quality) |
 | Does the AI gate beat a weighted coin? | `run_random_simulations` |
+| Is the result a plateau or a lucky spike? | `param_sensitivity` |
+| Are these strategies the same bet? | `correlate_curves` / `correlate_results` |
 
 ### AI
 
@@ -155,6 +183,11 @@ hermes analyze 35fc               # execute the rubric; writes analysis.json
 hermes review 35fc                # a written verdict over that evidence
 ```
 
+A zero-trade run exits `2` and diagnoses itself rather than listing possibilities —
+`coverage` reports the bars actually stepped, and `zero_trade_diagnosis` separates "no
+data reached the strategy" from "every signal was vetoed" from "the entry condition was
+never true", which need completely different fixes.
+
 **Runs are recorded and input-keyed.** The key hashes the strategy's *file contents*
 plus symbol, window, parameters and sizer, so re-running an identical configuration is
 free (`"from_cache": true`) and editing the strategy invalidates its old runs rather
@@ -163,15 +196,16 @@ experiment log — the memory that lets a research agent resume instead of re-de
 
 ### `hermes analyze` — the rubric, computed
 
-The eight axes, cheapest first. The first six run by default; the last two are opt-in
+The nine axes, cheapest first. The first seven run by default; the last two are opt-in
 because they cost many backtests.
 
 | Axis | Question |
 |---|---|
 | `trades` | Is the P&L an edge, or two lucky trades? |
 | `costs` | Does it survive 1x and 2x friction? |
+| `params` | Is the result a plateau, or a spike the search found? |
 | `oos` | Does it hold on data the parameters didn't see? |
-| `validation` | Is it distinguishable from luck? (CIs, Monte Carlo, PSR/DSR, sample quality) |
+| `validation` | Is it distinguishable from luck, and how much evidence is there? (CIs, Monte Carlo, PSR/DSR, **evidence tier**) |
 | `regime` | The strategy, or being long in a bull market? |
 | `gate` | Was the AI gate actually in effect, or did it fail open? |
 | `walkforward` | Do *fitted* parameters hold out of sample? |
@@ -221,15 +255,21 @@ for a router that explains the flow; the short version:
 
 | Skill | Invoke | What it does |
 |---|---|---|
+| `hermes-research` | automatic | **Owns the whole loop** — hypothesis → variants → run → analyse → iterate → verdict |
 | `ask-hermes` | `/ask-hermes` | Router — which skill fits your situation |
-| `hermes-strategy` | `/hermes-strategy` | Interview a trading idea → `strategies/<name>.py` + backtest config |
+| `hermes-strategy` | automatic or `/hermes-strategy` | Turn an idea into `strategies/<name>.py` + backtest config |
 | `hermes-explore-data` | automatic | Fetch + plot + analyse an instrument's candles |
 | `hermes-backtest` | automatic | Run a strategy's backtest, report metrics/blotter/plots |
 | `hermes-analyze-results` | automatic | Diagnose *why* a strategy wins/loses |
 | `hermes-extend` | automatic | Scaffold a custom Indicator / DataSource / ExecutionVenue |
 
-Main flow: **`/hermes-strategy` → run → analyse → iterate.** The four `automatic` skills
-fire on their own in conversation; `hermes-strategy` and `ask-hermes` you invoke by name.
+**Two ways to work.** Describe an idea and ask for it to be *investigated* and
+`hermes-research` takes the whole loop — it declares an iteration budget, checks the
+ledger for work already done, writes and runs variants, judges each against the rubric,
+iterates only on what the analysis points at, and stops on an explicit rule (the rubric
+holds, no out-of-sample improvement in two iterations, or the parameter budget is spent).
+It asks first before spending money (an AI Advisor, paid data) or changing the idea.
+Or walk the hops yourself: **`/hermes-strategy` → run → analyse → iterate**.
 The skills read the repo's living docs (`CONTEXT.md`, `examples/`, ADRs), so they stay in
 step with the code — which is why those docs are treated as source, not commentary.
 

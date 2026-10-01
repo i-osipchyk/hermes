@@ -5,9 +5,10 @@ Hermes is a bar-based backtesting framework aimed at being driven by an AI resea
 
 | File | What it is |
 |---|---|
-| `CONTEXT.md` | The ubiquitous language (~40 terms). Use these words; the code does. |
+| `docs/MANUAL.md` | The user manual — the five stages, with an agent and by hand. Where to look when you don't know the workflow. |
+| `CONTEXT.md` | The ubiquitous language (~50 terms). Use these words; the code does. |
 | `docs/adr/` | The load-bearing decisions. Cite them when behaviour hinges on one. |
-| `src/hermes/__init__.py` | The complete public inventory (136 names). If it's in Hermes, it's importable from `hermes`. |
+| `src/hermes/__init__.py` | The complete public inventory (156 names). If it's in Hermes, it's importable from `hermes`. |
 
 ## Environment
 
@@ -22,8 +23,9 @@ usable, `1` bad request.
 
 ```bash
 .venv/bin/hermes strategies        # what's runnable; broken files listed with their error
-.venv/bin/hermes run <name>        # run + record. --symbol --start --end --cash -p k=v
+.venv/bin/hermes run <name> --note "why"   # run + record. --symbol --start --end -p k=v
 .venv/bin/hermes runs              # the experiment log — CHECK IT BEFORE RE-RUNNING
+.venv/bin/hermes runs --note-contains "gap"      # find your own past reasoning
 .venv/bin/hermes show <key>        # a stored run; key prefixes work
 .venv/bin/hermes analyze <key>     # the rubric, computed; writes analysis.json
 .venv/bin/hermes review <key>      # a verdict over that evidence
@@ -32,6 +34,11 @@ usable, `1` bad request.
 Runs are input-keyed and cached, so an identical configuration is free. **Consult
 `hermes runs` before running something that may already have been tried** — that ledger
 is the project's memory across sessions, and it is the whole reason it exists.
+
+**Always pass `--note`.** It records *why* a configuration was run — the hypothesis, or
+what changed since the last variant. Without it `hermes runs` is a list of hashes; with
+it, it is a research log you (or a future session) can actually read. The note is not
+part of the cache key, because intent is not an input.
 
 Two rules about the review:
 - **Hermes computes, the reviewer interprets.** Never have an LLM calculate a rubric
@@ -46,7 +53,7 @@ Two rules about the review:
 Before calling anything done, both of these must pass:
 
 ```bash
-.venv/bin/python -m pytest          # 217 tests, offline, ~1.8s
+.venv/bin/python -m pytest          # 337 tests, offline, ~2.8s
 .venv/bin/python -m ruff check .     # clean across the whole repo
 ```
 
@@ -102,6 +109,9 @@ codebase is organised to prevent.
   fine to track; their output is not.
 - `.env` — credentials (`CTRADER_*`, `TIINGO_API_KEY`, `POLYGON_API_KEY`).
 
+**Do commit `research/ideas.json`.** The idea backlog is work product, not cache — losing
+it loses the thinking. It is the one Hermes artifact that is neither code nor cache.
+
 ## Configuration
 
 Hermes' own knobs are namespaced `HERMES_*`: `HERMES_AI_MODEL`, `HERMES_AI_MAX_TOKENS`,
@@ -112,6 +122,47 @@ them at call time, not import time.
 The LLM pricing table in `src/hermes/ai/observability.py` carries a `PRICING_VERIFIED_ON` date.
 If you touch model defaults, check it — a stale table silently misreports what a research run
 cost.
+
+## The five-step process (ADR-0011)
+
+Work here sits somewhere in: **idea generation → quantification → testing → portfolio →
+repeat.** Each step has tooling, and the process exists because an agent with good tools
+and no process will find a number that looks good instead of an edge that is real.
+
+```bash
+.venv/bin/hermes ideas --open        # 1. what is there to work on (+ --hit-rate)
+                                     # 2. quantification: hermes-strategy, no command
+.venv/bin/hermes run <name> --note   # 3. test: historical …
+.venv/bin/hermes analyze <key>       #    … robustness + out-of-sample
+.venv/bin/hermes correlate           # 4. portfolio: is this a new bet or the same one?
+```
+
+Three things that are easy to get wrong:
+
+- **An `exploratory` evidence tier is not a result.** `analyze`'s `validation` axis
+  reports the tier and why it stopped there. 30 trades is enough to form a view and
+  nowhere near enough to risk capital. Quote the tier.
+- **`params` fragile means the number was found, not earned.** If the metric collapses
+  one notch from the chosen parameter value, don't iterate toward a sharper peak — widen
+  the sample or drop the parameter.
+- **Hermes cannot forward test.** There is no live venue. A strategy that survives the
+  rubric is *ready to forward test*, never "deployable" — say it that way.
+
+When the task is "does this idea work?" rather than "implement this", the
+**`hermes-research`** skill owns steps 2–3 under a declared iteration budget, and stops on
+an explicit rule rather than when the number looks good. Two rules it encodes that apply to
+any research work here:
+
+- **Never tune on the whole sample.** Parameters are chosen in-sample and scored out of
+  sample (`hermes analyze --axes walkforward`). A number from fitting all the data is not
+  a result.
+- **Stop when improvement stops.** Two iterations with no out-of-sample gain means you
+  have become the search; further fiddling is hand-optimisation that the deflated Sharpe
+  no longer accounts for.
+
+Ask before spending money (an AI Advisor makes a billed call per signal; Tiingo/Polygon
+are paid) or before changing the instrument or the idea — that is a new research task,
+not another iteration.
 
 ## Where things are going
 

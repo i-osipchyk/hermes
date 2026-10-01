@@ -192,6 +192,7 @@ def _meta_for(entry, bt, args, params: dict):
         sizer=repr(bt.sizer),
         unconstrained=args.unconstrained,
         created_at=datetime.now(UTC).isoformat(),
+        note=getattr(args, "note", "") or "",
     )
 
 
@@ -214,17 +215,20 @@ def cmd_run(args: argparse.Namespace) -> int:
                         llm_log=getattr(result, "llm_log", None))
 
     m = result_dict.get("metrics", {})
+    payload_note = cached.meta.note if cached is not None else (args.note or "")
     payload = {
         "run_key": key, "strategy": entry.name, "symbol": bt.symbol.ticker,
         "source": bt.source.name, "start": bt.start.isoformat(), "end": bt.end.isoformat(),
-        "from_cache": from_cache, "metrics": m,
+        "from_cache": from_cache, "metrics": m, "note": payload_note,
     }
     lines = [
         f"{entry.name} · {bt.symbol.ticker} · {bt.source.name}"
         + ("   (from ledger)" if from_cache else ""),
         f"run  {key}",
-        *_metric_lines(m),
     ]
+    if payload_note:
+        lines.append(f"why  {payload_note}")
+    lines.extend(_metric_lines(m))
     gate = result_dict.get("llm_summary")
     if gate:
         payload["llm_summary"] = gate
@@ -232,10 +236,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         lines.append(f"  advisor     {gate.get('total_calls', 0)} calls"
                      + (f"   ⚠️  {fo} FAILED OPEN — run is less gated than configured"
                         if fo else "   gate clean"))
+    from .research.analysis import run_coverage
+
+    payload["coverage"] = run_coverage(result_dict)
     if not m.get("num_trades"):
+        from .research.analysis import diagnose_zero_trades
+
+        why = diagnose_zero_trades(result_dict)
+        payload["zero_trade_diagnosis"] = why
         lines.append("")
-        lines.append("  ⚠️  zero trades — check the warmup, the entry condition, "
-                     "and the date window.")
+        lines.append(f"  ⚠️  zero trades — {why}")
     _emit(payload, args.json, lines)
     return EXIT_OK if m.get("num_trades") else EXIT_EMPTY
 
@@ -248,12 +258,15 @@ def cmd_runs(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
 
     entries = RunLedger(args.runs_dir).entries(
-        strategy=args.strategy, ticker=args.symbol, limit=args.limit
+        strategy=args.strategy, ticker=args.symbol, limit=args.limit,
+        note_contains=args.note_contains,
     )
     payload = {"runs": [{"key": e.key, **e.meta.to_dict()} for e in entries]}
     lines = [f"{len(entries)} run(s) in the ledger"] if entries else ["ledger is empty"]
     for e in entries:
         lines.append(f"  {e.key}  {e.meta.created_at[:19]}  {e.meta.label}")
+        if e.meta.note:
+            lines.append(f"                      ↳ {e.meta.note}")
     _emit(payload, args.json, lines)
     return EXIT_OK if entries else EXIT_EMPTY
 
@@ -278,7 +291,10 @@ def cmd_show(args: argparse.Namespace) -> int:
         raise SystemExit(f"hermes: run {args.key!r} has no stored result")
 
     payload: dict = {"run_key": rec.key, "meta": rec.meta.to_dict(), "metrics": rec.metrics}
-    lines = [rec.meta.label, f"run  {rec.key}", *_metric_lines(rec.metrics)]
+    lines = [rec.meta.label, f"run  {rec.key}"]
+    if rec.meta.note:
+        lines.append(f"why  {rec.meta.note}")
+    lines.extend(_metric_lines(rec.metrics))
     if rec.fail_open_calls:
         lines.append(f"  ⚠️  {rec.fail_open_calls} advisor calls failed open")
     if args.trades:
@@ -343,10 +359,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         strategy_name = entry.name
         rec = ledger.load(run_key)
 
-    needs_rerun = {"costs", "oos", "walkforward"} & set(axes)
+    from .research.analysis import RESTORABLE_AXES
+
+    # A stored run only carries its serialised dict; axes needing real Trade objects
+    # or a benchmark series must re-run the backtest.
+    needs_rerun = set(axes) - RESTORABLE_AXES
     result = None
     if rec is not None and not needs_rerun:
-        # Every requested axis reads a finished run, so the stored one will do.
         from .research.ledger import restore_result
         result = restore_result(rec.result)
     elif bt is not None:
@@ -370,6 +389,144 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         lines.append(f"  {'✓' if a.ran else '·'} {a.axis:<12} {a.note}")
     _emit(analysis.to_dict(), args.json, lines)
     return EXIT_OK if analysis.ran else EXIT_EMPTY
+
+
+# ---------------------------------------------------------------------------
+# ideas — step 1 of the framework
+# ---------------------------------------------------------------------------
+
+def cmd_ideas(args: argparse.Namespace) -> int:
+    from .research.ideas import SOURCES, IdeaBook
+
+    book = IdeaBook(args.ideas_file)
+    action = args.ideas_action
+
+    if action == "add":
+        if args.source not in SOURCES:
+            raise SystemExit(f"hermes: unknown --source {args.source!r}. "
+                             f"Known: {', '.join(SOURCES)}")
+        idea = book.add(args.title, hypothesis=args.hypothesis or "",
+                        source=args.source, source_detail=args.detail or "",
+                        tags=args.tag or [])
+        _emit({"idea": idea.to_dict()}, args.json,
+              [f"{idea.id}  {idea.label}",
+               "  next: quantify it into unambiguous rules, then "
+               f"`hermes ideas set {idea.id} --status quantified`"])
+        return EXIT_OK
+
+    if action == "set":
+        changes = {k: v for k, v in {
+            "status": args.status, "hypothesis": args.hypothesis,
+            "strategy": args.strategy, "verdict": args.verdict,
+            "run_keys": args.run_key or None, "tags": args.tag or None,
+        }.items() if v}
+        if not changes:
+            raise SystemExit("hermes: nothing to change — pass --status/--hypothesis/"
+                             "--strategy/--verdict/--run-key/--tag")
+        try:
+            idea = book.update(args.id, **changes)
+        except ValueError as e:
+            raise SystemExit(f"hermes: {e}") from e
+        except LookupError as e:
+            raise SystemExit(f"hermes: {e}") from e
+        _emit({"idea": idea.to_dict()}, args.json, [f"{idea.id}  {idea.label}"])
+        return EXIT_OK
+
+    if action == "rm":
+        try:
+            idea = book.remove(args.id)
+        except LookupError as e:
+            raise SystemExit(f"hermes: {e}") from e
+        _emit({"removed": idea.to_dict()}, args.json, [f"removed {idea.id}  {idea.title}"])
+        return EXIT_OK
+
+    # default: list
+    ideas = book.list(status=args.status, source=args.source_filter,
+                      tag=args.tag_filter, open_only=args.open)
+    pipeline = book.pipeline()
+    payload = {
+        "ideas": [i.to_dict() for i in ideas],
+        "pipeline": pipeline,
+        "hit_rate": book.hit_rate() if args.hit_rate else None,
+    }
+    lines = ["  ".join(f"{s}={n}" for s, n in pipeline.items() if n) or "backlog is empty"]
+    for i in ideas:
+        lines.append(f"  {i.id}  {i.status:<10} {i.title}"
+                     + (f"   [{i.source}]" if i.source != "other" else ""))
+        if i.hypothesis:
+            lines.append(f"              ↳ {i.hypothesis}")
+        if i.run_keys:
+            lines.append(f"              runs: {', '.join(i.run_keys)}")
+    if args.hit_rate:
+        lines.append("")
+        lines.append("  provenance      decided  validated  rate")
+        for src, r in payload["hit_rate"].items():
+            if r["total"]:
+                rate = "—" if r["rate"] is None else f"{r['rate']:.0%}"
+                lines.append(f"  {src:<14} {r['decided']:>7}  {r['validated']:>9}  {rate:>4}")
+    _emit(payload, args.json, lines)
+    return EXIT_OK if ideas or any(pipeline.values()) else EXIT_EMPTY
+
+
+# ---------------------------------------------------------------------------
+# correlate — step 4 of the framework
+# ---------------------------------------------------------------------------
+
+def cmd_correlate(args: argparse.Namespace) -> int:
+    from .backtest import correlate_curves
+    from .research.ledger import RunLedger
+
+    ledger = RunLedger(args.runs_dir)
+    keys = [_resolve(ledger, k) for k in args.keys] if args.keys else None
+    if keys is None:
+        # No keys given: the newest run per strategy — "what does my book look like?"
+        seen: dict[str, str] = {}
+        for e in ledger.entries():
+            seen.setdefault(e.meta.strategy, e.key)
+        keys = list(seen.values())
+    if len(keys) < 2:
+        raise SystemExit(
+            "hermes: correlation needs at least 2 runs. `hermes runs` lists them; "
+            "pass keys explicitly, or record more runs first."
+        )
+
+    curves, labels = {}, {}
+    for key in keys:
+        rec = ledger.load(key)
+        if rec is None:
+            raise SystemExit(f"hermes: run {key!r} has no stored result")
+        label = f"{rec.meta.strategy}:{rec.meta.ticker or rec.meta.universe or '?'}"
+        while label in curves:                      # keep labels unique
+            label += "'"
+        labels[label] = key
+        curves[label] = [
+            (datetime.fromisoformat(ts), float(eq))
+            for ts, eq in rec.result.get("equity_curve", [])
+        ]
+
+    m = correlate_curves(curves, frequency=args.frequency)
+    payload = {**m.to_dict(), "runs": labels}
+
+    width = max(len(x) for x in m.labels) + 2
+    lines = [f"return correlation ({args.frequency}), {len(m.labels)} streams", ""]
+    lines.append(" " * width + "  ".join(f"{i:>5}" for i in range(len(m.labels))))
+    for i, lab in enumerate(m.labels):
+        cells = []
+        for v in m.matrix[i]:
+            cells.append("    —" if v is None else f"{v:5.2f}")
+        lines.append(f"{i} {lab:<{width - 2}}" + "  ".join(cells))
+    lines.append("")
+    if m.diversification_ratio is not None:
+        lines.append(f"diversification ratio  {m.diversification_ratio:.2f}  "
+                     f"(1.00 = one bet; lower is better)")
+    for a, b, c in m.redundant:
+        lines.append(f"  ⚠️  {a} and {b} are {c:.0%} correlated — effectively one bet")
+    for a, b, c in m.diversifying:
+        lines.append(f"  ✓  {a} and {b} at {c:+.2f} — genuinely diversifying")
+    for a, b, n in m.unmeasurable:
+        lines.append(f"  ·  {a} vs {b}: only {n} shared periods — not measurable")
+    _emit(payload, args.json, lines)
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +608,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override a declared Strategy Parameter (repeatable)")
     p.add_argument("--unconstrained", action="store_true",
                    help="skip the capital check — orders are never rejected for funds")
+    p.add_argument("--note", help="why this run — the hypothesis it tests, or what "
+                                   "changed since the last variant. Recorded in the ledger.")
     p.add_argument("--no-cache", action="store_true", help="re-run even if the ledger has it")
     p.add_argument("--no-save", action="store_true", help="do not write to the ledger")
     _add_common(p)
@@ -459,6 +618,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("runs", help="list recorded runs, newest first")
     p.add_argument("--strategy", help="only this strategy")
     p.add_argument("--symbol", help="only this ticker")
+    p.add_argument("--note-contains", dest="note_contains",
+                   help="only runs whose note matches this text")
     p.add_argument("--limit", type=int, help="at most N")
     _add_common(p)
     p.set_defaults(func=cmd_runs)
@@ -473,7 +634,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("analyze", aliases=["analyse"],
                        help="execute the analyse-results rubric and write analysis.json")
     p.add_argument("target", help="a run key, or a strategy name to run fresh")
-    p.add_argument("--axes", help="comma-separated subset (default: the cheap six)")
+    p.add_argument("--axes", help="comma-separated subset (default: the cheap seven)")
     p.add_argument("--is-frac", type=float, default=0.7, help="in-sample fraction (default 0.7)")
     p.add_argument("--seed", type=int, default=42, help="RNG seed for the statistical axes")
     p.add_argument("--baseline-n", type=int, default=50,
@@ -487,6 +648,63 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--unconstrained", action="store_true")
     _add_common(p)
     p.set_defaults(func=cmd_analyze)
+
+    p = sub.add_parser("ideas", help="the idea backlog — step 1 of the research framework")
+    isub = p.add_subparsers(dest="ideas_action")
+    for name, helptext in [("list", "list the backlog (default)"), ("add", "capture an idea"),
+                           ("set", "update an idea"), ("rm", "remove an idea")]:
+        q = isub.add_parser(name, help=helptext)
+        q.add_argument("--ideas-file", default="research/ideas.json",
+                       help="backlog file (default: research/ideas.json)")
+        q.add_argument("--json", action="store_true")
+        if name == "add":
+            q.add_argument("title")
+            q.add_argument("--hypothesis", help="the claim, in Hermes vocabulary")
+            q.add_argument("--source", default="other",
+                           help="book | discretionary | trader | course | data | other")
+            q.add_argument("--detail", help="which book / trader / course / session")
+            q.add_argument("--tag", action="append", default=[])
+        elif name == "set":
+            q.add_argument("id", help="idea id, or a unique prefix")
+            q.add_argument("--status",
+                           help="raw | quantified | testing | validated | rejected | parked")
+            q.add_argument("--hypothesis")
+            q.add_argument("--strategy", help="strategies/<name>.py this became")
+            q.add_argument("--verdict", help="why it was validated or rejected")
+            q.add_argument("--run-key", action="append", default=[],
+                           help="link a ledger run (repeatable)")
+            q.add_argument("--tag", action="append", default=[])
+        elif name == "rm":
+            q.add_argument("id", help="idea id, or a unique prefix")
+        else:
+            q.add_argument("--status", help="only this status")
+            q.add_argument("--source", dest="source_filter", help="only this provenance")
+            q.add_argument("--tag", dest="tag_filter", help="only this tag")
+            q.add_argument("--open", action="store_true", help="hide validated/rejected")
+            q.add_argument("--hit-rate", action="store_true",
+                           help="validated-vs-rejected per provenance")
+        q.set_defaults(func=cmd_ideas, ideas_action=name)
+    # `hermes ideas [filters]` with no sub-action lists, so the same options have to
+    # exist on the parent parser — a subparser only sees args that follow its name.
+    p.add_argument("--ideas-file", default="research/ideas.json",
+                   help="backlog file (default: research/ideas.json)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--status", help="only this status")
+    p.add_argument("--source", dest="source_filter", help="only this provenance")
+    p.add_argument("--tag", dest="tag_filter", help="only this tag")
+    p.add_argument("--open", action="store_true", help="hide validated/rejected")
+    p.add_argument("--hit-rate", action="store_true",
+                   help="validated-vs-rejected per provenance")
+    p.set_defaults(func=cmd_ideas, ideas_action="list")
+
+    p = sub.add_parser("correlate",
+                       help="return correlation between runs — step 4, portfolio building")
+    p.add_argument("keys", nargs="*",
+                   help="run keys (default: the newest run of each strategy)")
+    p.add_argument("--frequency", default="D",
+                   help="pandas offset for resampling: D, W, ME (default D)")
+    _add_common(p)
+    p.set_defaults(func=cmd_correlate)
 
     p = sub.add_parser("review", help="write a verdict on a run by driving Claude Code")
     p.add_argument("key", help="a run key, or a unique prefix of one")

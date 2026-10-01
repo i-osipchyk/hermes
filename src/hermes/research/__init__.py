@@ -19,7 +19,7 @@ pointed at another provider without editing it) and
 
 from __future__ import annotations
 
-from .analysis import Analysis, AxisResult, analyze
+from .analysis import ALL_AXES, DEFAULT_AXES, Analysis, AxisResult, analyze
 from .discovery import (
     BrokenStrategy,
     StrategyEntry,
@@ -30,6 +30,7 @@ from .discovery import (
     discover_all,
     run_universe,
 )
+from .ideas import SOURCES, STATUSES, Idea, IdeaBook
 from .ledger import (
     LedgerEntry,
     RestoredResult,
@@ -53,6 +54,11 @@ __all__ = [
     "declared_parameters",
     "configured_backtest",
     "run_universe",
+    # ideas
+    "IdeaBook",
+    "Idea",
+    "SOURCES",
+    "STATUSES",
     # ledger
     "RunLedger",
     "RunMeta",
@@ -66,6 +72,8 @@ __all__ = [
     "analyze",
     "Analysis",
     "AxisResult",
+    "DEFAULT_AXES",
+    "ALL_AXES",
     # review
     "ReviewStatus",
     # sources

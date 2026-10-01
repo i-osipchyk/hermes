@@ -12,9 +12,41 @@ trading strategies with the Hermes framework (see `README.md` / `CONTEXT.md`).
 A **flow** is a path through the skills. Most work runs the main flow; two supports
 feed into it.
 
+## The process this repo is built around
+
+Five steps (ADR-0011). Most work is somewhere in this cycle, and the cycle is the point —
+you come back to step 1 with a portfolio gap to fill, not a blank page.
+
+| Step | What it is | Skill | Command |
+|---|---|---|---|
+| 1 | **Idea generation** — books, discretionary screen time, other traders, the data | `hermes-ideas` | `hermes ideas` |
+| 2 | **Quantification** — English → unambiguous if/and rules with units | `hermes-strategy` | — |
+| 3 | **Testing** — historical, robustness, out-of-sample, then forward | `hermes-research`, `hermes-backtest`, `hermes-analyze-results` | `hermes run` / `analyze` |
+| 4 | **Portfolio** — combine *uncorrelated* strategies | `hermes-portfolio` | `hermes correlate` |
+| 5 | **Repeat** — name the gap, go back to step 1 | `hermes-portfolio` | `hermes ideas --open` |
+
+Step 1 is the one people skip and the one that matters most; step 4 is the one that turns
+a good strategy into a tradeable book. The last rung of step 3 — **forward testing** on
+paper or minimum size — is outside Hermes, which has no live venue. A validated backtest
+is *ready to forward test*, not deployable.
+
+## Hand the whole thing over: `hermes-research`
+
+If you want an idea **investigated** rather than implemented — "does this work?", "look
+into this", "here's a hypothesis, go" — that's **`hermes-research`**. It owns the entire
+loop: pins the hypothesis, checks the ledger for work already done, writes variants, runs
+and analyses them, iterates on what the analysis points at, and stops on a stated rule
+(rubric verdict reached, no out-of-sample improvement in two iterations, or the parameter
+budget spent). It runs unattended under a declared budget and asks first before spending
+money or changing the idea.
+
+It calls the skills below as specialists. Reach for them individually when you want one
+step, not the loop.
+
 ## The main flow: idea → validated strategy
 
-The loop most work travels — an idea, made real, then judged.
+The loop most work travels — an idea, made real, then judged. `hermes-research` walks it
+for you; walk it yourself when you want control of each hop.
 
 1. **`/hermes-strategy`** — sharpen a trading idea by interview into a runnable
    Strategy. Start here. It writes `strategies/<name>.py` (a Strategy subclass + a
@@ -58,6 +90,9 @@ Feed into the main flow rather than sitting on it.
 
 The single sources of truth every skill reads instead of duplicating:
 
+- **`docs/MANUAL.md`** — the user manual: every stage, with the agent and by hand,
+  plus the command and axis reference and an explicit list of what Hermes will *not* do.
+  Read it when the question is "how do I do X here".
 - **`CONTEXT.md`** — the ubiquitous language. Two sections: the v1 terms for **one**
   backtest (Instrument, Bar, Timeframe, Forming Bar, Trade, Sizer, Cost Model, AI
   Advisor…), then the terms for **running many** (Universe/Portfolio Backtest,

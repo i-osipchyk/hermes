@@ -35,10 +35,11 @@ something the axes don't cover; they are all importable from `hermes`
 edge "may not survive costs" when one command measures it is a non-answer.
 
 Axes, and what each answers: `trades` (is the P&L two lucky trades?), `costs` (does it
-survive friction?), `oos` (does it hold out of sample?), `validation` (is it
-distinguishable from luck?), `regime` (strategy, or bull market?), `gate` (was the AI
-gate even in effect?), plus `walkforward` (fitted params out of sample) and `baseline`
-(does the gate beat a weighted coin?) on request.
+survive friction?), `params` (is the result a plateau or a spike?), `oos` (does it hold
+out of sample?), `validation` (is it distinguishable from luck, and how much evidence
+is there?), `regime` (strategy, or bull market?), `gate` (was the AI gate even in
+effect?), plus `walkforward` (fitted params out of sample) and `baseline` (does the gate
+beat a weighted coin?) on request.
 
 ## The rubric — work every axis, don't stop at the first
 
@@ -49,11 +50,20 @@ gate even in effect?), plus `walkforward` (fitted params out of sample) and `bas
 3. **Cost sensitivity** — `cost_sensitivity(backtest, multipliers=(0.0, 1.0, 2.0))`
    returns `{multiplier: BacktestResult}`. If the edge evaporates at 1x, or only exists at
    0x, it isn't one.
-4. **Sample size / overfitting** — `validate(result)` → `StatValidation`: bootstrap
-   confidence intervals, Monte Carlo trade reshuffling, Probabilistic and Deflated Sharpe,
-   minimum track-record length, and a sample-quality verdict. Also read
-   `metrics.num_params` and `metrics.parameter_adjusted_sharpe` — a big gap between raw and
-   adjusted Sharpe is an overfitting warning. Say it plainly.
+4. **Sample size / overfitting** — the `validation` axis: bootstrap confidence intervals,
+   Monte Carlo trade reshuffling, Probabilistic and Deflated Sharpe, minimum track-record
+   length, and an **evidence tier** (`exploratory` / `credible` / `deployable`) with the
+   reason it stopped there. Quote the tier — a positive `exploratory` result is a view,
+   not a finding. Read `monte_carlo.max_drawdown_worst` rather than the single historical
+   drawdown: the realised trade order was one draw of many. Also compare
+   `metrics.parameter_adjusted_sharpe` against the raw Sharpe — a big gap is an
+   overfitting warning.
+
+4b. **Robustness to its own parameters** — the `params` axis sweeps each Parameter around
+   its configured value and reports **plateau vs spike**. `fragile` naming a parameter
+   means the reported metric is not reproducible one notch away: the search found a
+   corner of the data. This is independent of sample size and is often the finding that
+   kills an otherwise clean-looking result.
 5. **Look-ahead / repaint** — confirm the logic only used information available at
    decision time (next-open fills, forming-bar values that reflect only up-to-now). Flag
    any indicator that would resolve differently live. For AI-gated runs, check that any
@@ -73,7 +83,14 @@ gate even in effect?), plus `walkforward` (fitted params out of sample) and `bas
 ## Deliver
 
 A verdict, not a metrics restatement: does the edge look real, what's the biggest threat
-to it, and the one change most worth trying next — routed back to `/hermes-strategy`.
+to it, and the one change most worth trying next.
+
+Where that next change goes depends on who is driving. Inside **`hermes-research`**, hand
+it back to the loop — it decides whether to iterate or stop. With a person driving,
+suggest **`/hermes-strategy`** and let them choose.
+
+Name the axes that were **not** measured. "Not measured" and "clean" must never read the
+same; an `error` on an axis is a gap in the verdict, not a detail.
 
 Completion criterion: every rubric axis addressed (each either a finding or an explicit
 "clean"), ending in a plain-language verdict + next step.

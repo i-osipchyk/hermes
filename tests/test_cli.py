@@ -137,11 +137,26 @@ def test_no_save_leaves_the_ledger_empty(project, capsys):
     assert not runs.exists() or list(runs.iterdir()) == []
 
 
-def test_a_zero_trade_run_is_exit_empty(project, capsys):
+def test_a_zero_trade_run_is_exit_empty_and_says_why(project, capsys):
+    """Zero trades is the commonest failure; the agent needs the cause, not a
+    list of three things it might be."""
     common, sdir, _ = project
     (sdir / "flat.py").write_text(NO_TRADES)
     assert main(["run", "flat", *common, "--json"]) == EXIT_EMPTY
-    assert _json(capsys)["metrics"]["num_trades"] == 0
+    d = _json(capsys)
+    assert d["metrics"]["num_trades"] == 0
+    # bars were stepped, so the diagnosis must point at the logic, not the data
+    assert d["coverage"]["steps"] > 0
+    assert "never became true" in d["zero_trade_diagnosis"]
+
+
+def test_a_healthy_run_reports_coverage_too(project, capsys):
+    common, _, _ = project
+    main(["run", "buyhold", *common, "--json"])
+    d = _json(capsys)
+    assert d["coverage"]["steps"] > 0
+    assert d["coverage"]["trades"] == d["metrics"]["num_trades"]
+    assert "zero_trade_diagnosis" not in d
 
 
 def test_an_unknown_strategy_is_a_usage_error(project, capsys):
@@ -280,3 +295,130 @@ def test_version_is_reported():
     with pytest.raises(SystemExit) as e:
         main(["--version"])
     assert e.value.code == 0
+
+
+# --- ideas (framework step 1) ----------------------------------------------
+
+@pytest.fixture
+def ideas(tmp_path):
+    return ["--ideas-file", str(tmp_path / "ideas.json")]
+
+
+def test_ideas_add_then_list(ideas, capsys):
+    assert main(["ideas", "add", "ORB on NQ", "--source", "book",
+                 "--detail", "Carver", "--hypothesis", "first 30m sets direction",
+                 *ideas, "--json"]) == EXIT_OK
+    added = _json(capsys)["idea"]
+    assert added["status"] == "raw" and added["source"] == "book"
+
+    assert main(["ideas", *ideas, "--json"]) == EXIT_OK
+    d = _json(capsys)
+    assert [i["title"] for i in d["ideas"]] == ["ORB on NQ"]
+    assert d["pipeline"]["raw"] == 1
+
+
+def test_ideas_list_on_an_empty_backlog_is_exit_empty(ideas, capsys):
+    assert main(["ideas", *ideas, "--json"]) == EXIT_EMPTY
+
+
+def test_ideas_rejects_an_unknown_source(ideas, capsys):
+    assert main(["ideas", "add", "x", "--source", "a_dream", *ideas]) == EXIT_ERR
+    assert "unknown --source" in capsys.readouterr().err
+
+
+def test_ideas_set_walks_the_pipeline_and_links_runs(ideas, capsys):
+    main(["ideas", "add", "ema cross", "--source", "trader", *ideas, "--json"])
+    idea_id = _json(capsys)["idea"]["id"]
+
+    main(["ideas", "set", idea_id[:4], "--status", "validated",
+          "--strategy", "ema_crossover", "--run-key", "abc123",
+          "--verdict", "survives costs", *ideas, "--json"])
+    got = _json(capsys)["idea"]
+    assert got["status"] == "validated"
+    assert got["run_keys"] == ["abc123"]
+    assert got["verdict"] == "survives costs"
+
+
+def test_ideas_set_rejects_an_unknown_status(ideas, capsys):
+    main(["ideas", "add", "x", *ideas, "--json"])
+    idea_id = _json(capsys)["idea"]["id"]
+    assert main(["ideas", "set", idea_id, "--status", "probably_fine", *ideas]) == EXIT_ERR
+    assert "unknown status" in capsys.readouterr().err
+
+
+def test_ideas_set_with_nothing_to_change_is_an_error(ideas, capsys):
+    main(["ideas", "add", "x", *ideas, "--json"])
+    idea_id = _json(capsys)["idea"]["id"]
+    assert main(["ideas", "set", idea_id, *ideas]) == EXIT_ERR
+    assert "nothing to change" in capsys.readouterr().err
+
+
+def test_ideas_open_filter_hides_decided_work(ideas, capsys):
+    main(["ideas", "add", "open one", *ideas, "--json"])
+    _json(capsys)
+    main(["ideas", "add", "closed one", *ideas, "--json"])
+    closed = _json(capsys)["idea"]["id"]
+    main(["ideas", "set", closed, "--status", "rejected", "--verdict", "no", *ideas, "--json"])
+    _json(capsys)
+
+    main(["ideas", *ideas, "--open", "--json"])
+    assert [i["title"] for i in _json(capsys)["ideas"]] == ["open one"]
+
+
+def test_ideas_hit_rate_scores_provenance(ideas, capsys):
+    main(["ideas", "add", "a", "--source", "trader", *ideas, "--json"])
+    good = _json(capsys)["idea"]["id"]
+    main(["ideas", "set", good, "--status", "validated", *ideas, "--json"])
+    _json(capsys)
+    main(["ideas", "add", "b", "--source", "book", *ideas, "--json"])
+    _json(capsys)
+
+    main(["ideas", *ideas, "--hit-rate", "--json"])
+    hr = _json(capsys)["hit_rate"]
+    assert hr["trader"]["rate"] == 1.0
+    assert hr["book"]["rate"] is None      # undecided
+
+
+def test_ideas_rm(ideas, capsys):
+    main(["ideas", "add", "x", *ideas, "--json"])
+    idea_id = _json(capsys)["idea"]["id"]
+    assert main(["ideas", "rm", idea_id, *ideas, "--json"]) == EXIT_OK
+    _json(capsys)
+    main(["ideas", *ideas, "--json"])
+    assert _json(capsys)["ideas"] == []
+
+
+# --- correlate (framework step 4) ------------------------------------------
+
+def test_correlate_needs_at_least_two_runs(project, capsys):
+    common, _, _ = project
+    main(["run", "buyhold", *common, "--json"])
+    key = _json(capsys)["run_key"]
+    assert main(["correlate", key, *common]) == EXIT_ERR
+    assert "at least 2 runs" in capsys.readouterr().err
+
+
+def test_correlate_two_runs_reports_a_matrix(project, capsys):
+    common, sdir, _ = project
+    (sdir / "buyhold2.py").write_text(STRATEGY.replace("102 + i", "103 + i"))
+    main(["run", "buyhold", *common, "--json"])
+    a = _json(capsys)["run_key"]
+    main(["run", "buyhold2", *common, "--json"])
+    b = _json(capsys)["run_key"]
+
+    assert main(["correlate", a, b, *common, "--json"]) == EXIT_OK
+    d = _json(capsys)
+    assert len(d["labels"]) == 2
+    assert d["matrix"][0][0] == 1.0
+    assert set(d["runs"].values()) == {a, b}
+
+
+def test_correlate_defaults_to_the_newest_run_per_strategy(project, capsys):
+    common, sdir, _ = project
+    (sdir / "buyhold2.py").write_text(STRATEGY.replace("102 + i", "103 + i"))
+    main(["run", "buyhold", *common, "--json"])
+    main(["run", "buyhold2", *common, "--json"])
+    capsys.readouterr()
+
+    assert main(["correlate", *common, "--json"]) == EXIT_OK
+    assert len(_json(capsys)["labels"]) == 2

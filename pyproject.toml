@@ -60,6 +60,7 @@ packages = ["src/hermes"]
 [tool.hatch.build.targets.wheel.force-include]
 ".claude/skills" = "hermes/_skills"
 "CONTEXT.md" = "hermes/_reference/CONTEXT.md"
+"docs/MANUAL.md" = "hermes/_reference/docs/MANUAL.md"
 "docs/adr" = "hermes/_reference/docs/adr"
 "examples" = "hermes/_reference/examples"
 

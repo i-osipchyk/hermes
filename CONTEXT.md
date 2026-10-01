@@ -80,10 +80,6 @@ _Avoid_: Verdict, Response
 A declared, tunable input of a Strategy (lookback lengths, thresholds, risk %). First-class so a backtest run is a pure function of (Parameters, data) — the basis for reproducibility and Optimization.
 _Avoid_: Setting, Config, Hyperparameter
 
-**Backtest Review**:
-An AI-written diagnosis of a `BacktestResult` — is the edge real, biggest risks, overfitting/look-ahead smells, what to try next. Produced by driving **Claude Code** headlessly with the `hermes-analyze-results` skill (not a Claude API call), written to a review file and displayed in the web UI. Distinct from the per-trade [[ai-advisor]] confirm/veto — a review judges the whole run.
-_Avoid_: Analysis, critique, AI report
-
 **Optimization**:
 Running the core backtest repeatedly over a space of Strategy Parameters. **Implemented** — a run is a pure function of (Parameters, data), so the optimizer sits on top of the engine without bypassing its fill/cost logic. The grid is either given explicitly or auto-discovered from each Strategy Parameter's `choices`/`bounds`. Optimization **only ever happens in-sample**: the selected parameters are then judged on data the search never saw (see [[walk-forward-analysis]]). Picking parameters on the whole sample and reporting that number is the thing this vocabulary exists to prevent.
 _Avoid_: Tuning, Sweep, Backtest (optimization is many backtests)
@@ -168,3 +164,57 @@ _Avoid_: Data feed, plugin, context (unqualified)
 **Fail-open**:
 The [[ai-advisor]]'s behaviour when its provider errors: the candidate trade is **approved** without a real decision, because the gate's only power is to block and an outage must not silently rewrite the strategy into one that never trades. Fail-open decisions are never written to the decision cache, are exempt from the confidence threshold, and are counted in the run's `llm_summary.fail_open_calls` — a non-zero count means the run's metrics describe a *less gated* strategy than the one configured, and should not be compared against a clean run.
 _Avoid_: Fallback, default approve (without the audit trail those imply no record)
+
+## Language — the research loop
+
+How a run is found, recorded, and judged (ADR-0010). These are the terms the `hermes`
+CLI is built from.
+
+**Run Ledger**:
+The input-keyed record of every backtest a project has run. Because a run is a pure function of (Parameters, data, config), a hash of those inputs — including the **strategy file's contents** — identifies it exactly, so the ledger answers two questions: *have I already tried this?* (a hit returns the stored result, making a repeat free) and *what have I tried?* (the experiment log). Editing a strategy changes its hash, so a stale result is never served for code that would no longer produce it. It is the memory that makes an automated search resumable rather than amnesiac.
+_Avoid_: Cache (a cache may be dropped without loss; losing the ledger loses the record of what was tried), history
+
+**Rubric**:
+The fixed set of questions asked of every [[backtestresult]] before its edge is believed — P&L concentration, cost sensitivity, out-of-sample decay, statistical significance, regime dependence, whether the AI gate was in effect. Written down in the `hermes-analyze-results` skill and executed by `hermes analyze`. Fixed on purpose: a reviewer who picks which questions to ask will pick the flattering ones.
+_Avoid_: Checklist (implies optional), report
+
+**Rubric Axis**:
+One question from the [[rubric]], computed. Carries a one-line `note` (the reading), `data` (the numbers), and `ran`. An axis that could not be computed is `ran: false` with the reason in `error` — **never** silently absent, because "not measured" and "clean" must not be confusable. Axes are independent and individually skippable since they differ hugely in cost, from free (`trades`) to *n* full backtests (`baseline`).
+_Avoid_: Metric (a metric is a number; an axis is a question plus its answer), test
+
+**Backtest Review**:
+An AI-written verdict on a run — is the edge real, the biggest threat to it, the one change most worth trying. Produced by driving **Claude Code** headlessly over the run *and* its computed [[rubric-axis]] evidence. The division of labour is deliberate: **Hermes computes the numbers, the reviewer interprets them.** The reviewer has no shell, because an LLM recalculating what the engine already computes deterministically would be slower, unauditable, and unreproducible. Distinct from the per-trade [[ai-advisor]] confirm/veto — a review judges the whole run.
+_Avoid_: Analysis (that is the computed evidence), critique, AI report
+
+## Language — the five-step process
+
+The pipeline the repo is organised around (ADR-0011): idea generation → quantification →
+testing → portfolio → repeat.
+
+**Idea Backlog**:
+The persisted list of candidate trading ideas, each with its claim, its **mechanism** (why it should be true), its **provenance**, its status, and the [[run-ledger]] keys that decided it. Lives in `research/ideas.json` and is **committed** — it is work product, not cache, and losing it loses the thinking. Status moves forward only on evidence: `raw` → `quantified` → `testing` → `validated`/`rejected`. A `rejected` idea stays in the book, because a tested-and-failed idea is a real result that stops you retesting it.
+_Avoid_: TODO list, pipeline (that is the view over this), notes
+
+**Provenance**:
+Where an idea came from — `book`, `discretionary` (your own screen time), `trader`, `course`, or `data` (found by looking). A closed vocabulary rather than free text, so the **hit rate per source** is computable: which of your sources actually produce surviving strategies is unanswerable from memory and obvious from the backlog. Published strategies in particular usually underperform their stated results, so the source of an idea is evidence about how sceptically to treat it.
+_Avoid_: Origin, author, credit
+
+**Quantification**:
+Turning an idea stated in English into unambiguous rules with numbers and units — if/and statements a machine can execute. "Short when large orders hit the bid after an extension move" is not a strategy: *extension* from what, measured how, over which window; *large* by what comparison. Every value you must invent to answer those is a decision to record and a [[strategy-parameter]] you will have to defend. An idea that cannot be written this way is not ready to test, and an idea needing data Hermes does not have (order flow, tape, level 2) must be parked rather than silently replaced by a proxy.
+_Avoid_: Specification, coding it up (quantification precedes and constrains the code)
+
+**Parameter Sensitivity**:
+Sweeping each [[strategy-parameter]] around its *configured* value, one at a time, to ask whether the reported result is a **plateau or a spike**. The headline is **neighbour degradation**: the base metric against the mean of its immediate neighbours. A Sharpe that collapses one notch away was found, not earned — live, you get the neighbourhood average, not the peak. Distinct from [[optimization]], which searches combinations for the best one; this holds the combination fixed and tests whether it is stable. Conflating the two is how a search gets mistaken for an edge.
+_Avoid_: Optimization, tuning, grid search (all of those look for the peak; this distrusts it)
+
+**Evidence Tier**:
+How much a result rests on, and therefore what it may be used for: `exploratory` (a view, not a conclusion), `credible` (worth real work and out-of-sample testing), `deployable` (years of history **and** hundreds of trades), or `unknown` (no measurable span — which is not the same as inadequate). Both the trade count and the span must clear a tier, since many trades in one year has not seen a second regime and a long history with few trades has not seen enough events. The tier describes the **evidence**, never a decision to trade.
+_Avoid_: Significance, confidence (those are specific statistics; this is the weight of the sample)
+
+**Forward Test**:
+Running a finished strategy on paper or minimum size and comparing realised results to the backtest over the same window — the last rung of testing and the only one that sees data no backtest could have seen. **Hermes cannot do this**: there is no live [[executionvenue]] (ADR-0001 — the seam exists, the adapter does not). So a strategy that survives the whole rubric is *ready to forward test*, never "deployed".
+_Avoid_: Paper trading (that is the mechanism), live testing, deployment
+
+**Strategy Correlation**:
+The pairwise correlation of two strategies' return streams, and the thing that decides whether a second strategy belongs in a [[portfolio-backtest]]. Risk-adjusted return scales with the number of *independent* bets, so N uncorrelated streams cut volatility by ~√N and N variants of one edge cut it by nothing. Summarised by the **diversification ratio** (an equal-weight blend's volatility over the mean individual volatility: 1.00 = one bet in several costumes). Changing instrument, direction or holding period moves correlation; changing parameters or indicators barely does. A pair with too little shared history is **unmeasurable**, not uncorrelated.
+_Avoid_: Diversification (that is the goal; this is the measurement)

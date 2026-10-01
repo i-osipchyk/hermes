@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -54,6 +54,12 @@ class RunMeta:
     unconstrained: bool
     created_at: str      # ISO-8601 UTC
 
+    # Why this configuration was run — the hypothesis it tests, or what changed
+    # since the last variant. Deliberately NOT part of the cache key: it is
+    # intent, not an input, so two runs that differ only by note are one run.
+    # Defaulted so rows written before this field still load.
+    note: str = ""
+
     @property
     def label(self) -> str:
         scope = self.ticker or self.universe or "?"
@@ -64,7 +70,10 @@ class RunMeta:
 
     @classmethod
     def from_dict(cls, d: dict) -> RunMeta:
-        return cls(**d)
+        # Tolerate rows written by older versions (and forward-compatibly, newer
+        # ones): a ledger that refuses to read its own history is not a ledger.
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +216,7 @@ class RunLedger:
         strategy: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,
+        note_contains: str | None = None,
     ) -> list[LedgerEntry]:
         """Stored runs as (key, meta), newest first. Does not read result payloads."""
         if not self._resolved.exists():
@@ -225,6 +235,8 @@ class RunLedger:
             if strategy and meta.strategy != strategy:
                 continue
             if ticker and meta.ticker != ticker:
+                continue
+            if note_contains and note_contains.lower() not in (meta.note or "").lower():
                 continue
             out.append(LedgerEntry(key=d.name, meta=meta))
         out.sort(key=lambda e: e.meta.created_at, reverse=True)

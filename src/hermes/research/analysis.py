@@ -25,8 +25,17 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Cheapest first. `baseline` and `walkforward` are deliberately out of the default set.
-DEFAULT_AXES: tuple[str, ...] = ("trades", "costs", "oos", "validation", "regime", "gate")
+DEFAULT_AXES: tuple[str, ...] = (
+    "trades", "costs", "params", "oos", "validation", "regime", "gate",
+)
 ALL_AXES: tuple[str, ...] = (*DEFAULT_AXES, "walkforward", "baseline")
+
+# Axes that can be computed from a *stored* run (a RestoredResult), because they only
+# read its serialised dict. Everything else needs the live BacktestResult — `validate`
+# wants real ``Trade`` objects and `regime_analysis` wants ``benchmark_equity``, neither
+# of which survives JSON. Asking for those from the ledger alone must trigger a re-run,
+# not an AttributeError.
+RESTORABLE_AXES: frozenset[str] = frozenset({"trades", "gate"})
 
 
 @dataclass(slots=True)
@@ -117,6 +126,53 @@ def _metrics(result: Any) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# run coverage — before you can judge an edge, check the run happened
+# ---------------------------------------------------------------------------
+
+def run_coverage(result: dict) -> dict:
+    """Did the engine actually step bars, and did anything happen when it did?"""
+    curve = result.get("equity_curve") or []
+    return {
+        "steps": len(curve),
+        "first_step": curve[0][0] if curve else None,
+        "last_step": curve[-1][0] if curve else None,
+        "trades": len(result.get("trades") or []),
+        "vetoed_signals": len(result.get("vetoed_signals") or []),
+    }
+
+
+def diagnose_zero_trades(result: dict) -> str:
+    """Why a run produced no trades.
+
+    This is the most common failure in strategy development and the three causes need
+    completely different fixes, so guessing at all three ("check the warmup, the entry
+    condition, and the date window") is close to useless. The distinction is already
+    derivable from the stored result — an empty equity curve means no bars were ever
+    stepped, a populated one means the engine ran and the logic never fired — so say
+    which it is.
+    """
+    c = run_coverage(result)
+    if c["steps"] == 0:
+        return (
+            "the engine stepped ZERO bars — no data reached the strategy. Check the "
+            "symbol spelling for this source, the date window, and whether the source "
+            "can supply the Lead-in the declared Indicators need."
+        )
+    window = f"{str(c['first_step'])[:10]} → {str(c['last_step'])[:10]}"
+    if c["vetoed_signals"]:
+        return (
+            f"{c['steps']} bars stepped over {window} and {c['vetoed_signals']} signals "
+            f"formed, but every one was vetoed — the entry logic works; the AI gate (or "
+            f"its confidence threshold) is rejecting everything."
+        )
+    return (
+        f"{c['steps']} bars stepped over {window}, so the data is fine and the engine "
+        f"ran — the entry condition simply never became true. Look at the thresholds, "
+        f"not the window: loosen them and check an Indicator's value on a few bars."
+    )
+
+
+# ---------------------------------------------------------------------------
 # the axes
 # ---------------------------------------------------------------------------
 
@@ -194,6 +250,44 @@ def axis_costs(backtest: Any, multipliers: tuple[float, ...] = (0.0, 1.0, 2.0)) 
         flags.append("does not survive doubled costs")
     note = "; ".join(flags) if flags else "edge survives 1x and 2x costs"
     return AxisResult("costs", True, note, data)
+
+
+def axis_params(backtest: Any, *, metric: str = "sharpe", steps: int = 4,
+                relative: float = 0.25) -> AxisResult:
+    """Robustness — is the reported result a plateau or a spike?
+
+    The other half of robustness testing alongside ``costs``. A backtest reports one
+    point in parameter space; if the metric collapses one notch away, that point was
+    found rather than earned and the live result will be the neighbourhood average.
+    Parameters are swept one at a time around their configured values — this is a
+    stability check, not an optimisation, and conflating the two is how a search gets
+    mistaken for an edge.
+    """
+    from ..backtest import param_sensitivity
+
+    ps = param_sensitivity(backtest, metric=metric, steps=steps, relative=relative)
+    if not ps.curves:
+        return AxisResult("params", False, "the strategy declares no Parameters to sweep",
+                          error="no declared Parameters")
+
+    data = ps.to_dict()
+    fragile = ps.fragile
+    unmeasured = [c.name for c in ps.curves if c.is_plateau is None]
+    if fragile:
+        worst = min(
+            (c for c in ps.curves if c.name in fragile),
+            key=lambda c: c.degradation if c.degradation is not None else 0.0,
+        )
+        note = (f"fragile: {', '.join(fragile)} — nudging {worst.name} off "
+                f"{worst.base_value} drops {metric} to "
+                f"{worst.degradation:.0%} of its reported value; the result is a spike, "
+                f"not a plateau")
+    elif unmeasured and len(unmeasured) == len(ps.curves):
+        note = f"could not judge stability ({metric} undefined around the chosen values)"
+    else:
+        note = (f"stable: {metric} holds across the neighbourhood of every swept "
+                f"parameter ({len(ps.curves)} checked)")
+    return AxisResult("params", True, note, data)
 
 
 def axis_oos(backtest: Any, is_frac: float = 0.7) -> AxisResult:
@@ -397,6 +491,7 @@ def analyze(
     run_key: str | None = None,
     strategy: str | None = None,
     cost_multipliers: tuple[float, ...] = (0.0, 1.0, 2.0),
+    param_steps: int = 4,
     is_frac: float = 0.7,
     seed: int = 42,
     param_grid: dict | None = None,
@@ -434,6 +529,8 @@ def analyze(
 
     add("trades", lambda: axis_trades(result), result, "needs a result")
     add("costs", lambda: axis_costs(backtest, cost_multipliers), backtest,
+        "needs a Backtest to re-run")
+    add("params", lambda: axis_params(backtest, steps=param_steps), backtest,
         "needs a Backtest to re-run")
     add("oos", lambda: axis_oos(backtest, is_frac), backtest, "needs a Backtest to re-run")
     add("walkforward", lambda: axis_walkforward(backtest, is_frac=is_frac, param_grid=param_grid),

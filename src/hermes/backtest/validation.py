@@ -34,6 +34,27 @@ from .result import BacktestResult, _annualisation  # reuse existing helper
 
 # ── data structures ──────────────────────────────────────────────────────────
 
+# --- evidence tiers -------------------------------------------------------
+# How much evidence a result rests on, and therefore what it may be used for.
+# MIN_TRADES (30) is enough to form a *view*; it is nowhere near enough to put
+# money behind. The practitioner's bar for a deployable strategy is years of
+# history AND a few hundred-to-a-thousand trades, so the tiers are explicit
+# rather than implied by one threshold.
+#
+# These are frequency-dependent by nature: 1000 trades is routine for an
+# intraday futures system and unreachable for a daily swing strategy on one
+# symbol. Treat the trade counts as the bar for a *single* instrument and read
+# TIER_DEPLOYABLE as "this is what deployment evidence looks like", not as a
+# promise that fewer trades cannot be traded — see `tier_reason`.
+TIER_UNKNOWN = "unknown"              # no history span available to judge
+TIER_EXPLORATORY = "exploratory"      # a view, not a conclusion
+TIER_CREDIBLE = "credible"            # worth real work and out-of-sample testing
+TIER_DEPLOYABLE = "deployable"        # enough evidence to risk capital on
+
+CREDIBLE_TRADES, CREDIBLE_YEARS = 100, 2.0
+DEPLOYABLE_TRADES, DEPLOYABLE_YEARS = 500, 5.0
+
+
 @dataclass(slots=True)
 class ConfidenceInterval:
     lower: float
@@ -77,6 +98,11 @@ class SampleQuality:
     min_trades_ok: bool             # True when num_trades >= MIN_TRADES
     adequate_ratio: bool            # True when trades_per_param >= MIN_RATIO
     warning: str | None             # human-readable summary of any red flags
+    # How much evidence this rests on, and therefore what it may be used for.
+    years_covered: float | None = None
+    trades_per_year: float | None = None
+    tier: str = TIER_EXPLORATORY
+    tier_reason: str = ""
 
 
 @dataclass(slots=True)
@@ -145,7 +171,7 @@ def validate(
     )
     mc = _monte_carlo(trades, equity_curve, n_mc, rng) if trades else None
     psr = _probabilistic_sharpe(equity_curve)
-    sq = _sample_quality(metrics)
+    sq = _sample_quality(metrics, result.equity_curve)
     dsr = _deflated_sharpe(equity_curve, n_trials)
     min_trl = _min_trl(equity_curve, level)
 
@@ -369,7 +395,44 @@ def _probabilistic_sharpe(equity_curve) -> float | None:
 
 # ── sample quality flags ──────────────────────────────────────────────────────
 
-def _sample_quality(metrics) -> SampleQuality:
+def _years_covered(equity_curve) -> float | None:
+    if not equity_curve or len(equity_curve) < 2:
+        return None
+    span = equity_curve[-1][0] - equity_curve[0][0]
+    return round(span.days / 365.25, 2) if span.days > 0 else None
+
+
+def _evidence_tier(n: int, years: float | None) -> tuple[str, str]:
+    """Which tier the evidence reaches, and why it stopped there.
+
+    Both the trade count and the span of history must clear a tier: 800 trades
+    inside one year has not seen a different regime, and five years with 40 trades
+    has not seen enough events. Whichever is short is the one named.
+    """
+    if years is None:
+        # Unmeasurable is not the same as inadequate: without a span we cannot place
+        # the evidence at all, and guessing "exploratory" would read as a finding.
+        return TIER_UNKNOWN, f"{n} trades over an unknown span — no history to judge."
+    if n >= DEPLOYABLE_TRADES and years >= DEPLOYABLE_YEARS:
+        return (TIER_DEPLOYABLE,
+                f"{n} trades over {years:.1f}y clears the deployment bar "
+                f"({DEPLOYABLE_TRADES} trades / {DEPLOYABLE_YEARS:.0f}y).")
+    if n >= CREDIBLE_TRADES and years >= CREDIBLE_YEARS:
+        short = ("trades" if n < DEPLOYABLE_TRADES else "history")
+        need = (f"{DEPLOYABLE_TRADES} trades" if n < DEPLOYABLE_TRADES
+                else f"{DEPLOYABLE_YEARS:.0f}y of history")
+        return (TIER_CREDIBLE,
+                f"{n} trades over {years:.1f}y is credible but short on {short} "
+                f"for deployment (needs {need}).")
+    short = "trades" if n < CREDIBLE_TRADES else "history"
+    need = (f"{CREDIBLE_TRADES} trades" if n < CREDIBLE_TRADES
+            else f"{CREDIBLE_YEARS:.0f}y of history")
+    return (TIER_EXPLORATORY,
+            f"{n} trades over {years:.1f}y is exploratory — too few {short} "
+            f"to conclude anything (needs {need} to be credible).")
+
+
+def _sample_quality(metrics, equity_curve=None) -> SampleQuality:
     n = metrics.num_trades
     k = metrics.num_params
 
@@ -390,6 +453,12 @@ def _sample_quality(metrics) -> SampleQuality:
             f"(< {MIN_TRADES_PER_PARAM}) — high overfitting risk."
         )
 
+    years = _years_covered(equity_curve)
+    tier, tier_reason = _evidence_tier(n, years)
+    # Warn only about a tier we actually measured and that falls short.
+    if tier not in (TIER_DEPLOYABLE, TIER_UNKNOWN):
+        warnings.append(tier_reason)
+
     return SampleQuality(
         num_trades=n,
         num_params=k,
@@ -397,6 +466,10 @@ def _sample_quality(metrics) -> SampleQuality:
         min_trades_ok=min_trades_ok,
         adequate_ratio=adequate_ratio,
         warning="\n".join(warnings) if warnings else None,
+        years_covered=years,
+        trades_per_year=round(n / years, 1) if years else None,
+        tier=tier,
+        tier_reason=tier_reason,
     )
 
 
