@@ -139,14 +139,14 @@ def test_usdjpy_percent_commission_is_charged_in_usd():
 
 
 def test_usdjpy_financing_is_charged_in_usd():
-    # 30 flat hourly bars at 150.00 cross two New York midnights while the position is
+    # 50 flat hourly bars at 150.00 cross two 17:00 New York rollovers while the position is
     # open. 3.65%/yr on a 15,000,000 JPY notional = 1,500 JPY per night = 10 USD,
     # so two nights cost 20 USD (not 3,000).
     def bar(i):
         return Bar(T0 + timedelta(hours=i), H1, 150.0, 150.0, 150.0, 150.0, 1.0)
     costs = CostModel(PercentCommission(0.0), SpreadModel(0.0), SlippageModel(0.0, 0.0),
                       FinancingModel(0.0365))
-    result = _run(_fx("USDJPY", tick_size=0.001), [bar(i) for i in range(30)],
+    result = _run(_fx("USDJPY", tick_size=0.001), [bar(i) for i in range(50)],
                   unconstrained=True, cost_model=costs)
 
     assert result.equity_curve[-1][1] == pytest.approx(10_000 - 20.0)

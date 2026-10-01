@@ -17,7 +17,7 @@ sees it, then the strategy places orders that fill on subsequent bars.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from ..core import Bar, Instrument
 from .account import Account
@@ -25,6 +25,13 @@ from .costs import CostModel
 from .order import Liquidity, Order, OrderStatus, OrderType, Side
 from .trade import Position, Trade
 from .venue import _UNSET, ExecutionVenue
+
+# A fill stamped with a long bar's open time lands on the 17:00 New York rollover for FX
+# 4h/1d bars, where the spread schedule is widest. A trader would wait out the rollover, so
+# fills on bars at least ``_LONG_BAR`` long are priced ``_SETTLE`` after the open (past the
+# 16:55-17:05 window). Shorter bars can resolve the window themselves and keep the open time.
+_LONG_BAR = timedelta(hours=1)
+_SETTLE = timedelta(minutes=10)
 
 
 class SimulatedVenue(ExecutionVenue):
@@ -66,15 +73,19 @@ class SimulatedVenue(ExecutionVenue):
         #    for every calendar night actually held, not just "a day" -- a
         #    Friday-to-Monday session gap is 3 nights (Fri, Sat, Sun), matching a
         #    broker's weekend carry, and a holiday gap is billed the same way.
+        #    The "day" is the broker's financing day: it rolls at the session's
+        #    ``day_anchor`` (17:00 New York for FX/CFDs), not at local midnight. The key is
+        #    the date of the most recent rollover, so crossing Wed 17:00 charges the night
+        #    that starts Wednesday (weight 3 under FX_NIGHT_WEIGHTS).
         self._now = bar.timestamp
-        day = self.instrument.session.to_local(bar.timestamp).date()
+        day = self._financing_day(bar.timestamp)
         if self._last_day is not None and day != self._last_day and self._open:
-            self._accrue_financing(self._last_day, (day - self._last_day).days)
+            self._accrue_financing(self._last_day + timedelta(days=1), (day - self._last_day).days)
         self._last_day = day
 
         # 2. Exits decided on the previous bar fill at this bar's open.
         for trade in list(self._pending_closes):
-            self._close_trade(trade, bar.open, "signal", bar.timestamp)
+            self._close_trade(trade, bar.open, "signal", bar.timestamp, self._price_time(bar))
         self._pending_closes.clear()
 
         # 3. SL/TP on trades that were already open at the start of this bar.
@@ -82,7 +93,7 @@ class SimulatedVenue(ExecutionVenue):
             hit = self._check_exit(trade, bar)
             if hit is not None:
                 raw_price, reason = hit
-                self._close_trade(trade, raw_price, reason, bar.timestamp)
+                self._close_trade(trade, raw_price, reason, bar.timestamp, self._price_time(bar))
 
         # 4. Working orders: market entries fill at open; limit/stop when touched.
         #    SL/TP is also evaluated on the fill bar so a trade can be stopped out
@@ -100,14 +111,29 @@ class SimulatedVenue(ExecutionVenue):
             fill = self._try_fill_entry(order, bar)
             if fill is not None:
                 intrabar_entry = order.type is not OrderType.MARKET
-                trade = self._open_trade(order, fill, bar.timestamp)
+                trade = self._open_trade(order, fill, bar.timestamp, self._price_time(bar))
                 self._working.remove(order)
                 hit = self._check_exit(trade, bar, allow_take_profit=not intrabar_entry)
                 if hit is not None:
                     raw_price, reason = hit
-                    self._close_trade(trade, raw_price, reason, bar.timestamp)
+                    self._close_trade(trade, raw_price, reason, bar.timestamp, self._price_time(bar))
 
         self._last_bar = bar
+
+    def _financing_day(self, ts: datetime) -> date:
+        session = self.instrument.session
+        local = session.to_local(ts)
+        anchor = session.day_anchor
+        if anchor is not None and local.time() < anchor:
+            return local.date() - timedelta(days=1)
+        return local.date()
+
+    @staticmethod
+    def _price_time(bar: Bar) -> datetime:
+        """Time used to look up time-varying spread for a fill on ``bar``."""
+        if timedelta(seconds=bar.timeframe.seconds) >= _LONG_BAR:
+            return bar.timestamp + _SETTLE
+        return bar.timestamp
 
     # --- ExecutionVenue interface ---------------------------------------------
 
@@ -257,10 +283,12 @@ class SimulatedVenue(ExecutionVenue):
                 return min(sp, bar.open)   # gap down fills worse
         return None
 
-    def _open_trade(self, order: Order, raw_price: float, ts: datetime) -> Trade:
+    def _open_trade(
+        self, order: Order, raw_price: float, ts: datetime, price_ts: datetime | None = None
+    ) -> Trade:
         # A resting limit entry fills as a maker; market/stop entries are takers.
         liq = Liquidity.MAKER if order.type is OrderType.LIMIT else Liquidity.TAKER
-        fill_price = self.cost_model.fill_price(self.instrument, order.side, raw_price, liq, ts)
+        fill_price = self.cost_model.fill_price(self.instrument, order.side, raw_price, liq, price_ts or ts)
         commission = self._commission(fill_price, order.size, liq)
         self.account.debit(commission)
         trade = Trade(
@@ -330,14 +358,17 @@ class SimulatedVenue(ExecutionVenue):
                         return "take_profit"
         return "stop_loss"
 
-    def _close_trade(self, trade: Trade, raw_price: float, reason: str, ts: datetime) -> None:
+    def _close_trade(
+        self, trade: Trade, raw_price: float, reason: str, ts: datetime,
+        price_ts: datetime | None = None,
+    ) -> None:
         if not trade.is_open:
             return
         exit_side = Side.SELL if trade.side is Side.BUY else Side.BUY
         # Take-profit is a resting limit (maker); stop-loss and signal exits cross the
         # book (taker).
         liq = Liquidity.MAKER if reason == "take_profit" else Liquidity.TAKER
-        exit_price = self.cost_model.fill_price(self.instrument, exit_side, raw_price, liq, ts)
+        exit_price = self.cost_model.fill_price(self.instrument, exit_side, raw_price, liq, price_ts or ts)
         cs = self.instrument.contract_size()
         direction = 1 if trade.side is Side.BUY else -1
         gross = (exit_price - trade.entry_price) * direction * trade.size * cs * self._fx()

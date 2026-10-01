@@ -107,3 +107,25 @@ def test_scaling_costs_scales_every_rate_and_keeps_the_weights_and_schedule():
         0.0730, short_rate=-0.0292, night_weights=FX_NIGHT_WEIGHTS,
         schedule=(RateChange(date(2023, 1, 3), 0.1460, -0.0584),),
     )
+
+
+def test_financing_rolls_at_17h00_new_york_not_at_midnight():
+    # Wed 2023-01-04 20:00 NY (01:00 UTC Thu) to Thu 06:00 NY: crosses the local midnight
+    # but no 17:00 rollover, so no night is charged.
+    financing = FinancingModel(0.0365, night_weights=FX_NIGHT_WEIGHTS)
+    after_wed_rollover = datetime(2023, 1, 5, 1, tzinfo=UTC)
+
+    assert _cash_after(financing, short=False, start=after_wed_rollover, hours=10) == pytest.approx(
+        10_000
+    )
+
+
+def test_a_hold_across_wednesday_17h00_that_closes_before_midnight_pays_the_triple():
+    # Wed 15:00 NY (20:00 UTC) for 6 hourly bars ends 20:00 NY: crosses the Wed 17:00
+    # rollover only, which books Wed, Thu and the weekend value date: 3 x 10 USD.
+    financing = FinancingModel(0.0365, night_weights=FX_NIGHT_WEIGHTS)
+    wed_3pm = datetime(2023, 1, 4, 20, tzinfo=UTC)
+
+    assert _cash_after(financing, short=False, start=wed_3pm, hours=6) == pytest.approx(
+        10_000 - 30.0
+    )

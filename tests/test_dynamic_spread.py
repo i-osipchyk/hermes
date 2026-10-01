@@ -194,3 +194,17 @@ def test_stock_spread_is_wider_in_the_first_five_minutes_after_the_open():
     assert buy(datetime(2023, 1, 3, 14, 34, tzinfo=UTC)) == pytest.approx(100.0 + 0.03 / 2)  # 09:34
     assert buy(datetime(2023, 1, 3, 14, 35, tzinfo=UTC)) == pytest.approx(100.0 + 0.01 / 2)  # 09:35
     assert buy(datetime(2023, 1, 1, 14, 30, tzinfo=UTC)) == pytest.approx(100.0 + 0.01 / 2)  # Sunday
+
+
+# --- slice 5: long bars open on the rollover, but fills wait it out --------
+
+def test_a_long_bar_fill_at_the_17h00_rollover_open_pays_the_base_spread():
+    # Wed 2023-01-04 21:00 UTC = 16:00 NY: entry bar opens 17:00 NY (inside the x5 rollover
+    # window by its stamp), but a 1h bar cannot resolve the window, so the fill is priced
+    # ten minutes after the open: base spread, both for the entry and the (bid) exit.
+    cm = CostModel(PercentCommission(0.0), SpreadModel(BASE, SpreadSchedule.cfd_default()),
+                   SlippageModel(0.0, 0.0), FinancingModel(0.0))
+
+    assert _round_trip_loss(cm, datetime(2023, 1, 4, 21, 0, tzinfo=UTC)) == pytest.approx(
+        BASE * 100_000
+    )
