@@ -57,8 +57,9 @@ _CFD_SESSION = SessionCalendar(
 # live against a Pepperstone cTrader account via ProtoOASymbolByIdReq
 # (digits=1 -> tick_size=0.1, lotSize=100 for both): index CFDs price to one
 # decimal and size in lots of 100 units, not FX pip/100k-lot conventions.
-# Extend this table (ticker -> (tick_size, lot_size, volume_step)) as other
-# non-FX symbols are traded through CTraderSource/PepperstoneSource.
+# With credentials, get_instrument reads digits/lotSize/stepVolume from the broker
+# (ProtoOASymbolByIdReq) for every symbol; this table is only the OFFLINE fallback
+# (ticker -> (tick_size, lot_size, volume_step)) used when no credentials are set.
 # volume_step is the minimum ORDER SIZE increment in lots and is unrelated to
 # tick_size (the price increment) -- Pepperstone's index CFDs trade in 0.01 lots
 # while pricing to 0.1, and FX trades in 0.01 lots while pricing to 0.00001.
@@ -67,6 +68,16 @@ _SYMBOL_SPECS: dict[str, tuple[float, float, float]] = {
     "US500": (0.1, 100.0, 0.01),
     "NAS100": (0.1, 100.0, 0.01),
 }
+
+
+def spec_from_proto(digits: int, lot_size: int, step_volume: int) -> tuple[float, float, float]:
+    """Decode a ProtoOASymbol's ``(digits, lotSize, stepVolume)`` into Hermes'
+    ``(tick_size, lot_size, volume_step)``.
+
+    ``lotSize`` and ``stepVolume`` are in cents of a unit on the wire, so a 100k-unit
+    FX lot is 10_000_000. ``volume_step`` is expressed in lots (step / lotSize).
+    """
+    return 10.0 ** -digits, lot_size / 100, step_volume / lot_size
 
 
 def trendbar_to_bar(
@@ -285,6 +296,19 @@ class _CTraderConnection:
                 raise ValueError(f"cTrader: unknown symbol {ticker!r} on account {self._account_id}")
         return self._symbol_ids[ticker]
 
+    def symbol_spec(self, ticker: str) -> tuple[int, int, int]:
+        """Raw ``(digits, lotSize, stepVolume)`` for ``ticker`` from ProtoOASymbolByIdReq."""
+        symbol_id = self.symbol_id(ticker)
+        res = self._call(
+            lambda: self._client.send(
+                "ProtoOASymbolByIdReq",
+                ctidTraderAccountId=self._account_id,
+                symbolId=[symbol_id],
+            )
+        )
+        s = res.symbol[0]
+        return s.digits, s.lotSize, s.stepVolume
+
     def trendbars(self, symbol_id: int, period: str, from_ms: int, to_ms: int, count: int) -> list:
         self._ensure_authed()
         from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod
@@ -336,11 +360,18 @@ class CTraderSource(DataSource):
         self.lot_size = lot_size
         self.leverage = leverage
         self.volume_step = volume_step
+        self._broker_specs: dict[str, tuple[float, float, float]] = {}
 
     def get_instrument(self, symbol: Symbol) -> Cfd:
         tick_size, lot_size, volume_step = _SYMBOL_SPECS.get(
             symbol.ticker, (self.tick_size, self.lot_size, self.volume_step)
         )
+        if self._has_credentials():
+            if symbol.ticker not in self._broker_specs:
+                self._broker_specs[symbol.ticker] = spec_from_proto(
+                    *self._connection().symbol_spec(symbol.ticker)
+                )
+            tick_size, lot_size, volume_step = self._broker_specs[symbol.ticker]
         return Cfd(
             symbol,
             session=self.session,
@@ -439,8 +470,11 @@ class CTraderSource(DataSource):
         out.sort(key=lambda tb: tb["utcTimestampInMinutes"])
         return out
 
+    def _has_credentials(self) -> bool:
+        return all((self.client_id, self.client_secret, self.access_token, self.account_id))
+
     def _connection(self) -> _CTraderConnection:
-        if not all((self.client_id, self.client_secret, self.access_token, self.account_id)):
+        if not self._has_credentials():
             raise RuntimeError(
                 "CTraderSource requires client_id, client_secret, access_token, account_id "
                 "(pass explicitly, or set CTRADER_CLIENT_ID / CTRADER_CLIENT_SECRET / "

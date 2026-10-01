@@ -14,6 +14,7 @@ from hermes.data.sources.ctrader_source import (
     _CFD_SESSION,
     prev_page_end,
     resample_from_hourly,
+    spec_from_proto,
     trendbar_to_bar,
 )
 
@@ -22,13 +23,24 @@ H4 = Timeframe.parse("4h")
 NY = ZoneInfo("America/New_York")
 
 
+@pytest.fixture(autouse=True)
+def _no_ctrader_env(monkeypatch):
+    for name in ("CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN", "ACCOUNT_ID"):
+        monkeypatch.delenv(f"CTRADER_{name}", raising=False)
+
+
 def _cfd():
     return Cfd(Symbol("EURUSD", "pepperstone"), session=_CFD_SESSION, tick_size=1e-5,
                lot_size=100_000, leverage=30)
 
 
+def _offline_source():
+    # No credentials -> no broker lookup; get_instrument falls back to the local table.
+    return PepperstoneSource(client_id="", client_secret="", access_token="", account_id=0)
+
+
 def test_get_instrument_uses_fx_defaults_for_unlisted_symbol():
-    source = PepperstoneSource(client_id="x", client_secret="x", access_token="x", account_id=1)
+    source = _offline_source()
     inst = source.get_instrument(Symbol("EURUSD", "pepperstone"))
     assert inst.tick_size == 1e-5
     assert inst.lot_size == 100_000
@@ -37,7 +49,7 @@ def test_get_instrument_uses_fx_defaults_for_unlisted_symbol():
 def test_get_instrument_uses_confirmed_index_specs():
     # digits=1 -> tick_size=0.1, lotSize=100 -- confirmed live via
     # ProtoOASymbolByIdReq against a Pepperstone account for both tickers.
-    source = PepperstoneSource(client_id="x", client_secret="x", access_token="x", account_id=1)
+    source = _offline_source()
     for ticker in ("US500", "NAS100"):
         inst = source.get_instrument(Symbol(ticker, "pepperstone"))
         assert inst.tick_size == 0.1
@@ -164,3 +176,73 @@ def test_prev_page_end_steps_back_past_first_bar():
 
 def test_prev_page_end_empty_page_stops_pagination():
     assert prev_page_end([], from_ms=0, period_seconds=3600) is None
+
+
+class _FakeConnection:
+    """Stands in for _CTraderConnection: returns raw ProtoOASymbol fields."""
+
+    def __init__(self, specs):
+        self._specs = specs
+        self.calls = []
+
+    def symbol_spec(self, ticker):
+        self.calls.append(ticker)
+        return self._specs[ticker]
+
+
+def _source_with(specs):
+    conn = _FakeConnection(specs)
+
+    class _Source(PepperstoneSource):
+        def _connection(self):
+            return conn
+
+    source = _Source(client_id="x", client_secret="x", access_token="x", account_id=1)
+    return source, conn
+
+
+def test_get_instrument_reads_tick_size_from_broker_digits():
+    # JPY pairs quote to 3 decimals; the FX fallback of 0.00001 would be wrong.
+    source, _ = _source_with({"USDJPY": (3, 10_000_000, 100_000)})
+    inst = source.get_instrument(Symbol("USDJPY", "pepperstone"))
+    assert inst.tick_size == pytest.approx(0.001)
+
+
+def test_get_instrument_converts_broker_lot_and_step_to_hermes_units():
+    # cTrader sends lotSize/stepVolume in cents of a unit: 10_000_000 -> 100k-unit lot,
+    # 100_000 step -> 0.01 lot. Index: 10_000 -> 100-unit lot, 100 step -> 0.01 lot.
+    source, _ = _source_with({
+        "EURUSD": (5, 10_000_000, 100_000),
+        "GER40": (1, 10_000, 100),
+    })
+    fx = source.get_instrument(Symbol("EURUSD", "pepperstone"))
+    assert (fx.tick_size, fx.lot_size, fx.volume_step) == (pytest.approx(1e-5), 100_000, 0.01)
+    idx = source.get_instrument(Symbol("GER40", "pepperstone"))
+    assert (idx.tick_size, idx.lot_size, idx.volume_step) == (pytest.approx(0.1), 100, 0.01)
+
+
+def test_spec_from_proto_decodes_wire_units():
+    assert spec_from_proto(3, 10_000_000, 100_000) == (pytest.approx(0.001), 100_000, 0.01)
+    assert spec_from_proto(2, 10_000, 100) == (pytest.approx(0.01), 100, 0.01)
+
+
+def test_get_instrument_fails_loudly_when_broker_lookup_fails():
+    # With credentials, a failed lookup must not silently reuse the FX tick.
+    class _Boom:
+        def symbol_spec(self, ticker):
+            raise RuntimeError("cTrader request failed")
+
+    class _Source(PepperstoneSource):
+        def _connection(self):
+            return _Boom()
+
+    source = _Source(client_id="x", client_secret="x", access_token="x", account_id=1)
+    with pytest.raises(RuntimeError):
+        source.get_instrument(Symbol("USDJPY", "pepperstone"))
+
+
+def test_get_instrument_looks_up_each_ticker_once():
+    source, conn = _source_with({"USDJPY": (3, 10_000_000, 100_000)})
+    for _ in range(3):
+        source.get_instrument(Symbol("USDJPY", "pepperstone"))
+    assert conn.calls == ["USDJPY"]
