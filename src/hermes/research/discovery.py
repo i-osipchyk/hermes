@@ -142,6 +142,14 @@ def configured_backtest(
     from .sources import build_source
 
     bt = entry.build_backtest()
+    if ticker != bt.symbol.ticker:
+        # Rebuild through the factory so symbol-dependent parts (a cost model priced in
+        # ticks, an instrument-specific default) are derived for THIS symbol; a bare
+        # replace(symbol=...) would keep the default symbol's.
+        try:
+            bt = entry.build_backtest(symbol=Symbol(ticker, bt.symbol.source))
+        except TypeError:       # a factory that takes no overrides keeps the old behaviour
+            pass
     source = (
         build_source(source_name, leverage=leverage)
         if source_name and (source_name != bt.source.name or leverage is not None)

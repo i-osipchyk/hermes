@@ -732,7 +732,18 @@ def cmd_install_skills(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _load_env() -> None:
+    """Read ``.env`` (cTrader/Tiingo/Polygon credentials) so no wrapper is needed. Real
+    environment variables win over the file; a missing python-dotenv is not an error."""
+    try:
+        import dotenv
+    except ImportError:
+        return
+    dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True))
+
+
 def main(argv: list[str] | None = None) -> int:
+    _load_env()
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))

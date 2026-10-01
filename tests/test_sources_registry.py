@@ -57,3 +57,27 @@ def test_configured_backtest_switches_source(tmp_path):
     )
     assert isinstance(bt.source, BinanceSource)
     assert bt.symbol.source == "binance"  # symbol re-namespaced to the new source
+
+
+_PER_SYMBOL_COSTS = _STRATEGY.replace(
+    "    for k, v in overrides.items():",
+    "    bt.cost_model = 'priced-for-' + overrides.get('symbol', bt.symbol).ticker\n"
+    "    for k, v in overrides.items():",
+)
+
+
+def test_overriding_the_symbol_rebuilds_symbol_dependent_parts(tmp_path):
+    from datetime import UTC, datetime
+
+    sdir = tmp_path / "strategies"
+    sdir.mkdir()
+    (sdir / "s.py").write_text(_PER_SYMBOL_COSTS)
+    entry = discovery.discover(sdir)[0]
+
+    bt = discovery.configured_backtest(
+        entry, ticker="ETHUSDT", start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 2, 1, tzinfo=UTC), starting_cash=1_000,
+    )
+
+    assert bt.symbol.ticker == "ETHUSDT"
+    assert bt.cost_model == "priced-for-ETHUSDT"
