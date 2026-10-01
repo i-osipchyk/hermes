@@ -34,6 +34,9 @@ class Trade:
     gross_pnl: float | None = None
     costs: float | None = None        # commission + spread + slippage + financing
     ai_decision: AdvisorDecision | None = None  # the Advisor Decision, if consulted
+    # Account-currency value of one quote-currency unit when the Trade opened: turns
+    # price * size * contract_size (quote currency) into account-currency notional.
+    quote_rate: float = 1.0
 
     @property
     def is_open(self) -> bool:

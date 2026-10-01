@@ -36,6 +36,11 @@ class ExecutionVenue(ABC):
         Pass ``None`` to clear a level; omit the argument to leave it unchanged."""
 
     @abstractmethod
+    def quote_rate(self) -> float:
+        """Account-currency value of one unit of the Instrument's quote currency now.
+        1.0 when the two coincide (the default)."""
+        return 1.0
+
     def close_trade(self, trade: Trade) -> None:
         """Close a specific open Trade at market."""
 

@@ -308,6 +308,14 @@ class CryptoPerpetual(Instrument):
         return size
 
 
+def _fx_quote_currency(ticker: str) -> str:
+    """The quote currency of an FX pair ticker (``USDJPY`` -> ``JPY``); USD for
+    anything else (indices, metals, share CFDs are quoted in USD here)."""
+    if len(ticker) == 6 and ticker.isalpha() and ticker.isupper():
+        return ticker[3:]
+    return "USD"
+
+
 @dataclass(eq=False)
 class Cfd(Instrument):
     """A contract for difference (Pepperstone / MT5). Leveraged, bid-based bars,
@@ -336,7 +344,7 @@ class Cfd(Instrument):
     ):
         super().__init__(
             symbol,
-            quote_currency="USD",
+            quote_currency=_fx_quote_currency(symbol.ticker),
             tick_size=tick_size,
             session=session,
             price_basis=PriceBasis.BID,

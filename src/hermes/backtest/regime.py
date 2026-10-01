@@ -121,7 +121,9 @@ def _regime_stats(label: str, trades: list) -> RegimeStats:
     rets = []
     for t in trades:
         if t.net_pnl is not None and t.entry_price > 0 and t.size > 0:
-            capital_at_risk = t.entry_price * t.size * t.instrument.contract_size()
+            capital_at_risk = (
+                t.entry_price * t.size * t.instrument.contract_size() * t.quote_rate
+            )
             rets.append(t.net_pnl / capital_at_risk)
     if rets:
         sharpe = _sharpe_from_rets(rets, 252.0)

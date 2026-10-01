@@ -21,6 +21,7 @@ class SizingContext:
     price: float                 # intended entry reference price
     equity: float                # current account equity
     stop_price: float | None = None  # required for risk-based sizing
+    quote_rate: float = 1.0      # account-currency value of one quote-currency unit
 
 
 class Sizer(ABC):
@@ -42,7 +43,7 @@ class NotionalCash(Sizer):
     cash: float
 
     def resolve(self, ctx: SizingContext) -> float:
-        per_unit = ctx.price * ctx.instrument.contract_size()
+        per_unit = ctx.price * ctx.instrument.contract_size() * ctx.quote_rate
         if per_unit <= 0:
             return 0.0
         return ctx.instrument.to_native_units(self.cash / per_unit)
@@ -51,7 +52,9 @@ class NotionalCash(Sizer):
 def _risk_units(ctx: SizingContext, risk_cash: float) -> float:
     if ctx.stop_price is None:
         raise ValueError("Risk-based sizing requires a stop_price")
-    per_unit_risk = abs(ctx.price - ctx.stop_price) * ctx.instrument.contract_size()
+    per_unit_risk = (
+        abs(ctx.price - ctx.stop_price) * ctx.instrument.contract_size() * ctx.quote_rate
+    )
     if per_unit_risk <= 0:
         return 0.0
     return ctx.instrument.to_native_units(risk_cash / per_unit_risk)
@@ -85,7 +88,7 @@ class EquityFraction(Sizer):
 
     def resolve(self, ctx: SizingContext) -> float:
         notional = ctx.equity * self.fraction
-        per_unit = ctx.price * ctx.instrument.contract_size()
+        per_unit = ctx.price * ctx.instrument.contract_size() * ctx.quote_rate
         if per_unit <= 0:
             return 0.0
         return ctx.instrument.to_native_units(notional / per_unit)
@@ -109,7 +112,7 @@ class LeveragedFraction(Sizer):
     def resolve(self, ctx: SizingContext) -> float:
         leverage = getattr(ctx.instrument, "leverage", 1.0) or 1.0
         notional = ctx.equity * leverage * self.fraction
-        per_unit = ctx.price * ctx.instrument.contract_size()
+        per_unit = ctx.price * ctx.instrument.contract_size() * ctx.quote_rate
         if per_unit <= 0:
             return 0.0
         return ctx.instrument.to_native_units(notional / per_unit)

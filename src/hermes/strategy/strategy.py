@@ -226,6 +226,7 @@ class Strategy(ABC):
                 price=limit or stop or self.price,
                 equity=self.venue.equity(),
                 stop_price=stop_loss,
+                quote_rate=self.venue.quote_rate(),
             )
             resolved = effective_size.resolve(ctx)
         else:

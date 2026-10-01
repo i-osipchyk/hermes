@@ -281,7 +281,7 @@ def _metrics(
             avg_equity = sum(equities) / len(equities)
             if avg_equity > 0:
                 total_notional = sum(
-                    abs(t.size * t.entry_price) * t.instrument.contract_size()
+                    abs(t.size * t.entry_price) * t.instrument.contract_size() * t.quote_rate
                     for t in trades
                     if t.size is not None and t.entry_price is not None
                 )

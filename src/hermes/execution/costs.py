@@ -12,12 +12,17 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..core import AssetClass, Instrument, PriceBasis
 from .order import Liquidity, Side
 
 
 class CommissionModel(ABC):
+    # True when the fee is a fraction of notional and so comes out in the Instrument's
+    # quote currency. Fixed per-lot / per-share fees are already in account currency.
+    notional_based: ClassVar[bool] = False
+
     @abstractmethod
     def commission(
         self, instrument: Instrument, price: float, size: float, liquidity: Liquidity
@@ -26,6 +31,7 @@ class CommissionModel(ABC):
 
 @dataclass(slots=True)
 class PercentCommission(CommissionModel):
+    notional_based: ClassVar[bool] = True
     """Flat percentage of notional, regardless of maker/taker."""
 
     rate: float = 0.001
@@ -36,6 +42,7 @@ class PercentCommission(CommissionModel):
 
 @dataclass(slots=True)
 class MakerTakerCommission(CommissionModel):
+    notional_based: ClassVar[bool] = True
     """Separate maker/taker rates of notional. ``maker_rate`` may be **negative** (a
     rebate — you get paid to provide liquidity)."""
 

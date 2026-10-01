@@ -298,7 +298,9 @@ class PortfolioBacktest:
         view = MultiTimeframeView(instrument, base, higher)
 
         cost_model = bt.cost_model or CostModel.default_for(instrument)
-        venue = SimulatedVenue(instrument, account, cost_model, unconstrained=unconstrained)
+        quote_rate = bt._quote_rate(instrument, account, base, start, end)
+        venue = SimulatedVenue(instrument, account, cost_model, unconstrained=unconstrained,
+                               quote_rate=quote_rate)
 
         strat.base_timeframe = base
         strat.venue = venue

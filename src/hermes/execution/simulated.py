@@ -36,12 +36,16 @@ class SimulatedVenue(ExecutionVenue):
         *,
         magnifier_bars: Callable[[Bar], list[Bar] | None] | None = None,
         unconstrained: bool = False,
+        quote_rate: Callable[[datetime], float] | None = None,
     ) -> None:
         self.instrument = instrument
         self.account = account
         self.cost_model = cost_model
         self._magnifier = magnifier_bars
         self._unconstrained = unconstrained
+        # quote currency -> account currency, from closed bars only (ADR-0002).
+        self._quote_rate = quote_rate
+        self._now: datetime | None = None
 
         self._working: list[Order] = []        # market + resting limit/stop entries
         self._pending_closes: list[Trade] = []  # exits decided last bar
@@ -62,6 +66,7 @@ class SimulatedVenue(ExecutionVenue):
         #    for every calendar night actually held, not just "a day" -- a
         #    Friday-to-Monday session gap is 3 nights (Fri, Sat, Sun), matching a
         #    broker's weekend carry, and a holiday gap is billed the same way.
+        self._now = bar.timestamp
         day = self.instrument.session.to_local(bar.timestamp).date()
         if self._last_day is not None and day != self._last_day and self._open:
             self._accrue_financing(days=(day - self._last_day).days)
@@ -174,14 +179,14 @@ class SimulatedVenue(ExecutionVenue):
         for t in self._open:
             direction = 1 if t.side is Side.BUY else -1
             total += (price - t.entry_price) * direction * t.size * cs
-        return total
+        return total * self._fx()
 
     def equity(self) -> float:
         return self.account.equity(self.unrealised_pnl())
 
     def used_margin(self) -> float:
         return sum(
-            Account.margin_required(self.instrument, t.entry_price, t.size) for t in self._open
+            self._margin(t.entry_price, t.size) for t in self._open
         )
 
     def pending_margin(self) -> float:
@@ -189,10 +194,29 @@ class SimulatedVenue(ExecutionVenue):
         total = 0.0
         for o in self._working:
             ref = o.limit_price or o.stop_price or (self._last_bar.close if self._last_bar else 0.0)
-            total += Account.margin_required(self.instrument, ref, o.size)
+            total += self._margin(ref, o.size)
         return total
 
     # --- internals -------------------------------------------------------------
+
+    def _commission(self, price: float, size: float, liq: Liquidity) -> float:
+        """Commission in the account currency."""
+        model = self.cost_model.commission
+        fee = model.commission(self.instrument, price, size, liq)
+        return fee * self._fx() if model.notional_based else fee
+
+    def _margin(self, price: float, size: float) -> float:
+        """Margin to hold ``size`` at ``price``, in the account currency."""
+        return Account.margin_required(self.instrument, price, size) * self._fx()
+
+    def quote_rate(self) -> float:
+        return self._fx()
+
+    def _fx(self) -> float:
+        """Account-currency value of one quote-currency unit at the current bar."""
+        if self._quote_rate is None or self._now is None:
+            return 1.0
+        return self._quote_rate(self._now)
 
     def _can_afford(self, side: Side, size: float, price: float) -> bool:
         net_long = sum(t.size if t.side is Side.BUY else -t.size for t in self._open)
@@ -208,7 +232,7 @@ class SimulatedVenue(ExecutionVenue):
                 return False
         if self._unconstrained:
             return True
-        req = Account.margin_required(self.instrument, price, size)
+        req = self._margin(price, size)
         external = self._external_margin() if self._external_margin else 0.0
         ext_pnl = self._external_unrealised() if self._external_unrealised else 0.0
         reserved = self.used_margin() + self.pending_margin()
@@ -237,9 +261,7 @@ class SimulatedVenue(ExecutionVenue):
         # A resting limit entry fills as a maker; market/stop entries are takers.
         liq = Liquidity.MAKER if order.type is OrderType.LIMIT else Liquidity.TAKER
         fill_price = self.cost_model.fill_price(self.instrument, order.side, raw_price, liq)
-        commission = self.cost_model.commission.commission(
-            self.instrument, fill_price, order.size, liq
-        )
+        commission = self._commission(fill_price, order.size, liq)
         self.account.debit(commission)
         trade = Trade(
             instrument=self.instrument,
@@ -251,6 +273,7 @@ class SimulatedVenue(ExecutionVenue):
             take_profit=order.take_profit,
             costs=commission,
             ai_decision=order.ai_decision,
+            quote_rate=self._fx(),
         )
         order.status = OrderStatus.FILLED
         order.filled_at = ts
@@ -317,10 +340,8 @@ class SimulatedVenue(ExecutionVenue):
         exit_price = self.cost_model.fill_price(self.instrument, exit_side, raw_price, liq)
         cs = self.instrument.contract_size()
         direction = 1 if trade.side is Side.BUY else -1
-        gross = (exit_price - trade.entry_price) * direction * trade.size * cs
-        exit_commission = self.cost_model.commission.commission(
-            self.instrument, exit_price, trade.size, liq
-        )
+        gross = (exit_price - trade.entry_price) * direction * trade.size * cs * self._fx()
+        exit_commission = self._commission(exit_price, trade.size, liq)
         self.account.credit(gross - exit_commission)
 
         trade.exit_price = exit_price
@@ -336,6 +357,7 @@ class SimulatedVenue(ExecutionVenue):
         for t in self._open:
             notional = Account.notional(self.instrument, price, t.size)
             fin = self.cost_model.financing.overnight_charge(self.instrument, notional, days=days)
+            fin *= self._fx()
             if fin:
                 self.account.debit(fin)
                 t.costs = (t.costs or 0.0) + fin

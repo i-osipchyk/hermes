@@ -27,12 +27,20 @@ from ..ai import AIAdvisor
 from ..core import Symbol, Timeframe
 from ..data import DataSource, MultiTimeframeView
 from ..execution import Account, CostModel, SimulatedVenue
+from ..execution.fx import ClosedBarRate
 from ..indicators import Indicator
 from ..strategy import Sizer, Strategy
 from .result import BacktestResult, _compute_benchmark_stats
 from .validation import validate as _validate
 
 _UTC = UTC
+# Quote currencies Hermes has always valued 1:1 with USD (crypto pairs); not converted.
+_USD_STABLES = frozenset({"USDT", "USDC", "BUSD"})
+# Quote currencies whose USD pair is written USDxxx (USD is the base), so xxx is 1/rate.
+_USD_BASE_QUOTES = frozenset(
+    {"JPY", "CHF", "CAD", "SEK", "NOK", "DKK", "SGD", "HKD", "MXN", "ZAR", "TRY", "PLN",
+     "CZK", "HUF", "CNH", "ILS"}
+)
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -96,8 +104,10 @@ class Backtest:
         account = Account(self.starting_cash)
         cost_model = self.cost_model or CostModel.default_for(instrument)
         magnifier_fn = self._make_magnifier(instrument) if self.magnifier else None
+        quote_rate = self._quote_rate(instrument, account, base, start, end)
         venue = SimulatedVenue(instrument, account, cost_model,
-                               magnifier_bars=magnifier_fn, unconstrained=self.unconstrained)
+                               magnifier_bars=magnifier_fn, unconstrained=self.unconstrained,
+                               quote_rate=quote_rate)
 
         strat.base_timeframe = base
         strat.venue = venue
@@ -284,6 +294,32 @@ class Backtest:
         return result
 
     # --- helpers ---------------------------------------------------------------
+
+    def _quote_rate(self, instrument, account, base, start, end) -> ClosedBarRate | None:
+        """Quote-currency -> account-currency rate, or None when no conversion is due.
+
+        The conversion pair is read from the same source at the Base Timeframe, and
+        only bars closed before the current one are used (ADR-0002). Raises if the
+        source cannot serve the pair, rather than booking quote-currency money as USD.
+        """
+        quote = instrument.quote_currency
+        if quote == account.currency or (account.currency == "USD" and quote in _USD_STABLES):
+            return None
+        # Market convention: these currencies quote against USD as USDxxx, the rest as xxxUSD.
+        inverse = quote in _USD_BASE_QUOTES
+        ticker = account.currency + quote if inverse else quote + account.currency
+        if instrument.symbol.ticker == ticker:
+            conv_inst, conv_source = instrument, self.source
+        else:
+            conv_source = self.source
+            conv_inst = conv_source.get_instrument(Symbol(ticker, conv_source.name))
+        bars = conv_source.history(conv_inst, base, start - timedelta(days=7), end)
+        if not bars:
+            raise ValueError(
+                f"No {ticker} bars to convert {quote} P&L to {account.currency} "
+                f"for {instrument.symbol.ticker}"
+            )
+        return ClosedBarRate(bars, inverse=inverse)
 
     @staticmethod
     def _warm(
