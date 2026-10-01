@@ -69,7 +69,7 @@ class SimulatedVenue(ExecutionVenue):
         self._now = bar.timestamp
         day = self.instrument.session.to_local(bar.timestamp).date()
         if self._last_day is not None and day != self._last_day and self._open:
-            self._accrue_financing(days=(day - self._last_day).days)
+            self._accrue_financing(self._last_day, (day - self._last_day).days)
         self._last_day = day
 
         # 2. Exits decided on the previous bar fill at this bar's open.
@@ -352,14 +352,16 @@ class SimulatedVenue(ExecutionVenue):
         self._open.remove(trade)
         self._closed.append(trade)
 
-    def _accrue_financing(self, days: int = 1) -> None:
+    def _accrue_financing(self, first_night, nights: int = 1) -> None:
         price = self._last_bar.close if self._last_bar else 0.0
         for t in self._open:
             notional = Account.notional(self.instrument, price, t.size)
-            fin = self.cost_model.financing.overnight_charge(self.instrument, notional, days=days)
+            fin = self.cost_model.financing.charge_nights(
+                self.instrument, notional, t.side, first_night, nights
+            )
             fin *= self._fx()
             if fin:
-                self.account.debit(fin)
+                self.account.debit(fin)  # negative fin is carry received
                 t.costs = (t.costs or 0.0) + fin
 
     @property

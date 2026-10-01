@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import ClassVar
 
 from ..core import AssetClass, Instrument, PriceBasis
@@ -104,12 +105,72 @@ class SlippageModel:
         return price + slip if side is Side.BUY else price - slip
 
 
+# Weight of the night that *starts* on each weekday (Mon..Sun). Spot FX settles T+2, so the
+# Wednesday rollover books Wed, Thu and Fri-weekend value dates at once; Sat/Sun nights are
+# never separately charged.
+FX_NIGHT_WEIGHTS: tuple[float, ...] = (1.0, 1.0, 3.0, 1.0, 1.0, 0.0, 0.0)
+
+
+@dataclass(frozen=True, slots=True)
+class RateChange:
+    """A financing rate that takes effect on ``effective`` (the night starting that day)."""
+
+    effective: date
+    annual_rate: float
+    short_rate: float | None = None  # None = same as annual_rate
+
+
 @dataclass(slots=True)
 class FinancingModel:
-    annual_rate: float = 0.0  # charged per day a position is held past a session
+    """Overnight swap. ``annual_rate`` is the long rate (and the short rate too unless
+    ``short_rate`` is given). A negative rate is carry paid *to* the position."""
 
-    def overnight_charge(self, instrument: Instrument, notional: float, days: int = 1) -> float:
-        return abs(notional) * self.annual_rate / 365.0 * days
+    annual_rate: float = 0.0  # charged per day a position is held past a session
+    short_rate: float | None = None
+    # Per-weekday weight of the night starting that day; None = every calendar night is 1.
+    night_weights: tuple[float, ...] | None = None
+
+    # Dated rate changes; the latest one effective on or before a night replaces the base rate.
+    schedule: tuple[RateChange, ...] = ()
+
+    def scaled(self, factor: float) -> FinancingModel:
+        def short(rate: float | None) -> float | None:
+            return None if rate is None else rate * factor
+
+        return FinancingModel(
+            annual_rate=self.annual_rate * factor,
+            short_rate=short(self.short_rate),
+            night_weights=self.night_weights,
+            schedule=tuple(
+                RateChange(c.effective, c.annual_rate * factor, short(c.short_rate))
+                for c in self.schedule
+            ),
+        )
+
+    def _rate(self, side: Side, night: date | None = None) -> float:
+        long_rate, short_rate = self.annual_rate, self.short_rate
+        if night is not None:
+            for change in sorted(self.schedule, key=lambda c: c.effective):
+                if change.effective <= night:
+                    long_rate, short_rate = change.annual_rate, change.short_rate
+        return long_rate if side is Side.BUY or short_rate is None else short_rate
+
+    def charge_nights(
+        self, instrument: Instrument, notional: float, side: Side, first_night: date, nights: int
+    ) -> float:
+        """Signed cash cost of ``nights`` consecutive nights, the first starting on ``first_night``."""
+        total = 0.0
+        for i in range(nights):
+            night = first_night + timedelta(days=i)
+            weight = 1.0 if self.night_weights is None else self.night_weights[night.weekday()]
+            total += abs(notional) * self._rate(side, night) / 365.0 * weight
+        return total
+
+    def overnight_charge(
+        self, instrument: Instrument, notional: float, days: float = 1, side: Side = Side.BUY
+    ) -> float:
+        """Signed cash cost: positive is paid, negative is received."""
+        return abs(notional) * self._rate(side) / 365.0 * days
 
 
 @dataclass(slots=True)
@@ -153,7 +214,7 @@ class CostModel:
                 ticks=self.slippage.ticks * factor,
                 percent=self.slippage.percent * factor,
             ),
-            financing=FinancingModel(annual_rate=self.financing.annual_rate * factor),
+            financing=self.financing.scaled(factor),
         )
 
     @classmethod

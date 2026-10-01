@@ -110,6 +110,7 @@ from .data import (
 )
 from .data._ssl import ensure_system_trust as use_system_certs
 from .execution import (
+    FX_NIGHT_WEIGHTS,
     Account,
     CommissionModel,
     CostModel,
@@ -124,6 +125,7 @@ from .execution import (
     PerLotCommission,
     PerShareCommission,
     Position,
+    RateChange,
     Side,
     SimulatedVenue,
     SlippageModel,
@@ -259,7 +261,9 @@ __all__ = [
     "PerLotCommission",
     "MakerTakerCommission",
     "SpreadModel",
+    "RateChange",
     "SlippageModel",
+    "FX_NIGHT_WEIGHTS",
     "FinancingModel",
     # --- ai: the optional confirm/veto gate ----------------------------------
     "AIAdvisor",

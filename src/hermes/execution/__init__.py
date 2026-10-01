@@ -2,6 +2,7 @@
 
 from .account import Account
 from .costs import (
+    FX_NIGHT_WEIGHTS,
     CommissionModel,
     CostModel,
     FinancingModel,
@@ -9,6 +10,7 @@ from .costs import (
     PercentCommission,
     PerLotCommission,
     PerShareCommission,
+    RateChange,
     SlippageModel,
     SpreadModel,
 )
@@ -33,7 +35,9 @@ __all__ = [
     "PerShareCommission",
     "PerLotCommission",
     "SpreadModel",
+    "RateChange",
     "SlippageModel",
+    "FX_NIGHT_WEIGHTS",
     "FinancingModel",
     "ExecutionVenue",
     "SimulatedVenue",
