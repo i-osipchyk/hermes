@@ -130,6 +130,8 @@ from .execution import (
     SimulatedVenue,
     SlippageModel,
     SpreadModel,
+    SpreadSchedule,
+    SpreadWindow,
     Trade,
 )
 from .indicators import (
@@ -261,6 +263,8 @@ __all__ = [
     "PerLotCommission",
     "MakerTakerCommission",
     "SpreadModel",
+    "SpreadSchedule",
+    "SpreadWindow",
     "RateChange",
     "SlippageModel",
     "FX_NIGHT_WEIGHTS",

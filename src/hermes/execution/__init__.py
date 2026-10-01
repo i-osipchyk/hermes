@@ -13,6 +13,8 @@ from .costs import (
     RateChange,
     SlippageModel,
     SpreadModel,
+    SpreadSchedule,
+    SpreadWindow,
 )
 from .order import Liquidity, Order, OrderStatus, OrderType, Side
 from .simulated import SimulatedVenue
@@ -35,6 +37,8 @@ __all__ = [
     "PerShareCommission",
     "PerLotCommission",
     "SpreadModel",
+    "SpreadSchedule",
+    "SpreadWindow",
     "RateChange",
     "SlippageModel",
     "FX_NIGHT_WEIGHTS",

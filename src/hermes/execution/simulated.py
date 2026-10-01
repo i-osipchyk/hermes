@@ -260,7 +260,7 @@ class SimulatedVenue(ExecutionVenue):
     def _open_trade(self, order: Order, raw_price: float, ts: datetime) -> Trade:
         # A resting limit entry fills as a maker; market/stop entries are takers.
         liq = Liquidity.MAKER if order.type is OrderType.LIMIT else Liquidity.TAKER
-        fill_price = self.cost_model.fill_price(self.instrument, order.side, raw_price, liq)
+        fill_price = self.cost_model.fill_price(self.instrument, order.side, raw_price, liq, ts)
         commission = self._commission(fill_price, order.size, liq)
         self.account.debit(commission)
         trade = Trade(
@@ -337,7 +337,7 @@ class SimulatedVenue(ExecutionVenue):
         # Take-profit is a resting limit (maker); stop-loss and signal exits cross the
         # book (taker).
         liq = Liquidity.MAKER if reason == "take_profit" else Liquidity.TAKER
-        exit_price = self.cost_model.fill_price(self.instrument, exit_side, raw_price, liq)
+        exit_price = self.cost_model.fill_price(self.instrument, exit_side, raw_price, liq, ts)
         cs = self.instrument.contract_size()
         direction = 1 if trade.side is Side.BUY else -1
         gross = (exit_price - trade.entry_price) * direction * trade.size * cs * self._fx()

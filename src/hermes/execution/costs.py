@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import ClassVar
+from zoneinfo import ZoneInfo
 
 from ..core import AssetClass, Instrument, PriceBasis
 from .order import Liquidity, Side
@@ -72,21 +73,79 @@ class PerLotCommission(CommissionModel):
         return abs(size) * self.per_lot
 
 
+@dataclass(frozen=True, slots=True)
+class SpreadWindow:
+    """A local-time window ``[start, end)`` in which the base spread is multiplied.
+    ``weekdays`` (Mon=0..Sun=6) restricts it; ``None`` means every day."""
+
+    multiplier: float
+    start: time
+    end: time
+    weekdays: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SpreadSchedule:
+    """Spread multiplier by time of week. Bars carry only the bid, so the spread can't be
+    measured from data; this is the assumption that stands in for it. Windows are read in
+    ``timezone`` (so a New York 17:00 rollover tracks DST); where windows overlap the widest
+    wins; outside every window the multiplier is 1."""
+
+    timezone: ZoneInfo
+    windows: tuple[SpreadWindow, ...] = ()
+
+    @classmethod
+    def cfd_default(cls) -> SpreadSchedule:
+        """FX/CFD liquidity gaps: x10 for the hour after the Sunday open and x5 around the
+        17:00 New York daily rollover. Rough, round numbers (spreads widen 5-20x in
+        practice); post-release spikes are not scheduled -- add a window for those."""
+        return cls(ZoneInfo("America/New_York"), (
+            SpreadWindow(10.0, time(17, 0), time(18, 0), weekdays=(6,)),
+            SpreadWindow(5.0, time(16, 55), time(17, 5), weekdays=(0, 1, 2, 3, 4)),
+        ))
+
+    @classmethod
+    def us_equity_open(cls, minutes: int = 5, multiplier: float = 3.0) -> SpreadSchedule:
+        """Wider quotes in the first ``minutes`` after the 09:30 New York open."""
+        end = datetime(2000, 1, 1, 9, 30) + timedelta(minutes=minutes)
+        return cls(ZoneInfo("America/New_York"), (
+            SpreadWindow(multiplier, time(9, 30), end.time(), weekdays=(0, 1, 2, 3, 4)),
+        ))
+
+    def multiplier(self, ts: datetime) -> float:
+        local = ts.astimezone(self.timezone)
+        best = 1.0
+        for w in self.windows:
+            if w.weekdays is not None and local.weekday() not in w.weekdays:
+                continue
+            if w.start <= local.time() < w.end:
+                best = max(best, w.multiplier)
+        return best
+
+
 @dataclass(slots=True)
 class SpreadModel:
     """Applies bid/ask at fill for **taker** fills. ``points`` is the full spread in
-    price units. A maker fill rests at its own price and does not cross the spread."""
+    price units. A maker fill rests at its own price and does not cross the spread.
+    An optional ``schedule`` scales ``points`` by the fill's timestamp."""
 
     points: float = 0.0
+    schedule: SpreadSchedule | None = None
 
-    def adjust_fill(self, instrument, side: Side, price: float, liquidity=Liquidity.TAKER) -> float:
-        if self.points <= 0 or liquidity is Liquidity.MAKER:
+    def adjust_fill(
+        self, instrument, side: Side, price: float, liquidity=Liquidity.TAKER,
+        ts: datetime | None = None,
+    ) -> float:
+        points = self.points
+        if self.schedule is not None and ts is not None:
+            points *= self.schedule.multiplier(ts)
+        if points <= 0 or liquidity is Liquidity.MAKER:
             return price
         if instrument.price_basis is PriceBasis.BID:
             # Bars are bid; ask = bid + spread. Buys lift the ask, sells hit the bid.
-            return price + self.points if side is Side.BUY else price
+            return price + points if side is Side.BUY else price
         # LAST/MID basis: split the spread half each side around mid.
-        half = self.points / 2
+        half = points / 2
         return price + half if side is Side.BUY else price - half
 
 
@@ -181,10 +240,12 @@ class CostModel:
     financing: FinancingModel
 
     def fill_price(
-        self, instrument: Instrument, side: Side, raw_price: float, liquidity=Liquidity.TAKER
+        self, instrument: Instrument, side: Side, raw_price: float, liquidity=Liquidity.TAKER,
+        ts: datetime | None = None,
     ) -> float:
-        """Apply spread then slippage to a raw fill price (both no-ops for a maker)."""
-        priced = self.spread.adjust_fill(instrument, side, raw_price, liquidity)
+        """Apply spread then slippage to a raw fill price (both no-ops for a maker).
+        ``ts`` is the fill's time, which a spread schedule needs."""
+        priced = self.spread.adjust_fill(instrument, side, raw_price, liquidity, ts)
         return self.slippage.adjust_fill(instrument, side, priced, liquidity)
 
     def scaled(self, factor: float) -> CostModel:
@@ -209,7 +270,7 @@ class CostModel:
 
         return CostModel(
             commission=new_comm,
-            spread=SpreadModel(points=self.spread.points * factor),
+            spread=SpreadModel(points=self.spread.points * factor, schedule=self.spread.schedule),
             slippage=SlippageModel(
                 ticks=self.slippage.ticks * factor,
                 percent=self.slippage.percent * factor,
@@ -236,6 +297,32 @@ class CostModel:
             spread=SpreadModel(points=0.01),   # 1-tick bid-ask spread ($0.01 for US equities)
             slippage=SlippageModel(ticks=0.0),
             financing=FinancingModel(annual_rate=0.0),
+        )
+
+    @classmethod
+    def pepperstone_razor(cls, instrument: Instrument) -> CostModel:
+        """Razor account: ~0.2 pip raw spread plus $7 per lot round trip ($3.50 a side).
+        Calibrated for a 5-digit FX CFD (a pip = 10 ticks); set the spread yourself for
+        indices. Slippage is zero: the quoted spread plus commission is the cost."""
+        return cls(
+            commission=PerLotCommission(per_lot=3.5),
+            spread=SpreadModel(
+                points=2 * instrument.tick_size, schedule=SpreadSchedule.cfd_default()
+            ),
+            slippage=SlippageModel(ticks=0.0),
+            financing=FinancingModel(annual_rate=0.005),
+        )
+
+    @classmethod
+    def pepperstone_standard(cls, instrument: Instrument) -> CostModel:
+        """Standard account: ~1 pip spread, no commission. Same calibration as Razor."""
+        return cls(
+            commission=PerLotCommission(per_lot=0.0),
+            spread=SpreadModel(
+                points=10 * instrument.tick_size, schedule=SpreadSchedule.cfd_default()
+            ),
+            slippage=SlippageModel(ticks=0.0),
+            financing=FinancingModel(annual_rate=0.005),
         )
 
     @classmethod
@@ -276,7 +363,9 @@ class CostModel:
         # CFD: spread is the cost; carry applies overnight.
         return cls(
             commission=PerLotCommission(0.0),
-            spread=SpreadModel(points=2 * instrument.tick_size),
+            spread=SpreadModel(
+                points=2 * instrument.tick_size, schedule=SpreadSchedule.cfd_default()
+            ),
             slippage=SlippageModel(ticks=1.0),
             financing=FinancingModel(annual_rate=0.005),
         )
