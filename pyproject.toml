@@ -85,7 +85,7 @@ ignore = [
 "src/hermes/ai/enrichers/__init__.py" = ["E402"]
 # Runnable-as-a-script strategy: the sys.path bootstrap has to precede the imports
 # it enables.
-"strategies/gap_breakout_sp500.py" = ["E402"]
+"strategies/gap_breakout/gap_breakout_sp500.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.12"

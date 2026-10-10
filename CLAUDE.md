@@ -67,7 +67,7 @@ Tests must stay **offline and fast**. Never add a test that hits the network —
 
 ## Conventions that bite
 
-**Strategy files** (`strategies/*.py`) follow a discovery contract — the UI, the skills and the
+**Strategy files** (`strategies/<family>/*.py`) follow a discovery contract — the UI, the skills and the
 `discovery` module all rely on it:
 
 - `GENERATED_BY = "hermes-strategy"` when the skill wrote it (provenance; the UI badges it);
@@ -77,8 +77,16 @@ Tests must stay **offline and fast**. Never add a test that hits the network —
 - omit `start`/`end` unless the strategy needs a specific window — the default Trading Window
   is year-to-date.
 
+**Folders are for navigation only.** Strategies are grouped by family —
+`strategies/<family>/<name>.py`, a base idea and its variants together (`fx_sunday_gap/`,
+`gold_fractal_breakout/`), one-offs in `misc/`. Discovery recurses; the strategy's name is
+still the bare file stem (it keys the run ledger), so stems must be unique across folders
+— a duplicate is reported broken. A variant that reuses its base loads it as a sibling via
+`Path(__file__).with_name(...)`, so keep a family in one folder. Files or folders starting
+with `_` are skipped.
+
 A universe-scale run returns a `UniverseBacktest`, not a `Backtest`, so it exposes
-`build_universe_backtest(**overrides)` instead (`strategies/gap_breakout_sp500.py`).
+`build_universe_backtest(**overrides)` instead (`strategies/gap_breakout/gap_breakout_sp500.py`).
 
 **New research capability?** It belongs in `hermes/research/`, reachable from the CLI, not
 inside `webui/`. The Streamlit app is one front-end over the library, not a home for logic.
@@ -106,7 +114,8 @@ codebase is organised to prevent.
 - `.hermes_cache/` — every local cache lives here (`bars/`, `ai/`, `pit/`, `runs/`, `reviews/`,
   `random_baselines/`). Delete the root to start cold.
 - `research/output/` — hundreds of MB of intermediate CSVs. The scripts in `research/` are
-  fine to track; their output is not.
+  fine to track (grouped by topic: `research/<topic>/`, writing to the shared `research/output/`);
+  their output is not.
 - `.env` — credentials (`CTRADER_*`, `TIINGO_API_KEY`, `POLYGON_API_KEY`).
 
 **Do commit `research/ideas.json`.** The idea backlog is work product, not cache — losing

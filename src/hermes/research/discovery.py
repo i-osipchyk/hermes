@@ -1,6 +1,6 @@
 """Discover runnable strategies for the web UI.
 
-Convention (emitted by the hermes-strategy skill): each ``strategies/<name>.py``
+Convention (emitted by the hermes-strategy skill): each ``strategies/<family>/<name>.py``
 exposes a ``build_backtest(**overrides) -> Backtest`` factory and, when written by
 Claude, a ``GENERATED_BY = "hermes-strategy"`` provenance marker. This module is
 Streamlit-free so it stays unit-testable without the ``[ui]`` extra.
@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import traceback
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +24,7 @@ DEFAULT_STRATEGIES_DIR = Path("strategies")
 
 @dataclass(frozen=True, slots=True)
 class BrokenStrategy:
-    """A ``strategies/*.py`` that could not be imported.
+    """A strategy file that could not be imported (or whose name is taken).
 
     Discovery never raises on a bad file: one unimportable strategy must not hide
     every working one. Callers (the UI, and any agent enumerating runnable work)
@@ -70,19 +71,38 @@ def discover(directory: Path = DEFAULT_STRATEGIES_DIR) -> list[StrategyEntry]:
 def discover_all(
     directory: Path = DEFAULT_STRATEGIES_DIR,
 ) -> tuple[list[StrategyEntry], list[BrokenStrategy]]:
-    """Return ``(working, broken)`` for every ``*.py`` in ``directory``.
+    """Return ``(working, broken)`` for every ``*.py`` under ``directory``.
 
     Loading a strategy executes its module, so a syntax error or a bad import in
     one file used to abort the whole scan. Each file is now isolated: failures
     become :class:`BrokenStrategy` records and the rest still load.
+
+    Strategies may be grouped into family folders (``strategies/fx_sunday_gap/…``);
+    a file or folder starting with ``_`` is skipped. The name is the file stem
+    wherever the file lives — it keys the run ledger — so a stem that appears twice
+    is reported broken in both places rather than letting one shadow the other.
     """
     directory = Path(directory)
     entries: list[StrategyEntry] = []
     broken: list[BrokenStrategy] = []
     if not directory.exists():
         return entries, broken
-    for path in sorted(directory.glob("*.py")):
-        if path.name.startswith("_"):
+    paths = [
+        p for p in sorted(directory.rglob("*.py"))
+        if not any(part.startswith("_") for part in p.relative_to(directory).parts)
+    ]
+    stems = Counter(p.stem for p in paths)
+    for path in paths:
+        if stems[path.stem] > 1:
+            others = ", ".join(str(p) for p in paths if p.stem == path.stem and p != path)
+            broken.append(
+                BrokenStrategy(
+                    name=path.stem,
+                    path=path,
+                    error=f"DuplicateName: '{path.stem}' is also defined in {others}",
+                    traceback="",
+                )
+            )
             continue
         try:
             module = _load_module(path)

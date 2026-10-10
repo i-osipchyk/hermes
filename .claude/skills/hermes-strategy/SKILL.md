@@ -6,7 +6,7 @@ description: Turn a trading idea into a runnable Hermes Strategy file plus a Bac
 # Hermes: create a strategy
 
 Turn a trading idea into a working Hermes `Strategy`, then write it to
-`strategies/<name>.py`.
+`strategies/<family>/<name>.py`.
 
 **Two modes, and they behave differently:**
 
@@ -116,9 +116,13 @@ Add a comment block at the top of the generated file:
 # Parameters: <k>  (≤ 3 recommended; more reduces parameter_adjusted_sharpe)
 ```
 
-## 4. Write `strategies/<name>.py`
+## 4. Write `strategies/<family>/<name>.py`
 
-Create `strategies/` if absent. Declare indicators/parameters in `setup`, logic in
+Put it in the folder of the idea it belongs to: a variant goes beside its base
+(`strategies/fx_sunday_gap/fx_sunday_gap_large.py`), a new idea gets a new folder named
+after it, a one-off goes in `strategies/misc/`. Discovery recurses and names the strategy by
+its bare file stem, so **the stem must be unique across all folders** (`ls strategies/*/`
+first) — a duplicate is reported broken. Create the folder if absent. Declare indicators/parameters in `setup`, logic in
 `on_bar`, and use a `Sizer` + `stop_loss`/`take_profit` on entries. Only include the AI
 Advisor if the user asked for it. The file must follow the **discovery convention** so it
 drops straight into `hermes-backtest` and the web UI (`hermes-ui`):

@@ -44,7 +44,8 @@ Everything below assumes the project venv: `.venv/bin/hermes` and `.venv/bin/pyt
 
 | Path | What | Committed? |
 |---|---|---|
-| `strategies/*.py` | Your strategies | ✅ yes |
+| `strategies/<family>/*.py` | Your strategies, grouped by idea (name = file stem, unique) | ✅ yes |
+| `research/<topic>/*.py` | Ad-hoc research scripts, grouped by topic | ✅ yes |
 | `research/ideas.json` | The idea backlog | ✅ **yes** — work product |
 | `research/output/` | Bulk CSVs from ad-hoc scripts | ❌ ignored |
 | `.hermes_cache/bars/` | Parquet price cache | ❌ ignored |
@@ -228,7 +229,8 @@ pinned) and records what it defaulted in the file's docstring.
 
 ### By hand
 
-Write `strategies/<name>.py` yourself. It must follow the **discovery contract** or the
+Write `strategies/<family>/<name>.py` yourself (family = the idea's folder; the stem must be
+unique across folders). It must follow the **discovery contract** or the
 CLI, the UI and the skills won't see it:
 
 ```python

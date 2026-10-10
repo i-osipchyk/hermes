@@ -9,7 +9,8 @@ from datetime import date, time
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
-    "month_end_fix_for_test", Path(__file__).parents[1] / "strategies" / "fx_month_end_fix.py"
+    "month_end_fix_for_test",
+    Path(__file__).parents[1] / "strategies" / "fx_month_end_fix" / "fx_month_end_fix.py",
 )
 fix = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fix)

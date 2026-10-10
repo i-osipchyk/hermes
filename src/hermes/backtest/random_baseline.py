@@ -72,7 +72,7 @@ def run_random_simulations(
     """Run N single-symbol backtests with a random p% approval rate.
 
     Args:
-        build_backtest_fn: Factory (e.g. ``strategies.ema_crossover_ai.build_backtest``)
+        build_backtest_fn: Factory (e.g. ``strategies.ema_crossover.ema_crossover_ai.build_backtest``)
             that accepts ``advisor=`` and arbitrary keyword overrides.
         n: Number of simulations.
         p: Signal approval probability.

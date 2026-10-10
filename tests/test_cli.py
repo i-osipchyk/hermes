@@ -103,6 +103,16 @@ def test_run_produces_metrics_and_records_the_run(project, capsys):
     assert (runs / d["run_key"] / "meta.json").exists()
 
 
+def test_run_finds_a_strategy_grouped_in_a_family_folder(project, capsys):
+    common, sdir, _ = project
+    (sdir / "holds").mkdir()
+    (sdir / "holds" / "nested_hold.py").write_text(STRATEGY)
+    assert main(["run", "nested_hold", *common, "--json"]) == EXIT_OK
+    d = _json(capsys)
+    assert d["strategy"] == "nested_hold"
+    assert d["metrics"]["num_trades"] > 0
+
+
 def test_a_second_identical_run_is_served_from_the_ledger(project, capsys):
     common, _, _ = project
     main(["run", "buyhold", *common, "--json"])

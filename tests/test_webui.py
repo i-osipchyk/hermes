@@ -172,3 +172,36 @@ def test_a_file_without_a_factory_is_neither_working_nor_broken(tmp_path):
     (sdir / "helpers.py").write_text("CONSTANT = 1\n")
     entries, broken = discovery.discover_all(sdir)
     assert entries == [] and broken == []
+
+
+def test_a_strategy_in_a_family_folder_is_discovered_by_its_stem(tmp_path):
+    """Strategies are grouped into family folders for navigation; the name stays the
+    file stem, so the run ledger and cache keys are unaffected by where a file lives."""
+    sdir = tmp_path / "strategies"
+    (sdir / "buy_family").mkdir(parents=True)
+    (sdir / "buy_family" / "buy.py").write_text(_STRATEGY_FILE)
+    (sdir / "buy_family" / "_shared.py").write_text("raise RuntimeError('never imported')\n")
+    (sdir / "_private").mkdir()
+    (sdir / "_private" / "hidden.py").write_text(_STRATEGY_FILE)
+
+    entries, broken = discovery.discover_all(sdir)
+
+    assert [e.name for e in entries] == ["buy"]
+    assert entries[0].path == sdir / "buy_family" / "buy.py"
+    assert broken == []
+
+
+def test_two_strategies_sharing_a_stem_are_both_reported_broken(tmp_path):
+    """A strategy's name is its stem, and the name keys the run ledger — so a
+    duplicate stem in another folder must not silently shadow the first."""
+    sdir = tmp_path / "strategies"
+    for family in ("a", "b"):
+        (sdir / family).mkdir(parents=True)
+        (sdir / family / "buy.py").write_text(_STRATEGY_FILE)
+    (sdir / "other.py").write_text(_STRATEGY_FILE)
+
+    entries, broken = discovery.discover_all(sdir)
+
+    assert [e.name for e in entries] == ["other"]
+    assert sorted(b.path for b in broken) == [sdir / "a" / "buy.py", sdir / "b" / "buy.py"]
+    assert all(b.name == "buy" and "duplicate" in b.error.lower() for b in broken)

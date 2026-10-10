@@ -204,7 +204,7 @@ if run_sims:
             from hermes.backtest.random_baseline import run_universe_random_simulations
             from hermes.data import YFinanceSource
             from hermes.research.universes import load_calendar
-            from strategies.ema_crossover_ai import D1, EmaCrossoverAI
+            from strategies.ema_crossover.ema_crossover_ai import D1, EmaCrossoverAI
 
             sim_results = run_universe_random_simulations(
                 strategy_factory=EmaCrossoverAI,
@@ -227,7 +227,7 @@ if run_sims:
             # --- Single-symbol path --------------------------------------
             from hermes import Symbol
             from hermes.backtest.random_baseline import run_random_simulations
-            from strategies.ema_crossover_ai import build_backtest
+            from strategies.ema_crossover.ema_crossover_ai import build_backtest
 
             symbol = Symbol(sim_symbol, sel_meta.source)
             sim_results = run_random_simulations(

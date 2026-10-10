@@ -318,7 +318,7 @@ rather than taking the whole picker down.
 
 ## Strategy files
 
-`strategies/*.py` follow a discovery contract so they drop straight into the UI, the skills,
+`strategies/<family>/*.py` follow a discovery contract so they drop straight into the UI, the skills,
 and (soon) the CLI:
 
 - `GENERATED_BY = "hermes-strategy"` — provenance marker, when written by the skill;

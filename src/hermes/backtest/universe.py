@@ -19,7 +19,7 @@ Usage::
     from hermes import TiingoSource, Timeframe
     from hermes.backtest import UniverseBacktest
     from hermes.data import ConstituentCalendar
-    from strategies.gap_breakout import GapBreakout
+    from strategies.gap_breakout.gap_breakout import GapBreakout
     from datetime import datetime, UTC
 
     source = TiingoSource()   # reads TIINGO_API_KEY from env
