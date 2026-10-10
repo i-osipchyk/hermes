@@ -34,3 +34,6 @@ htmlcov/
 
 # Ad-hoc research scripts' bulk outputs (hundreds of MB of CSVs)
 research/output/
+
+# MT5 tester logs used by the Aero EA research (1.8 GB) — local evidence, never commit
+research/aero/logs/

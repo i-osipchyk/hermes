@@ -105,15 +105,22 @@ class SimulatedVenue(ExecutionVenue):
         #    the bar's favourable extreme may well have printed before the fill.
         #    Honouring a take-profit there books a profit the trade could not have
         #    made (a buy limit filling near the low, then "taking profit" at a high
-        #    that came first).  So on an intrabar entry only the stop-loss is
+        #    that came first).  So on an intrabar LIMIT entry only the stop-loss is
         #    allowed to trigger, matching the conservative bias of _resolve_clash.
+        #
+        #    A STOP entry is different: its target lies beyond the trigger in the
+        #    direction of the move, so price cannot reach the target without first
+        #    crossing the trigger (or gapping through it, which fills at the open).
+        #    A fill-bar touch of the target therefore happened after the fill, and
+        #    is honoured; a fill bar that also touches the stop-loss still resolves
+        #    stop-first.
         for order in list(self._working):
             fill = self._try_fill_entry(order, bar)
             if fill is not None:
-                intrabar_entry = order.type is not OrderType.MARKET
+                tp_reachable = order.type is not OrderType.LIMIT
                 trade = self._open_trade(order, fill, bar.timestamp, self._price_time(bar))
                 self._working.remove(order)
-                hit = self._check_exit(trade, bar, allow_take_profit=not intrabar_entry)
+                hit = self._check_exit(trade, bar, allow_take_profit=tp_reachable)
                 if hit is not None:
                     raw_price, reason = hit
                     self._close_trade(trade, raw_price, reason, bar.timestamp, self._price_time(bar))

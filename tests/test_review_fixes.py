@@ -79,6 +79,42 @@ def test_market_entry_may_still_take_profit_on_its_fill_bar():
     assert [t.exit_reason for t in v.closed_trades] == ["take_profit"]
 
 
+def test_stop_entry_may_take_profit_on_its_fill_bar():
+    """A buy stop at 102 with a target at 104: price cannot reach 104 without first
+    crossing 102, so a fill-bar high of 105 is necessarily AFTER the fill."""
+    v = _venue()
+    v.on_base_bar(Bar(datetime(2024, 1, 2, tzinfo=UTC), D1, 100, 100, 100, 100, 1))
+    v.submit(Order(instrument=v.instrument, side=Side.BUY, size=10,
+                   type=OrderType.STOP, stop_price=102.0, take_profit=104.0))
+    v.on_base_bar(Bar(datetime(2024, 1, 3, tzinfo=UTC), D1, 100, 105, 99, 101, 1))
+
+    assert [(t.exit_reason, t.exit_price) for t in v.closed_trades] == [("take_profit", 104.0)]
+
+
+def test_sell_stop_entry_may_take_profit_on_its_fill_bar():
+    gold = Cfd(Symbol("XAUUSD", "pepperstone"), session=CRYPTO, tick_size=0.01,
+               lot_size=100, leverage=20)
+    v = _venue(gold)
+    v.on_base_bar(Bar(datetime(2024, 1, 2, tzinfo=UTC), D1, 100, 100, 100, 100, 1))
+    v.submit(Order(instrument=v.instrument, side=Side.SELL, size=10,
+                   type=OrderType.STOP, stop_price=98.0, take_profit=96.0))
+    v.on_base_bar(Bar(datetime(2024, 1, 3, tzinfo=UTC), D1, 100, 101, 95, 99, 1))
+
+    assert [t.exit_reason for t in v.closed_trades] == ["take_profit"]
+
+
+def test_stop_entry_touching_both_levels_on_fill_bar_stays_stop_first():
+    """The stop-loss may have printed before the fill, after it, or not matter --
+    the path is unknown, so the clash resolves conservatively."""
+    v = _venue()
+    v.on_base_bar(Bar(datetime(2024, 1, 2, tzinfo=UTC), D1, 100, 100, 100, 100, 1))
+    v.submit(Order(instrument=v.instrument, side=Side.BUY, size=10,
+                   type=OrderType.STOP, stop_price=102.0, stop_loss=99.0, take_profit=104.0))
+    v.on_base_bar(Bar(datetime(2024, 1, 3, tzinfo=UTC), D1, 100, 105, 98, 101, 1))
+
+    assert [t.exit_reason for t in v.closed_trades] == ["stop_loss"]
+
+
 # --- modify() must not clear the level you did not mention ------------------
 
 def test_modify_leaves_unmentioned_level_untouched():
