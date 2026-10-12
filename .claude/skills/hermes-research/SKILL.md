@@ -14,22 +14,40 @@ is **`hermes-ideas`**; step 4 (portfolio by correlation) and step 5 (what to res
 next) are **`hermes-portfolio`**. Record the idea in the backlog before you start and
 link your runs back to it — a verdict with no traceable evidence is an opinion.
 
-The failure this skill exists to prevent is not a bug. It is coming back with
-"here's a strategy, it returned 40%" — a number produced by trying things until one
-worked. Your job is the opposite: to attack your own best result until it either survives
-or dies honestly.
+There are two failures this skill exists to prevent, and they are equally real:
+
+- **Finding a number.** "Here's a strategy, it returned 40%" — produced by trying things
+  until one worked.
+- **Rejecting an idea you never understood.** Running the textbook form of an idea,
+  watching it fail, and filing it as dead. A generic expression failing says the
+  *generic expression* fails — not that the idea has no edge. Real edges are usually
+  found by dissecting a flawed baseline: seeing which trades make money, why, and
+  building the version that isolates that. Three backtests and a rejection is not
+  rigor, it is a shrug.
+
+Your job is to *understand* the idea well enough to build its best faithful form, then
+attack that result until it survives or dies honestly. Rigor lives in the **holdout and
+the trial count**, not in a small iteration budget.
 
 ## 0. Budget — set it before you start
 
-You run **unattended**, so you get a leash and you say what it is. Default budget:
+You run **unattended**, so you get a leash and you say what it is. It has three parts:
 
-- **6 iterations** (an iteration = one variant written, run, and analysed), and
-- **≤ 3 tunable Parameters** in any variant you write.
+- **Holdout, fixed up front.** Reserve the most recent ~30% of history (or a sibling
+  instrument, if the idea is meant to generalise) and do not look at it while exploring.
+  All diagnosis and tuning happen on the rest. Touch the holdout once per candidate you
+  intend to report, and count each touch.
+- **Trial counter.** Every distinct variant you *score* is a trial. Keep the count in the
+  notes and report it; judge the winner against it (deflated Sharpe, `analyze`'s
+  validation axis). Diagnosis (§4) is not a trial — it scores nothing, it explains.
+- **Build budget: ~15 variants** (default; the user may set it), and **≤ 3 tunable
+  Parameters** in any variant. Hard-coded economic constants (a session open, a
+  round-number level, a 14-day lookback) are not knobs. Scale the budget to the idea: a
+  rich one earns more, but say so in your first message.
 
-State the budget in your first message, then work. Stop early per §5. If you hit the
-budget without a verdict, say so and report what you learned — an honest "inconclusive
-within 6 iterations" is a real result and far more useful than a 7th variant found by
-fiddling.
+State all three, then work. Stop per §6. If you hit the budget without a verdict, say
+so and report what you learned — "inconclusive after N trials, here is where the edge
+seems to live" is a real result.
 
 **Stop and ask before spending money or widening scope:**
 
@@ -74,9 +92,9 @@ a fresh Strategy per call). Inside this loop, skip its interview — the hypothe
 already pinned; just record the choices you make and why.
 
 **Start with the most faithful, simplest expression of the idea** — the fewest parameters
-that can express it. That first run is your baseline; every later variant is judged
-against it, not against zero. A variant is only worth running if you can say in advance
-what it would prove.
+that can express it. That first run is your baseline, not your verdict: it is the
+specimen you dissect in §4b. Every later variant is judged against it, not against zero.
+A variant is only worth running if you can say in advance what it would prove.
 
 ## 4. Run and judge — the testing ladder
 
@@ -122,28 +140,67 @@ A zero-trade run already diagnoses itself (`zero_trade_diagnosis`): no bars step
 data/window problem, everything vetoed is the gate, bars-but-no-signals is the
 thresholds. Fix the stated cause; don't restate all three.
 
+## 4b. Dissect the baseline — find where the edge lives
+
+This is the step that turns a rejected idea into a found one. When the baseline is flat,
+negative, or merely mediocre, **do not write variant #2 yet.** Open the trades and ask
+what separates the ones that work from the ones that don't. Do it on in-sample data only,
+as a script under `research/<topic>/` (output to `research/output/`), reading the run's
+stored trades.
+
+Cut the trades by whatever the idea says should matter, then by whatever it doesn't:
+
+- **When:** hour/session, weekday, month, distance from the open, time held.
+- **State of the market:** volatility regime (ATR percentile), trend vs range, gap size,
+  distance from a moving average, prior-day range, proximity to a level.
+- **Trade shape:** MAE/MFE — do winners go straight up or after a drawdown? Is the
+  stop too tight (many stopped then reversed) or the target too far (MFE reached then
+  given back)? Which exit is leaking?
+- **Side:** longs vs shorts; one side carrying the other.
+- **Concentration:** top-N trades, one year, one month, one regime.
+
+You are looking for a **pocket**: a conditioning variable where expectancy changes
+materially, with enough trades in each bucket to mean something (say so when a bucket
+is thin). Then apply the mechanism test: *why* would this pocket exist? "Gap-ups under
+0.5 ATR fade because stops cluster at the prior high" is a hypothesis. "Tuesdays at 14:35"
+is a pattern found by looking — drop it unless a mechanism appears.
+
+A pocket that has a mechanism becomes the next variant: a filter, a different exit, a
+split-by-side, a regime gate. That variant is faithful to the idea (it sharpens it) and
+is a trial like any other. Cheap structure (a filter on a state variable) beats tuned
+numbers; prefer one clean condition to three thresholds.
+
+Re-dissect after each real improvement and each real failure. A failed variant is
+information about the mechanism: ask why it failed before building the next one.
+
 ## 5. Decide: iterate, or stop
 
 Stop and report when **any** of these is true:
 
-1. **The rubric holds.** Survives 1x and 2x costs, holds out of sample, adequate sample
+1. **The rubric holds.** Survives 1x and 2x costs, holds on the holdout, adequate sample
    size, not purely regime-dependent, and the gate (if any) was clean. → *the edge looks
    real*, with the caveats the axes raised.
-2. **The rubric rules it out** in a way no faithful variant would fix — e.g. profitable
-   only at zero costs, or the entire P&L is one trade. → *the idea does not survive*.
+2. **The rubric rules it out** — e.g. profitable only at zero costs, or the entire P&L is
+   one trade — **and the dissection (§4b) found no mechanism-backed pocket** that a
+   faithful variant could isolate. Rejecting without having dissected is not allowed:
+   say what you cut the trades by and that nothing held. → *the idea does not survive*.
    This is a successful outcome; say it plainly and do not soften it.
-3. **No improvement in 2 consecutive iterations** on the *out-of-sample* number. Stop.
-   Continuing past this point is hand-optimisation: you become the search, and the
-   deflated Sharpe stops accounting for it.
-4. **The parameter budget is spent.** If the next idea needs a 4th tunable, stop instead
-   of adding it. Check `metrics.num_params` against `parameter_adjusted_sharpe` and the
-   trade count — a variant with more knobs and fewer trades per knob is worse even when
-   its raw Sharpe is higher.
+3. **Three consecutive variants with no out-of-sample gain and no new diagnosis behind
+   them.** Variants that follow a fresh finding from §4b reset the count; variants that
+   are just fiddling do not. Past this point you are the search, and the deflated Sharpe
+   no longer accounts for it. Go back to §4b or stop.
+4. **The build budget is spent.**
 5. **The `params` axis says the result is a spike.** Do not iterate toward a sharper
    peak; that is the search finding the data, not an edge. Either widen the sample so the
-   neighbourhood steadies, or drop the parameter.
+   neighbourhood steadies, or replace the parameter with a structural condition from §4b.
 
-Otherwise iterate — but only on a change the analysis *pointed at*. "All profit comes
+A 4th tunable is not itself a stop: first ask whether a structural condition
+(a state filter, a different exit) does the job without a knob. If it really needs one,
+check `metrics.num_params` against `parameter_adjusted_sharpe` and trades per knob, and
+justify it in the notes.
+
+Otherwise iterate — but only on a change the analysis *pointed at* (§4b is where it
+points). "All profit comes
 from Bull regimes" suggests a trend filter. "In-sample Sharpe doesn't carry out of
 sample" suggests fewer parameters, not more. "Top 5 trades are 100% of winning P&L"
 suggests the sample is too small to conclude anything, so widen the window or the
@@ -159,7 +216,9 @@ Deliver, in this order:
 
 1. **The verdict** — does the edge look real? One sentence, no hedging.
 2. **The evidence** — the decisive axis readings, quoted with their numbers.
-3. **The trail** — each iteration: what it tested, what happened, the run key. This is
+3. **The trail** — the **trial count**, then each iteration: what it tested, what
+   happened, the run key; and the dissection findings that drove the pivots, including
+   pockets you dropped for lacking a mechanism. This is
    what makes the work checkable, and the ledger already holds it.
 4. **The biggest remaining threat** to the conclusion.
 5. **What you'd do next**, and what you deliberately did not do (and why — budget,

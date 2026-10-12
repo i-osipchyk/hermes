@@ -165,9 +165,9 @@ any research work here:
 - **Never tune on the whole sample.** Parameters are chosen in-sample and scored out of
   sample (`hermes analyze --axes walkforward`). A number from fitting all the data is not
   a result.
-- **Stop when improvement stops.** Two iterations with no out-of-sample gain means you
-  have become the search; further fiddling is hand-optimisation that the deflated Sharpe
-  no longer accounts for.
+- **Stop fiddling, not investigating.** Three variants with no out-of-sample gain *and no
+  new diagnosis behind them* means you have become the search. Dissecting the trades to
+  find where the edge lives is not fiddling — do it before concluding an idea is dead.
 
 Ask before spending money (an AI Advisor makes a billed call per signal; Tiingo/Polygon
 are paid) or before changing the instrument or the idea — that is a new research task,
