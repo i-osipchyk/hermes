@@ -1,0 +1,423 @@
+[
+  {
+    "id": "5cf533fe",
+    "title": "FX month-end fix: equity-hedge rebalancing flow reverts after the 4pm London fix",
+    "hypothesis": "Claim: on the last trading day of the month, EURUSD/GBPUSD/USDJPY trend into the 16:00 London (WM/R) fix in the direction implied by month-to-date US-vs-foreign equity performance, and that move partially reverses over the following hours. Trade: fade the pre-fix move on the 5m/15m Timeframe from 16:00 London, exit by NY close. Direction signal from a Reference (US500 vs GER40/UK100 month-to-date return), read on closed bars only. Mechanism: foreign holders of US equities hedge FX exposure and rebalance hedges at month-end at the fix; the flow is forced, price-insensitive, and concentrated in a minute window, so price is pushed away from fair value and reverts once the flow is gone. ~12 events/year per pair, so expect an exploratory tier unless pooled across pairs. Data: Pepperstone cTrader 5m (~3y).",
+    "source": "other",
+    "source_detail": "agent-generated (Claude) from mechanism; literature: Melvin & Prins (2015) 'Equity hedging and exchange rates at the London 4pm fix', J. Financial Markets",
+    "status": "rejected",
+    "strategy": "fx_month_end_fix",
+    "run_keys": [
+      "51622287feddd238",
+      "b77639fb65518514",
+      "07f80933d7887003",
+      "851e0e47ea8657f7",
+      "1d25857bd7cab51a"
+    ],
+    "verdict": "Rejected on Pepperstone 5m, Oct-2023..Sep-2026 (3 of 6 iterations). Month-end pre-fix moves are larger than normal (15.7 vs 10.1bp) so the flow exists, but neither the realised pre-fix move nor the US-vs-foreign MTD equity signal yields a post-fix reversal that pays Razor costs: pooled event study (99 month-ends, EURUSD/GBPUSD/USDJPY) fade +1.1bp gross t=0.5 vs ~0.9bp round-trip cost; equity-implied post-fix return -2.5bp t=-1.1 (wrong sign). No variant survives 2x costs; OOS signs flip vs IS. Evidence tier exploratory (~36 trades/pair). Power caveat: 95% CI on the pooled gross effect is roughly -3..+5.5bp, so a few-bp effect is not excluded \u2014 reopen only with much longer 5m history (pre-2015 fix reform vs post) or a quarter-end subset decided in advance.",
+    "tags": [
+      "fx",
+      "mean-reversion",
+      "intraday"
+    ],
+    "created_at": "2026-10-01T15:04:27.593031+00:00",
+    "updated_at": "2026-10-01T18:02:06.812208+00:00"
+  },
+  {
+    "id": "e411c67d",
+    "title": "FX Asian-session overshoot: thin-liquidity moves in EUR/GBP pairs revert into London",
+    "hypothesis": "Claim: in EURUSD/GBPUSD/EURGBP, a move during the Asian session (00:00-07:00 London) larger than k x the pair's ATR, with no scheduled European/US news, is partially retraced between London open and noon. Mechanism: home-market dealers for these currencies are absent during Asia, so liquidity is thin and the temporary price-impact of a given order is larger; when London liquidity arrives, dealers absorb the inventory and the temporary component decays. The edge should be strongest in pairs where neither currency is Asian (so USDJPY/AUDUSD act as a natural control). Risk: genuine news (e.g. Asian-hours political headline) is permanent, not temporary. Data: Pepperstone cTrader 5m.",
+    "source": "other",
+    "source_detail": "agent-generated (Claude) from mechanism; market-microstructure inventory/price-impact argument",
+    "status": "rejected",
+    "strategy": "fx_asian_fade",
+    "run_keys": [
+      "0e0efd63b1a8a77b",
+      "4c8823106648d753",
+      "8f05c4ee7a5a7833",
+      "4909105abd1f3350",
+      "f13c4aadcb5af81f",
+      "7fb2bef8bbe5c3f3"
+    ],
+    "verdict": "Rejected on Pepperstone 5m, Oct-2023..Sep-2026 (2 of 6 iterations, credible tier: ~770 trades/pair). Fading every 00:00-07:00 London move from 07:00 to 12:00: Sharpe at 1x Razor costs EURUSD 0.03 / GBPUSD -0.58 / EURGBP -0.59; zero-cost 0.71 / -0.04 / 0.32, so at most a small gross edge on EUR pairs that costs absorb, none on GBPUSD. The mechanism's falsifiable prediction - larger (overshoot) moves revert more - fails: fading only moves > 1.5x trailing-20 mean size gives zero-cost Sharpe 0.08 / -0.38 / -0.14, worse than fading everything; params axis stable (k is not a spike, the result is uniformly flat-to-negative). OOS EURUSD 0.27->0.09, GBPUSD -0.01->-0.33, EURGBP -1.54->-1.2. USDJPY control not run (nothing to control for).",
+    "tags": [
+      "fx",
+      "mean-reversion",
+      "intraday"
+    ],
+    "created_at": "2026-10-01T15:04:27.714110+00:00",
+    "updated_at": "2026-10-01T18:31:41.857044+00:00"
+  },
+  {
+    "id": "0fac1d83",
+    "title": "FX bloc crosses: AUDNZD/EURGBP/EURCHF revert from multi-day z-score extremes",
+    "hypothesis": "Claim: crosses between two economies exposed to the same shocks (AUDNZD commodity bloc, EURGBP, EURCHF) mean-revert on a 1-10 day horizon after a close-to-close move beyond ~2 sigma of a rolling window, on the 4h/1D Timeframe. Mechanism: the common factor (risk appetite, commodity prices, ECB-area growth) dominates both legs, so the cross only carries the idiosyncratic differential, which is small and transient; a stretch from flows (e.g. one-sided hedging, rate-decision repricing) has no fundamental anchor to persist. Counter-mechanism to rule out: genuine policy divergence (RBA vs RBNZ cycles) produces trends, so a regime filter may be needed \u2014 that is a second parameter, budget carefully. Caveats: multi-day holds pay/receive carry; Hermes does not auto-model it \u2014 set a FinancingModel on the Cost Model or the result is flattering. EURCHF has a 2015 SNB-floor tail event; do not exclude it from the sample.",
+    "source": "other",
+    "source_detail": "agent-generated (Claude) from mechanism; structural argument for crosses between economies driven by common factors",
+    "status": "raw",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "",
+    "tags": [
+      "fx",
+      "mean-reversion",
+      "swing"
+    ],
+    "created_at": "2026-10-01T15:04:27.833206+00:00",
+    "updated_at": "2026-10-01T15:04:27.833206+00:00"
+  },
+  {
+    "id": "116ee823",
+    "title": "FX Sunday-open gap reverts as weekend-thin liquidity returns",
+    "hypothesis": "Claim: when a major pair opens on Sunday (~17:00 NY / 22:00 UTC) with a gap from Friday's close of more than k x ATR, the gap is partially filled within the first 24h. Mechanism: the open is quoted by few dealers with wide spreads before Asian liquidity arrives; the first prints overshoot the weekend's news, and the overshoot decays as liquidity returns. Weekend news that is real (elections, central-bank surprises) does not fill \u2014 expect a fat left tail. Caveat: the spread at the Sunday open is several times normal; the default Cost Model will understate it, so entry must be delayed to a liquid bar or spread must be modelled explicitly (ADR-0009). Few events/year per pair \u2014 pool across the majors.",
+    "source": "other",
+    "source_detail": "agent-generated (Claude) from mechanism; liquidity argument at the Wellington open",
+    "status": "rejected",
+    "strategy": "fx_sunday_gap",
+    "run_keys": [
+      "3ccf66d5c8960885",
+      "32dc0be9fc92d661",
+      "a3bce9985b16bfc6",
+      "9c9fce7a0b80746a",
+      "2224c7952fff4a0e",
+      "276d0435f1416188",
+      "2f05f529d88ee9b0",
+      "4943fa5ff2995aa2",
+      "68b013a9c96eb6ef",
+      "108d131593e35f2f",
+      "f94d2acbb80f81b2",
+      "88895a46a99f393d",
+      "b2bb45d53932cc82",
+      "cfba0c28542fd947",
+      "3e8a414d8a2281e5",
+      "7d281d776b76e492"
+    ],
+    "verdict": "Rejected after 4 iterations. Baseline (18:00 NY entry) Sharpe 1.7 on GBPUSD/EURGBP was a cost-model artifact: bid-only bars + normal spread from 18:00, while the real Sunday spread is still wide -> bid depressed -> 2-4x long skew on all 4 pairs, longs made the money. Entering at 20:00 NY removed the skew and the edge (pooled -2.2k). The idea's own large-gap condition (k=0.25 ATR) looked positive on 3y 5m (exploratory, IS~0, OOS>0 everywhere = period effect); on 1h 2014-2026 (417 trades) pooled -5.7k, 3/4 pairs negative even at 0x costs. No gross edge.",
+    "tags": [
+      "fx",
+      "mean-reversion",
+      "intraday"
+    ],
+    "created_at": "2026-10-01T15:04:27.949000+00:00",
+    "updated_at": "2026-10-01T19:23:12.939786+00:00"
+  },
+  {
+    "id": "7336d426",
+    "title": "FX post-release overshoot: first-minutes move after NFP/CPI partially retraces",
+    "hypothesis": "Claim: the first 5-15 minutes of a USD pair's reaction to a US NFP or CPI release overshoots, and a fraction retraces over the next 1-2 hours. Mechanism: market makers pull quotes before the print, so the first trades hit an empty book and algorithmic momentum amplifies them; as depth returns, the temporary price-impact component decays. Distinguish from the permanent component, which is the surprise itself \u2014 the retrace should be a fraction, not a full fade. Blocker: Hermes has no economic-calendar source. NFP can be approximated as first Friday 08:30 ET; CPI dates cannot be derived reliably without a calendar.",
+    "source": "other",
+    "source_detail": "agent-generated (Claude) from mechanism; liquidity-withdrawal-around-scheduled-event argument",
+    "status": "raw",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "",
+    "tags": [
+      "fx",
+      "mean-reversion",
+      "intraday"
+    ],
+    "created_at": "2026-10-01T15:04:28.065762+00:00",
+    "updated_at": "2026-10-01T15:04:28.065762+00:00"
+  },
+  {
+    "id": "e116efd9",
+    "title": "S&P 500 index reconstitution: long additions / short deletions around announcement and effective date",
+    "hypothesis": "Claim: stocks announced as S&P 500 additions earn positive abnormal return from announcement close to effective date (long), and deletions earn negative abnormal return (short), over a horizon of days to ~2 weeks; the question is which leg, if any, still pays and whether it reverses after the effective date. Mechanism: index funds and closet indexers must buy additions / sell deletions at the effective-date close, price-insensitive and known in advance; arbitrageurs front-run it and demand liquidity from the forced buyers, so price is pushed away from fair value and (partially) reverts after. Literature (Harris-Gurel 1986, Shleifer 1986; later work) finds the addition effect has shrunk and the permanent component faded as it became crowded, while deletions are noisier and often rebound; test each leg separately, and split pre-announcement drift, announcement-to-effective drift, and post-effective reversal as three distinct windows. Data: Hermes has a Constituent Calendar (membership_window per Symbol) but it gives membership dates, not announcement dates, so effective date is the only reliable anchor; announcement ~5 days prior is an approximation. Short leg on deletions needs borrow/financing in the Cost Model. Universe-scale, so needs a build_universe_backtest and the CLI cannot run it yet (CLAUDE.md). Events ~20-25 additions/yr, so pool across years; expect exploratory tier on short samples. Deletions often delist/are acquired, so survivorship in price data is a risk for the short leg.",
+    "source": "discretionary",
+    "source_detail": "User's own idea (session 2026-10-08): trade stocks entering and leaving the S&P 500, long and short",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "Effective-date-anchored version does not survive. Event study (research/sp500_reconstitution/sp500_reconstitution_event_study.py, 2005-26, 364 adds / 142 tradable deletions, excess vs SPY, net 2x10bp): long-adds [-5,-1] +102bp t=3.0 but median +33bp, trimmed-5% +18bp, top-10 events = 55% of sum, and era-unstable (2005-12 +238bp, 2013-19 -47bp, 2020-26 +137bp). Short-deletions [-5,-1] +206bp t=1.5, top-10 = 134% of sum, trimmed -43bp: tail-driven. Post-effective deletions rebound (long, not short). Unresolved: 2021-26 add revival is untestable without announcement dates (pre window may be look-ahead). Not run through hermes run/analyze: no tradable strategy was built. Evidence tier: exploratory.",
+    "tags": [],
+    "created_at": "2026-10-08T14:14:37.626205+00:00",
+    "updated_at": "2026-10-08T14:19:33.617776+00:00"
+  },
+  {
+    "id": "e670d208",
+    "title": "Gold 1h trend-structure breakout: trade breaks of the latest swing in the direction of HH/HL (LH/LL) structure",
+    "hypothesis": "Claim: on XAUUSD 1h, when swing structure is an uptrend (latest swing high > previous swing high AND latest swing low > previous swing low), a close/touch above the latest swing high continues higher over the following hours; mirror for downtrend (LH+LL) with a break of the latest swing low. Trade only with the structure; no counter-trend breaks. Mechanism: a confirmed higher-high/higher-low sequence marks a directional flow (macro/real-yield repricing, safe-haven or central-bank demand) executed over many hours; a break of the latest swing high is where resting stops and breakout orders cluster, and the stop-driven flow plus trend-followers add to the move, so continuation after a with-trend break should beat a break against structure. Counter-mechanism: gold is range-bound much of the time and swing breaks are the classic false-breakout spot (stop runs, London/NY liquidity sweeps), so the edge may exist only in trending regimes. Quantification notes: swing definition (fractal width n bars) is the main tunable, budget it as a Parameter (k<=3 total; prefer hard-coded n); swings must be confirmed with n bars of lag so a swing is known only after it closes (ADR-0002, no look-ahead); fills next-open / OHLC-touch, Stop-first (ADR-0004); stop at the opposite swing or ATR-based; judge with walk-forward, not whole-sample. Data: Pepperstone cTrader XAUUSD 1h (confirm symbol and depth, cf. NAS100 ~3y of 5m). Include session/spread cost (dynamic spreads) since gold spread is wide around rollover.",
+    "source": "discretionary",
+    "source_detail": "User's own market-structure (Dow-theory style) idea, proposed 2026-10-09; not yet observed in data",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [
+      "2cbcda35f90b41f3",
+      "3d6a76bde67bd823"
+    ],
+    "verdict": "As specified (n=1 fractal structure, stop-entry on touch at latest swing, 1.5xATR14 stop, fixed 2R or ATR trail, XAUUSD 1h 2018-2026) there is no edge: 2066 trades, gross PF 0.94 at zero costs, net PF 0.885, Sharpe -0.66; DSR 4%. Trailing exit worse (PF 0.74, gross 0.82). Positive OOS tail (2024-26, Sharpe 0.86) is a period effect: IS Sharpe -1.30. Not tested: fractal width n>1, other instruments/timeframes.",
+    "tags": [],
+    "created_at": "2026-10-09T08:33:23.513348+00:00",
+    "updated_at": "2026-10-09T08:41:12.730994+00:00"
+  },
+  {
+    "id": "13374202",
+    "title": "Gold fractal breakout v2: larger n, fractal expiry, lower-timeframe execution",
+    "hypothesis": "Claim: n=1 fractals on 1h are micro-noise; swings with n>=2 bars each side (and optionally expiring after a bounded number of bars) are real structure whose with-trend breaks continue, exploitable via stop-entry at the latest swing with ATR stop and fixed RR. Variant: swings from 1h, execution/stop/target on 15m or 5m for tighter, more precise risk. Mechanism unchanged from e670d208: resting stops and breakout orders cluster at confirmed swing extremes in a directional regime; a larger n filters out swings that are one-bar noise. Protocol: choose n/expiry on IS 2018-2023 only, score on OOS 2024-2026 once; parent idea was seen on the whole sample so OOS is not fully virgin.",
+    "source": "discretionary",
+    "source_detail": "User follow-up 2026-10-09 to rejected e670d208 (n=1, 1h: gross PF 0.94, no edge)",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [
+      "361bfea171e42d81",
+      "1a3a151ce5388439",
+      "d1b7836f78441810",
+      "4675f3be2dc3ef93",
+      "c0f9cae06107fe90",
+      "8718075051276806",
+      "23e26b7e4fd5b5bf",
+      "fd9525f4ef486513",
+      "e23a0555c1e2500e",
+      "33917921f05620ce"
+    ],
+    "verdict": "Random-side control (12 seeds, same 1h n=2 swings, 15m-structure stop, 2R, 2018-2026): control Sharpe mean -0.22 sd 0.29, PF mean 0.952; the real with-structure strategy is Sharpe 0.03 / PF 0.987 / 1479 trades / -9.9%, only ~0.85 sd above the controls (2 of 12 controls match or beat it). Following market structure adds nothing distinguishable from chance; the 2024-26 gain was period/stop-geometry. Not tested: other instruments, other RR, volatility-regime filters.",
+    "tags": [],
+    "created_at": "2026-10-09T08:51:32.026003+00:00",
+    "updated_at": "2026-10-09T09:40:07.619348+00:00"
+  },
+  {
+    "id": "cfdb30bd",
+    "title": "Gold swing-break fade: breakouts of confirmed 1h fractal swings revert more often than a coin flip",
+    "hypothesis": "Claim: on XAUUSD, price that touches a confirmed fractal swing extreme (stop-run) tends to reverse within hours instead of continuing. Mechanism: resting stops beyond swing extremes are liquidity; dealers/large participants sweep them to fill opposite-side size, then price returns (the classic false-breakout / liquidity-sweep story). Counter: a win rate below the random-entry level may be partly a stop-width artifact (1.5xATR stop is hit first by noise, which also favours the opposite side with the same geometry), so the first test must be a random-entry control with identical stop/target geometry before reading anything into the number.",
+    "source": "data",
+    "source_detail": "Observed 2026-10-09 while rejecting e670d208/13374202: with-structure stop-entries at swing breaks win 24.8% (15m exec) to 32% (1h) vs ~33% expected for a 1.5ATR stop / 3ATR target on random entries; gross PF 0.60-0.88. Found by looking at failed variants, so the most data-mined source: needs fresh OOS (2024-26 was never used to choose anything, but the parent idea saw it).",
+    "status": "raw",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "",
+    "tags": [],
+    "created_at": "2026-10-09T08:58:28.616063+00:00",
+    "updated_at": "2026-10-09T08:58:28.616063+00:00"
+  },
+  {
+    "id": "87eb623e",
+    "title": "Aero MT5 reverse-engineered: intraday range-break scalp on gold with 3h-delayed stop",
+    "hypothesis": "Claim: on XAUUSD, when price breaks the running high/low of the broker day (17:00 NY) by $0.5, entering at the broken level and taking a small fixed profit (~$12/oz, ~0.3x ATR(4h,20)) wins often enough to beat a loss cut at -0.5x ATR(4h,20) applied only after 3h underwater (catastrophe stop 3.6x ATR). No entries 00:00-02:30 or 23:00-24:00 server time; one position at a time. Mechanism (vendor): momentum continuation right after a key-level break; vendor adds an unobservable kNN filter. Counter: small-target/wide-stop geometry produces a high win rate mechanically, so a random-entry control with the same exits is required before reading anything into 84%.",
+    "source": "trader",
+    "source_detail": "MQL5 Market EA 'Aero MT5' (product 176860), MT5 tester log 20261009.log, XAUUSD H1, 2026-01-01..2026-08-06: 103 orders, 77 trades, 84% win, +6.75%",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [
+      "8bad8a0198e077c1",
+      "ca318f8662f094ec",
+      "b724746dfd5e8bf5",
+      "0d9f1f8b01d07f35",
+      "77f8d25711516c4b"
+    ],
+    "verdict": "UPDATED after the user's 2018-2026.08 MT5 log (577 trades, $10k->$27.2k, profitable every year, PF 2.2-8.1). Exit model confirmed: fixed-$ TP/trail (~$10.4/oz realised every year) + 3.6xATR4h stop + 3h-armed 0.5xATR exit; replica agrees with EA outcomes on 77-100% of shared trades per year. Unfiltered breaks lose 2018-24 (literal replica ca318f86 net PF 0.98, -$0.5..+$0.1/oz/yr). The ENTIRE edge is the vendor's kNN selection: EA-taken breaks earn +$3..+$11/oz in the replica vs ~0 skipped, a lift that is uniform across every observable stratum (vol ratio, TP/ATR, hour, trend side, weekday, side) and steady by quarter through 2026Q3. Uniform lift + a kNN 'trained on 10-25y of gold' whose current version (3.60) was updated 2026-08-30 means the whole tested span may be in-sample memorisation. Not reproducible from observables; unverifiable until tested after the model's training cutoff (tester run 2026-08-31 onward with the installed version, or the vendor's real-money signal). || SILVER TEST (research/aero/aero_silver.py): the EA's break selection transfers to XAGUSD 2026-01..08 -- picks +0.162R / 82% win vs all silver breaks +0.035R (p=0.036; gold same window +0.182 vs +0.039, p=0.004), not via gold co-movement (edge larger for picks with no nearby gold pick). Evidence now favours a REAL selection rather than memorised outcomes; the missing ingredient is likely a price pattern not yet represented in our features. || FULL SILVER 2018-2026 (aero_silver_full.py) CORRECTS THE ABOVE: silver picks +0.076R vs all +0.022, p=0.20; negative lift 2018-21, positive 2024-26; early matching weak (2/69 orders in 2018). Transferable selection NOT established; gold lift positive every year (+0.231R picks, 89% win).",
+    "tags": [
+      "gold",
+      "reverse-engineering"
+    ],
+    "created_at": "2026-10-09T10:17:43.349677+00:00",
+    "updated_at": "2026-10-09T18:55:46.203551+00:00"
+  },
+  {
+    "id": "15f8fcda",
+    "title": "Walk-forward kNN filter over gold day-range breaks (honest replication of Aero's kNN)",
+    "hypothesis": "Claim: a kNN over causal, ATR-normalised features (multi-TF returns, week/month range position, distance to prior day/week extremes, ATR ratio, day range, level age, prior breaks/touches, hour, weekday) trained only on resolved past breaks selects day-range breaks with better net R than chance. Protocol: monthly expanding walk-forward from 2019, config chosen on 2019-22, scored once on 2023-26.09 vs equal-size random subsets.",
+    "source": "data",
+    "source_detail": "research/aero/aero_knn_filter.py, run 2026-10-09; child of 87eb623e",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "15m (fill-bar TP fixed): no edge -- OOS picks +0.016R vs +0.002 all, random p=0.052, deciles flat. 5m (28,574 breaks, same protocol, full/k=100/thr=0.05 chosen IS): OOS picks +0.033R vs +0.007 all; month-matched random +0.014, p=0.028. Lift is ONLY 2025-26 (+0.036, +0.021R); 2023-24 picks are worse than all (-0.010, -0.002). IS grid on 5m mildly monotone in threshold. Caveats: OOS 2023-26 has now been looked at twice (15m then 5m) and 30 configs searched; lift confined to the regime where all breaks were profitable. Status: weak lead, not a result -- needs post-2026-09 data to confirm. || v2 (research/aero/aero_knn_v2.py, 19 features incl. room, lock-vs-volatility, release timing; target net $/oz under EA mechanics on 1m; EA entry model + pacing): chosen on 2019-22 (held>=2h, full, k=50, thr $0.5: +$2.86/oz, PF 1.68, 357 trades); OOS 2023-01..2026-08 scored once: +$0.09/oz, PF 1.01, 553 trades -- worse than random at the same rate (+$0.46, p=0.76) and than trading every break (+$1.00, PF 1.16). EA actual same window +$6.15/oz PF 3.27. EA orders sit at the 48th percentile of the kNN score; daily P&L corr 0.22, monthly 0.35. Rejected.",
+    "tags": [
+      "gold",
+      "knn"
+    ],
+    "created_at": "2026-10-09T11:12:53.801651+00:00",
+    "updated_at": "2026-10-09T16:24:02.288454+00:00"
+  },
+  {
+    "id": "e61a4161",
+    "title": "Gold day-range breaks: fast final approach, not extended over 2h",
+    "hypothesis": "Claim: on XAUUSD 5m, a day-range break whose last closed 5m bar was far from the level (top 40% gap_now, fast final approach) but whose distance 4 closed M30 bars ago was small (bottom 40% m30_4, not a 2h run-up) continues more often than other breaks under the Aero replica exits. Mechanism: a sharp arrival is fresh order flow hitting resting stops; an extended 2h run-up has spent its flow.",
+    "source": "data",
+    "source_detail": "research/aero/aero_approach_speed.py 2026-10-09; reverse-engineered from Aero EA order choices (child of 87eb623e)",
+    "status": "raw",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "EA order choice: gap_now AUC 0.635, holds 0.59-0.70 within trigger-overshoot quintiles (feed-mismatch control); m30_4 AUC ~0.40 in high-overshoot breaks. As a filter (profile chosen from EA labels, not outcomes): IS 2018-22 -0.024R vs rest -0.033; OOS 2023-26 +0.018R vs -0.007, random p=0.034; beats all-breaks in 7/9 years. ~+$0.6/oz/trade: real-looking but tiny; explains little of the EA's +0.20R picks (take rate 2.9% vs 1.9%). Not yet a Hermes strategy run.",
+    "tags": [
+      "gold",
+      "reverse-engineering"
+    ],
+    "created_at": "2026-10-09T12:27:39.426941+00:00",
+    "updated_at": "2026-10-09T12:27:39.652242+00:00"
+  },
+  {
+    "id": "7f3d026e",
+    "title": "Gold: breaks of dominant M30 swings (higher than previous swing, lower swing after)",
+    "hypothesis": "Claim: on XAUUSD, breaks (by $0.50) of an M30 fractal swing (n=1) that is beyond the previous same-side swing and has at least one later swing (pullback structure) continue more often than other swing breaks under the Aero replica exits. Mechanism: a dominant swing is the top of a local range whose stops cluster above it.",
+    "source": "trader",
+    "source_detail": "User observation 2026-10-09 of Aero EA / Myfxbook trades; research/aero/aero_swing_dominance.py",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "As a description of the EA: confirmed. M30 n=1 swings match 553/704 EA orders (day-range: 530); dominant swings are 29% of breaks but 68% of EA orders (take 3.5% vs 0.01-1.0% elsewhere; 'neither' cell 1/8409). As an edge: none. Dominant breaks net R IS -0.020 / OOS -0.006 vs all swing breaks -0.017 / -0.011. Adding the day-range fast-approach profile makes it worse (OOS -0.031, month-matched random p=0.73); fast approach does not predict EA picks among swing breaks. EA's own picks on these events: +0.156R IS, +0.176R OOS -- still unexplained.",
+    "tags": [
+      "gold",
+      "reverse-engineering"
+    ],
+    "created_at": "2026-10-09T12:37:28.067630+00:00",
+    "updated_at": "2026-10-09T12:37:28.286425+00:00"
+  },
+  {
+    "id": "af10eff8",
+    "title": "Gold: first strong push through a day extreme that has held >=2h",
+    "hypothesis": "Claim: on XAUUSD, a break by $0.50 of the broker-day high/low that was set >=2h earlier (a level that held through a pullback), arriving fast (last 5m close >=0.17 ATR from the level), continues more often than breaks of a just-made extreme. Mechanism: an extreme that has held for hours accumulates resting stops and breakout orders; a fresh new high in a running trend has none.",
+    "source": "trader",
+    "source_detail": "Pattern in 12 live Aero trades on Myfxbook (2026-09-21..10-08), checked against 704 tester orders; analysis only, no backtest",
+    "status": "raw",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "Tester-log mining (research/aero/aero_pattern_mining.py, no backtest; 24,964 day-range breaks, 498 EA orders). EA SELECTION IS LARGELY OBSERVABLE: logistic mimic fitted on 2018-22 choices scores AUC 0.850 on 2023-26 choices. Drivers: level_age (AUC 0.742; picks median 2.7h vs 0.08h), pullback depth before the break (0.677; 0.54 vs 0.24 ATR), prior touches (0.661), server hour (afternoon; tree: level_age>3.2h & srv_hour>12 -> 5-10% take vs 0.1-0.8%), fast arrival (0.635). Plus EA state: <=2 orders/server day, cooldown ~2-4h after a trade. Rule 'first break/day of a >=2h-old level after 12:00 server' recalls 48% of EA picks at 17% precision. BUT THE PROFIT IS NOT IN THE OBSERVABLE PART: mimic top decile sim R +0.02, rule picks -0.01 (2018-22) / +0.03 (2023-26), vs EA picks +0.19 in both periods; among equally EA-like breaks picks +0.185 vs skipped -0.007. Not explained by trigger-overshoot/feed mismatch (same-overshoot expectation +0.009), nor pre-break tick volume (AUC ~0.50). EA winners vs losers barely separable (max AUC 0.57). User reports older EA versions gave similar numbers out of sample, so memorisation is no longer the main explanation. || M1 (research/aero/aero_m1_microstructure.py, 1m bars 2018-2026.09): minute-level selection adds a 'sharp arrival, not a grind' preference -- EA picks were further from the level 1-3 min before the trigger (a1 AUC 0.632, 0.58 among look-alikes) and spent fewer of the last 30 min pressing within 0.1 ATR of it (press30 0.385). It does not explain the profit: 5m+M1 mimic test AUC 0.846 vs 0.850 for 5m only; top-decile sim R 2023-26 +0.008 vs +0.026; no M1 quintile is reliably positive in both periods (only signal: a1 bottom quintile, already at/through the level a minute earlier, worst in both: -0.061/-0.047). EA picks still +0.189/+0.180.",
+    "tags": [
+      "gold",
+      "reverse-engineering"
+    ],
+    "created_at": "2026-10-09T12:49:46.280413+00:00",
+    "updated_at": "2026-10-09T14:01:36.476667+00:00"
+  },
+  {
+    "id": "fc2d8d73",
+    "title": "Walk-forward kNN lab on gold breaks: raw price shape, targets, weighting, two-stage",
+    "hypothesis": "Claim: a kNN over causal price-shape and level features, trained on gold breaks with a stationary (ATR-scaled) outcome, ranks breaks so that its top decile beats the average break out of sample on gold AND on silver.",
+    "source": "data",
+    "source_detail": "research/aero/aero_knn_lab.py + aero_knn_lab2.py, 2026-10-09; child of 15f8fcda / 87eb623e",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "6 families (hand / raw shape / single blocks / imitation / two-stage / weighted / blend). Best lifts ~+0.03R top-decile over average on 2019-22, gold 2023-26 and silver 2026 (e.g. hand+raw R k=200: +0.041/+0.033/+0.030; post-hoc blend +0.032/+0.039/+0.018, 8/8 years). In-sample winner (raw shape, +0.065) fails silver (-0.003). Imitating the EA reaches AUC 0.84 on silver but earns nothing. Consistent but ~5x smaller than the EA's +0.14..0.18R; not a tradeable edge after realistic costs/pacing. See research/aero/FINDINGS.md section N.",
+    "tags": [
+      "gold",
+      "knn"
+    ],
+    "created_at": "2026-10-09T17:14:00.908213+00:00",
+    "updated_at": "2026-10-09T17:14:01.153643+00:00"
+  },
+  {
+    "id": "0945d084",
+    "title": "Gold Tokyo-range breakout during London/NY",
+    "hypothesis": "FROZEN 2026-10-10 before any data after 2026-08-06 was looked at. Rule = strategies/misc/gold_tokyo_breakout_v2_flat.py (v2 + flatten issued at the 20:45 UTC bar, so the backtest is flat before the daily break / Friday close; amended same day after the holdout showed 20:55 closes filling at the reopen) at its declared defaults: XAUUSD, 5m; range 00:00-09:00 UTC weekdays; trade only if range >= 1.31 x median of previous 20 Tokyo ranges; stop entries 0.02 ATR(4h,20) beyond each edge 09:00-20:00 UTC, each side once/day, one position; stop 1.0 ATR; flat by 20:50 UTC; 1% risk; costs spread 0.12 + 3.5/lot. No further changes before the holdout (2026-08-06 onward) and forward test are scored. Original claim: wide Asian range = trending session; London/NY break of its edge continues to the NY close (gold-specific: silver/US500/NAS100/GER40 fail). || ORIGINAL (2026-10-09): Claim: on XAUUSD, a break by $0.50 of the Tokyo-session range (high/low of 00:00-06:00 UTC) during London/New York hours continues far enough to trade with a stop entry and ATR-scaled exits. Mechanism: the Asian range is an old, widely watched level with resting stops beyond it; London/NY order flow breaks it. Related but opposite: e411c67d (fade Asian moves in FX) rejected. Protocol: choose on 2018-22, judge 2023-26 once, silver as second instrument, 2x costs, random-pick baseline.",
+    "source": "discretionary",
+    "source_detail": "User request 2026-10-09, building on Aero EA findings (research/aero/FINDINGS.md): old levels, pullback, fast arrival, room, London/NY timing",
+    "status": "validated",
+    "strategy": "gold_tokyo_breakout_v2_flat",
+    "run_keys": [
+      "c991eba4fa94cea0",
+      "d05bc50a63304de5",
+      "5bc6d89a2aeef63b",
+      "47b6e2dfdf313cb6",
+      "99702e882d0db819",
+      "627bc35df30c4e34",
+      "0c94c4f27487cb6a",
+      "5f917ca7dbebd3c8",
+      "61f7a2c222b8907a",
+      "2fe13c7c79f3ee20",
+      "401afaa1725f0a47"
+    ],
+    "verdict": "Ready to forward test, not proven (session 2026-10-10b, 4 iterations, research/tokyo/FINDINGS.md 'v2 engine'). Frozen rule gold_tokyo_breakout_v2_flat (00-09 UTC range >= 1.31 x median of previous 20 Tokyo ranges, stop 1 ATR, flat by 20:50 UTC; 2 params) run 47b6e2df 2018-2026.08: 540 trades, Sharpe 0.92, PF 1.29, +86%, maxDD -20%; 2x costs Sharpe 0.77; split IS 0.79 / OOS 1.21 (v1 was 0.07/1.76); Sharpe CI [0.11, 1.74]; PSR 0.99; MC worst DD -31.8%; profitable in all 4 regime cells; tier deployable. Anchored yearly walk-forward 2021-2026.08 (research/tokyo/tokyo_v2_walkforward.py, 3x3 grid): stitched OOS 480 trades Sharpe 1.23, PF 1.37, maxDD -12.9%, every year positive (2022 weakest, 0.35); fit picks width 1.15 (grid floor) every year -> the width filter adds little above ~1.0-1.15, do not chase lower. Holdout after freeze (2026-08-06..10-09, 627bc35d): 8 trades, 5 wins, +0.96R -- consistent, statistically nothing. 'Regime dependence' of v1 is consistent with noise (shuffle test: 2 losing years expected at 66 trades/yr). Silver: first rejection (5bc6d89a, Sharpe -0.41) used WRONG costs ($0.025 + $3.5/lot); the cTrader account shows silver is spread-only (commission 0, lot 5000 oz) and ticks give spread ~$0.008-0.0145 in 2018-22, ~$0.018 in 2023-25, ~$0.05 in 2026 (~6bp of price). Re-test silver_tokyo_breakout_v2 with measured costs: 2018-22 (0c94c4f2) 290 tr Sharpe 0.44, PF 1.13, fails 2x costs (-0.10); 2023-25 (61f7a2c2, spread 0.018) 207 tr Sharpe -0.32, zero-cost Sharpe 0.04 -> no gross edge. Silver = weak/inconclusive, not a cost-only failure; not tradeable on these rules. Gold note: measured gold spread $0.12-0.22 (vs $0.12 modelled) -- inside the 2x-cost test (Sharpe 0.77). US500/NAS100/GER40 event study negative. Contamination: 2021-26 was seen by earlier event studies; only post-2026-08-06 data and a forward test are clean. || FORWARD-TEST CONFIG (user, 2026-10-11): gold_tokyo_breakout_v2_flat with width_ratio=1.0, stop_atr=1.0 (1.0 outside the WF grid -> full-sample reference only). Reference 2fe13c7c: 1121 trades, Sharpe 1.10, +177%, DD -17.2%, 2x costs 0.85, 70/30 split 1.11/1.16, MC worst DD -45.9%. Kill rules: DD beyond MC worst; mean < ~-0.1R after ~100 trades; execution slippage > ~0.05R/trade. Spec: research/tokyo/GOLD_TOKYO_BREAKOUT_SPEC.md",
+    "tags": [
+      "gold",
+      "breakout",
+      "session-range"
+    ],
+    "created_at": "2026-10-09T19:08:26.414053+00:00",
+    "updated_at": "2026-10-10T12:14:43.240760+00:00"
+  },
+  {
+    "id": "e97af039",
+    "title": "Silver session-range breakout, gold-led (sibling of gold Tokyo breakout 0945d084)",
+    "hypothesis": "Primary (A, gold-led): on XAGUSD, a wide gold Tokyo range (00-09 UTC, >= 1.31 x median of previous 20) followed by gold breaking its edge in 09-20 UTC precedes a same-direction silver move to the NY close; exploitable by entering silver at market on the 5m bar after gold's break, stop 1 ATR(4h,20) of silver, flat 20:50 UTC. Because: gold leads precious-metals price discovery (USD/real-yield flow lands in gold first and deepest); silver co-moves with higher beta, but its own Asian range is thin and stop-driven, so it is a noisier signal than gold's. Alternatives screened in the same event study: (C) silver's own Tokyo break only when gold broke the same side that day; (B) silver's London range 07-12 UTC broken during COMEX 12-20 UTC (silver's liquidity is London/COMEX). Protocol: choose on 2018-22, score 2023-25 once, 2026 held out (spread ~0.05); costs = measured spread 0.012 (2018-22) / 0.018 (2023-25), no commission; 2x costs; budget 6 iterations, <= 3 params.",
+    "source": "discretionary",
+    "source_detail": "User request 2026-10-11 after silver failed on the gold Tokyo rules (0c94c4f2 / 61f7a2c2)",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "Rejected after 1 of 6 iterations (event-study screen, research/tokyo/silver_gold_led_study.py, output research/output/silver_gold_led_events.parquet; no engine run -- nothing survived to deserve one). XAGUSD 5m, measured costs (spread 0.012 2018-22 / 0.018 2023-25, no commission), stop 1 ATR silver, flat 20:45 bar. Chosen on 2018-22 (net R/event): A gold-led wide +0.027 (n=310), B silver London 07-12 range wide +0.027 (327), C silver Tokyo break confirmed by same-side gold break, wide (silver rel20 >= 1.29) +0.142 (160) -> chosen; unconfirmed wide -0.020 (gold confirmation adds +0.16R in-sample). 2023-25 looked at once for C wide: -0.056 net, +0.011 gross (126 events) -> fails. Diagnostic (all variants, no selection made from it): wide-day GROSS R negative in 2024 and 2025 for A, B and C alike (A -0.17/-0.07, B -0.10/-0.07, C -0.09/+0.01); 2023 positive for A/C. Silver session-range breakouts carried an edge 2018-22 and have none gross in 2024-25 in every expression tested -- consistent with the gold-rule silver runs (0c94c4f2 +0.44 Sharpe 2018-22, 61f7a2c2 zero-cost 0.04 in 2023-25). 2026 untouched (spread ~0.05, ~3x).",
+    "tags": [
+      "silver",
+      "breakout",
+      "session-range"
+    ],
+    "created_at": "2026-10-11T08:02:12.018432+00:00",
+    "updated_at": "2026-10-11T08:03:41.042663+00:00"
+  },
+  {
+    "id": "a203e796",
+    "title": "Silver trend breakouts at swing/daily scale: 1h fractal swing system and daily Donchian (Turtle)",
+    "hypothesis": "On XAGUSD, a break of a recent extreme -- (F) the latest confirmed 1h fractal swing (n=2), or (D) the 20-day / 55-day high/low (Turtle S1 20/10, S2 55/20, 2 ATR(20d) initial stop) -- starts a move that persists for days to weeks, exploitable with stop entries and a trailing structure/channel exit, both sides. Because: commodity trends from slow-moving capital and hedging pressure (time-series momentum, Moskowitz-Ooi-Pedersen 2012; CTA trend following) play out over weeks, where silver's ~6bp spread is small against the move; intraday silver chops (session variance ratio < 1 in 6/8 years) so the fractal version is expected to be weaker. Costs: measured spread 0.012 (2018-22) / 0.018 (2023-25), no commission, swap long = FedFunds + 3%/yr, short receives FedFunds - 2% (calibrated to Pepperstone's current -1.58/+0.49 pts/day). Protocol: standard (untuned) system values; choose among F/D1/D2 on 2018-22 by net R (>= 30 IS trades), score 2023-25 once, 2026 held out; then engine + rubric for the survivor. Budget 6 iterations, <= 3 params. Prior: gold 1h fractal breakouts rejected (e670d208, 13374202).",
+    "source": "discretionary",
+    "source_detail": "User request 2026-10-11 after session breakouts failed on silver (e97af039): try 1h fractal or longer-term breakouts since silver costs are high",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "Rejected after 1 of 6 iterations (screen research/silver/silver_breakout_screen.py; events research/output/silver_breakout_{F,D1,D2}.parquet; no engine run -- nothing survived). XAGUSD 2018-2025, measured spread 0.012/0.018, swap long FF+3% / short receives FF-2%. 2018-22 (net R/trade): F 1h fractal swing system -0.170 (n=2398, gross -0.054, 1/5 yrs) -- dead, intraday silver structure does not trend (as gold: e670d208, 13374202); D1 Turtle 20/10 +0.025 (58, PF 1.05, 2/5 yrs) -> chosen by the pre-declared rule (D2 below 30 trades); D2 Turtle 55/20 +0.135 (26). 2023-25 looked at once for D1: -0.172 net, -0.118 gross, PF 0.68 (38 trades; 2023 -7.2R, 2024 -2.7R, 2025 +3.3R). Diagnostic (no selection): D2 2023-25 -0.426 (19). Whole 2018-25: D1 -5.1R/96, D2 -4.6R/45. Single-instrument trend following on silver has too few trades to show an edge and was negative even through the 2025 rally (whipsaw). The trend-following evidence in the literature is cross-market; testing it properly needs a multi-market basket (scope change).",
+    "tags": [
+      "silver",
+      "breakout",
+      "trend"
+    ],
+    "created_at": "2026-10-11T08:30:27.598443+00:00",
+    "updated_at": "2026-10-11T08:31:43.296458+00:00"
+  },
+  {
+    "id": "f96bcab0",
+    "title": "Gold/silver ratio mean reversion (dollar-neutral pair, daily)",
+    "hypothesis": "On XAUUSD/XAGUSD daily (broker day, 17:00 NY), when the log gold/silver ratio is >= z_in rolling standard deviations from its L-day mean, it reverts toward the mean; exploitable as a dollar-neutral pair (ratio high: short gold / long silver, and the reverse), entered at the next day's open, exited when z crosses 0, no stop. Because: both metals share the monetary/USD/real-yield factor, so the ratio carries mostly silver's idiosyncratic flow (industrial demand news, speculative positioning, London liquidity squeezes), which is transient. Counter: the ratio has multi-year regimes (~80 -> ~65 in 2021 -> ~90 in 2025 -> ~55 in 2026), so a z-score can stay stretched for months; and a dollar-neutral pair is not factor-neutral (silver beta ~1.3-1.5 to gold), so 'long silver/short gold' is partly long metals. Costs: gold spread ~0.15 (2018-22) / ~0.17 (2023-25) + /bin/zsh.07/oz commission round trip, silver 0.012 / 0.018; swap: long leg pays FF+3%, short leg receives FF-2% -> pair pays ~5%/yr of one leg's notional. Grid (declared): L in {20, 60, 120}, z_in in {1.5, 2.0, 2.5}; choose by net Sharpe on 2018-22 with >= 15 trades; 2023-25 once; 2026 untouched. Budget 6 iterations, <= 3 params.",
+    "source": "discretionary",
+    "source_detail": "User request 2026-10-11; suggested after silver breakouts failed (e97af039, a203e796) as a diversifier to the gold Tokyo breakout (0945d084)",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "Rejected after 1 of 6 iterations, in-sample, before any 2023-25 look (research/gold_silver_ratio/ratio_reversion_study.py; no engine run). Dollar-neutral XAUUSD/XAGUSD pair on broker-day closes, z of log ratio vs L-day mean, fade |z| >= z_in at next open, exit on z crossing 0, net of measured spreads + gold commission + ~5%/yr pair swap. 2018-22, all 9 declared cells negative: net Sharpe -0.39 to -0.78 (e.g. L=20 z=2.0: 46 trades, 52% win, -49% total, DD -55%; L=60 z=2.0: 17 trades, -41%). Not a cost artifact: at ZERO costs and carry every cell is still negative (Sharpe -0.25 to -0.59). Why: the log ratio is a random walk at the traded horizons (autocorrelation of k-day changes vs the next k days, 2018-22: +0.005 at 1d, -0.009 at 5d, +0.024 at 20d; only -0.15 at 60d), and without a stop the stretches that keep going (Mar-2020 silver crash, ratio >100) dominate; small frequent wins (52-63% win rate at L=20) vs large losses. Not tried (would be fishing after a gross failure): beta-hedged legs, a z-stop, momentum (the opposite sign). Ratio level by year end: 2018 82.8, 2019 85.0, 2020 72.0, 2021 78.5, 2022 76.1, 2023 86.8, 2024 90.9, 2025 61.1. || ROUND 2 (user-requested, 2026-10-11; research/gold_silver_ratio/ratio_variants_study.py; same protocol, 2018-22 only for choosing): V1 beta-hedged reversion (gold leg = rolling 60d beta): all 9 cells worse, Sharpe -0.58..-0.99. V2 reversion + z-stop 3.0/3.5 (no re-entry until |z| < z_in): all 18 cells negative, -0.20..-0.97. V3 momentum (go with the stretch, exit on z cross 0): all 9 cells positive but weak, 0.10..0.39 -- below the ~0.9 Sharpe that the best of ~45 noise cells reaches. Chosen by the declared rule: V3 L=60 z_in=1.5 (18 trades, Sharpe 0.39, +31.5%, DD -21.6%). 2023-25 looked at once: 16 trades, 2 wins, Sharpe -0.23, -16.9%, DD -46% (14 of 16 trades lost 0.4-6%: stretches snapped back). Rejected in every form: the ratio neither reverts nor trends reliably at 20-120 day horizons; 2026 untouched.",
+    "tags": [
+      "gold",
+      "silver",
+      "mean-reversion",
+      "pairs"
+    ],
+    "created_at": "2026-10-11T12:03:12.732285+00:00",
+    "updated_at": "2026-10-11T12:05:03.397204+00:00"
+  },
+  {
+    "id": "17ea76f4",
+    "title": "Index intraday momentum: first-half-hour return predicts last-half-hour return (US500/NAS100)",
+    "hypothesis": "Claim: on US500/NAS100, the sign of the return from the previous 16:00 ET close to 10:00 ET predicts the sign of the 15:30-16:00 ET return; trade: enter at 15:30 ET in that direction, exit at 16:00 ET (flat before the CFD daily break), both sides, 0 params. Mechanism: (a) late-informed / slow institutional traders and rebalancers trade near the close in the direction the day's information set them; (b) options dealers short gamma must hedge in the direction of the day's move, concentrated into the close (Baltussen et al.: effect is stronger on negative-gamma days, across ~60 futures). Counter: published effect was strongest pre-2013 and around high-volatility days; a 30-min hold earns a few bp, so the ~0.4/1.0-pt CFD spread may consume it -- check per-trade gross edge vs spread first. Condition worth testing second: only on days when the first-half-hour move is large (volatility regime), since that is where the papers find it.",
+    "source": "book",
+    "source_detail": "Gao, Han, Li & Zhou (2018) 'Market Intraday Momentum', JFE; Baltussen, Da, Lammers & Martens (2021) 'Hedging Demand and Market Intraday Momentum', JFE",
+    "status": "raw",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "",
+    "tags": [
+      "indices"
+    ],
+    "created_at": "2026-10-11T17:00:24.032791+00:00",
+    "updated_at": "2026-10-11T17:00:24.032791+00:00"
+  },
+  {
+    "id": "08e23fa6",
+    "title": "US index cash-open opening range breakout (US500/NAS100)",
+    "hypothesis": "Claim: on US500/NAS100 5m, the high/low of the first N minutes after the 09:30 ET cash open (N start 15, a screened alternative of 5 or 30) is a level whose break, in the direction of the break, continues to the 15:55 ET close more often than it fails; trade a stop entry one tick beyond the range edge, stop at the opposite edge (or a fraction of the range), flat by 15:55 ET (before the CFD daily break), each side at most once per day, both sides, 0-1 params. Mechanism: the cash open concentrates the day's overnight order imbalance, MOC/market-on-open flow and re-hedging by dealers into minutes; the opening range is a widely watched level with resting stops and breakout orders just beyond it, and a break that clears it means the open imbalance is one-sided and later flow (dealer gamma hedging, trend-following intraday funds) extends it. Condition worth testing second: only days when the opening range is narrow relative to ATR (compression precedes expansion) or the overnight gap is large, since that is where the literature finds the edge. Counter: the effect was documented mostly on SPY/QQQ and largely pre-2020; indices are mean-reverting intraday in many regimes, so false breaks of the range are common and the stop at the opposite edge is wide vs the target. A CFD spread (~0.4/1.0 pt) plus a gap-fill and slippage on stop entries at the open (fast market, widest spread of the day) may consume the edge, so measure the spread at 09:30-09:45 ET explicitly (ADR-0009) and require a random-entry control with identical stop/exit geometry. Prior: Asian-range breaks on US500/NAS100 failed (0945d084), so do not conflate the sessions. Data: Pepperstone cTrader NAS100 ~3y of 5m (see memory), US500 depth to be confirmed; ~250 events/yr but only ~3y, so expect an exploratory-to-moderate tier and pool US500+NAS100 only knowing they are ~0.9 correlated (one bet, not two). Use America/New_York for the session so DST does not move the open. Protocol: choose N on the first 2/3 of the sample, score the rest once, 2x costs.",
+    "source": "book",
+    "source_detail": "Crabel, Day Trading with Short-Term Price Patterns and Opening Range Breakout (1990); Zarattini et al. 2024 SSRN on 5-min ORB for SPY/QQQ. Published results are optimistic and pre-date CFD costs; treat as the idea, not the evidence.",
+    "status": "rejected",
+    "strategy": "us_index_orb_gap",
+    "run_keys": [
+      "4f24b65708ee5525",
+      "8b60557c3173f879",
+      "ca7f85c96a0d0b1d",
+      "2d43b72592344478",
+      "d717e7cb18aabed2",
+      "526ea38a586d91f2",
+      "68643d7ebc9f99ba"
+    ],
+    "verdict": "REJECTED 2026-10-11 after 2 IS trials + 3 holdout touches. IS 2018-23 (gap gate 0.2 ATR + first break, us_index_orb_gap): Sharpe NAS100 1.44 / US500 1.30, 2x costs 1.21/0.92, plateaus, 1-window WF 1.20/1.75; direction beat random-side control in 99%/98% of draws (gate chosen on the same data). Out of sample, frozen rules: NAS100 2024-26 Sharpe 1.27 (2x costs 1.16, 433 trades) but per-year R +0.32/+0.09/-0.05 and direction beats random only 91% of draws; US500 2024-26 Sharpe -0.12 (direction = coin, 48%); US500 2016-17 (never seen) Sharpe -0.86. The mechanism is the same on both indices, so a twin failing on the same days says the NAS100 pass is not the mechanism. Strictly, NAS100's own pre-declared kill (Sharpe <= 0) was not triggered; rejected because the declared US500 confirmation and the extra sample both failed. Where it seemed to live: high-vol years (2021-22, 2024); low-vol regimes negative in IS on NAS100 and 2016-17 US500 -- a vol-regime gate would be fitted on spent data, so it is a new idea needing forward data, not iteration 3. ~1/3 of IS edge is non-directional (random side on gap days +0.04R: trend-day convexity of a 1R stop with no target).",
+    "tags": [],
+    "created_at": "2026-10-11T18:29:54.025219+00:00",
+    "updated_at": "2026-10-11T19:00:37.249042+00:00"
+  }
+]

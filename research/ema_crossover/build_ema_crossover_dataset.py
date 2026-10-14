@@ -8,14 +8,14 @@ and validated out-of-sample.
 
 Two phases, run in order:
 
-    .venv/bin/python research/build_ema_crossover_dataset.py backtest
+    .venv/bin/python research/ema_crossover/build_ema_crossover_dataset.py backtest
         Runs the bias-free UniverseBacktest (fja05680/sp500 constituent
         calendar) and prints the trade count. Bars are cached under
         .hermes_cache/, so this is fast on repeat runs. Writes the raw
         trade list to research/output/ema_crossover_trades_raw.csv
         (no fundamentals/news yet) so phase 2 can resume independently.
 
-    .venv/bin/python research/build_ema_crossover_dataset.py enrich
+    .venv/bin/python research/ema_crossover/build_ema_crossover_dataset.py enrich
         Reads the raw trade list and appends news + the latest annual
         (10-K) and latest quarterly (10-Q) SEC filing periods in effect at
         each entry date — fundamentals_annual_year/_quarter and
@@ -40,12 +40,13 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `strategies.*`
 
 from hermes import NotionalCash, Timeframe, UniverseBacktest
 from hermes.ai.enrichers import PolygonNewsEnricher, latest_period
 from hermes.data import ConstituentCalendar, YFinanceSource
-from strategies.ema_crossover import EmaCrossover
+from strategies.ema_crossover.ema_crossover import EmaCrossover
 
 # Fixed notional per trade, not a fraction of the shared portfolio equity: with
 # unconstrained=True and ~700 simultaneous legs sharing one Account, an
@@ -55,13 +56,13 @@ from strategies.ema_crossover import EmaCrossover
 TRADE_NOTIONAL = 10_000.0
 
 D1 = Timeframe.parse("1d")
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 CALENDAR_PATH = ROOT / "sp500_history.csv"
 START = datetime(2017, 1, 1, tzinfo=UTC)
 END = datetime.now(UTC)
 CASH = 1_000_000.0
 
-OUT_DIR = Path(__file__).parent / "output"
+OUT_DIR = Path(__file__).resolve().parents[1] / "output"
 RAW_PATH = OUT_DIR / "ema_crossover_trades_raw.csv"
 FINAL_PATH = OUT_DIR / "ema_crossover_trades.csv"
 

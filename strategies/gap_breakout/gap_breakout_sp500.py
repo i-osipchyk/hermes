@@ -5,7 +5,7 @@ point in time reflects actual index membership — stocks removed or delisted
 mid-period are included for the window they were tradeable.
 
 Run:
-    .venv/bin/python strategies/gap_breakout_sp500.py
+    .venv/bin/python strategies/gap_breakout/gap_breakout_sp500.py
 
 The first run fetches ~8 years of daily bars for every ever-member ticker
 from yfinance and caches them to .hermes_cache/.  Subsequent runs are fast.
@@ -23,12 +23,12 @@ from pathlib import Path
 
 # Allow running as a script from anywhere: the repo root makes `strategies.*`
 # importable, and `src` covers the case where hermes isn't installed.
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(_ROOT), str(_ROOT / "src")]
 
 from hermes import Timeframe, UniverseBacktest
 from hermes.data import ConstituentCalendar, YFinanceSource
-from strategies.gap_breakout import COST_MODEL, GapBreakout
+from strategies.gap_breakout.gap_breakout import COST_MODEL, GapBreakout
 
 D1 = Timeframe.parse("1d")
 

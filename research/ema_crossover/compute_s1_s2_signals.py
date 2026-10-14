@@ -8,7 +8,7 @@ fundamentals_quarterly_year/_quarter) and looks them up in the per-ticker
 filing history already cached to .cache/pit/_massive_financials/ from the
 enrich phase.
 
-    .venv/bin/python research/compute_s1_s2_signals.py
+    .venv/bin/python research/ema_crossover/compute_s1_s2_signals.py
 
 Reads research/output/ema_crossover_trades.csv and writes
 research/output/ema_crossover_trades_signals.csv: the same rows plus
@@ -22,12 +22,12 @@ import csv
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from hermes.ai.enrichers import screen_period
 
-IN_PATH = Path(__file__).parent / "output" / "ema_crossover_trades.csv"
-OUT_PATH = Path(__file__).parent / "output" / "ema_crossover_trades_signals.csv"
+IN_PATH = Path(__file__).resolve().parents[1] / "output" / "ema_crossover_trades.csv"
+OUT_PATH = Path(__file__).resolve().parents[1] / "output" / "ema_crossover_trades_signals.csv"
 
 _NO_PERIOD = {
     "s1": None,
