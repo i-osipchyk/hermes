@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: i-osipchyk/platform/.github/workflows/python-ci.yml@v0.1.2
+    with:
+      sync-args: "--extra dev" # dev tools live in the `dev` extra, not a dependency group
+      mypy: false # strict is a target, not green yet (CLAUDE.md § Gates)

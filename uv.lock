@@ -1043,6 +1043,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "requests" },
     { name = "truststore" },
 ]
 
@@ -1098,6 +1099,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5" },
     { name = "python-binance", marker = "extra == 'binance'", specifier = ">=1.0.19" },
     { name = "quantstats", marker = "extra == 'report'", specifier = ">=0.0.62" },
+    { name = "requests", specifier = ">=2.31" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.36" },
     { name = "truststore", specifier = ">=0.9" },

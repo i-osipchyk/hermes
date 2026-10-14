@@ -117,7 +117,7 @@ def main() -> None:
         q = IS[c].quantile([1 / 3, 2 / 3]).values  # thresholds fitted on IS only
         terc[f] = q
         row = {"pair": f"{f}/{4 * f}"}
-        for name, part, base in (("IS", IS, base_is), ("OOS", OOS, base_oos)):
+        for name, part, _base in (("IS", IS, base_is), ("OOS", OOS, base_oos)):
             y = part.green.values
             z = part[c].values
             row[f"{name}_auc"] = auc(z, y)

@@ -90,12 +90,14 @@ def main() -> None:
     rows = []
     for k, g in P.groupby("fold", sort=False):
         t = g[g.side != 0]
-        rows.append({"fold": k, "btc_ret": g.btc.iloc[0], "n": len(g), "auc": m.auc(g.score.values, g.green.values),
+        rows.append({"fold": k, "btc_ret": g.btc.iloc[0], "n": len(g),
+                     "auc": m.auc(g.score.values, g.green.values),
                      "tail_n": len(t), "tail_hit": t.win.mean() if len(t) else np.nan,
                      "ev_c": (t.win.mean() - be) * 100 if len(t) else np.nan})
     f = pd.DataFrame(rows)
     print(f.round(4).to_string(index=False))
-    print(f"\nfolds with AUC>0.5: {(f.auc > .5).sum()}/{len(f)};  tail hit>break-even: {(f.tail_hit > be).sum()}/{len(f)}")
+    print(f"\nfolds with AUC>0.5: {(f.auc > .5).sum()}/{len(f)};  "
+          f"tail hit>break-even: {(f.tail_hit > be).sum()}/{len(f)}")
 
     # dose-response: OOS P(green) by score decile (cut on train-score edges is overkill; use pooled deciles)
     d = pd.qcut(P.score, 10, labels=False)

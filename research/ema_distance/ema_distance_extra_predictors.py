@@ -23,10 +23,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+import ema_distance_candle_color as m
+
 from hermes import Symbol, Timeframe
 from hermes.data import BinanceFuturesSource
-
-import ema_distance_candle_color as m
 
 FEE = 0.07 * 0.25
 BE = 0.5 + FEE
@@ -172,7 +172,8 @@ def main() -> None:
         win = np.where(t.side == 1, t.y == 1, t.y == 0)
         per = pd.Series(win).groupby(t.fold.values).mean()
         aucs = [m.auc(g.s.values, g.y.values) for _, g in P.groupby("fold")]
-        print(f"{key:5s} AUC={m.auc(P.s.values, P.y.values):.4f} folds>.5={sum(a > .5 for a in aucs)}/{len(aucs)} "
+        print(f"{key:5s} AUC={m.auc(P.s.values, P.y.values):.4f} "
+              f"folds>.5={sum(a > .5 for a in aucs)}/{len(aucs)} "
               f"trades={len(t)} hit={win.mean():.4f} EV={((win.mean() - BE) * 100):+.2f}c "
               f"folds>BE={int((per > BE).sum())}/{len(per)} minfold={per.min():.4f}")
 

@@ -56,7 +56,8 @@ def closes(src: YFinanceSource, ticker: str, start: datetime, end: datetime) -> 
         return None
     if len(bars) < 30:
         return None
-    s = pd.Series({pd.Timestamp(b.timestamp).tz_convert("UTC").normalize().tz_localize(None): b.close for b in bars})
+    day = lambda b: pd.Timestamp(b.timestamp).tz_convert("UTC").normalize().tz_localize(None)  # noqa: E731
+    s = pd.Series({day(b): b.close for b in bars})
     return s[~s.index.duplicated()].sort_index()
 
 

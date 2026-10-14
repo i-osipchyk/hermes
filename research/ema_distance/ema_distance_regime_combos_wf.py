@@ -41,7 +41,7 @@ def states(part: pd.DataFrame, terc: dict) -> np.ndarray:
 
 def cell_table(S: np.ndarray, y: np.ndarray, base: float) -> dict:
     tbl = {}
-    for (i, a), (j, b) in itertools.combinations(enumerate(m.FASTS), 2):
+    for (i, _a), (j, _b) in itertools.combinations(enumerate(m.FASTS), 2):
         for sa, sb in itertools.product(range(3), repeat=2):
             mask = (S[:, i] == sa) & (S[:, j] == sb)
             n = int(mask.sum())
@@ -54,7 +54,7 @@ def cell_table(S: np.ndarray, y: np.ndarray, base: float) -> dict:
 
 def cell_scores(S: np.ndarray, tbl: dict, base: float):
     n = len(S)
-    avg, sel_sum, sel_dir = np.zeros(n), np.zeros(n), np.zeros(n)
+    avg = np.zeros(n)
     cnt = np.zeros(n)
     sel_pos, sel_neg = np.zeros(n), np.zeros(n)
     for (i, j, sa, sb), (p, pv) in tbl.items():
@@ -126,8 +126,8 @@ def main() -> None:
     y, folds = P.y.values, P.fold.values
     print(f"folds={P.fold.nunique()} OOS bars={len(P)} base P(green)={y.mean():.4f}  "
           f"break-even={BE:.4f} (50c + {FEE*100:.2f}c fee)")
-    print("\nOOS AUC (walk-forward):  cells=%.4f  align=%.4f  logit=%.4f" % (
-        m.auc(P.A.values, y), m.auc(P.B.values, y), m.auc(P.C.values, y)))
+    print(f"\nOOS AUC (walk-forward):  cells={m.auc(P.A.values, y):.4f}  "
+          f"align={m.auc(P.B.values, y):.4f}  logit={m.auc(P.C.values, y):.4f}")
 
     rows = [evaluate("A cell-average tails", P.sideA.values, y, folds),
             evaluate("B alignment tails", P.sideB.values, y, folds),

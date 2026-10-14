@@ -57,6 +57,10 @@ Before calling anything done, both of these must pass:
 .venv/bin/python -m ruff check .     # clean across the whole repo
 ```
 
+CI (`.github/workflows/ci.yml`, the platform's reusable `python-ci`) runs both on every push,
+from a clean `uv sync --frozen --extra dev`, so no `.env`, no caches, no other extras. A
+module that `import hermes` reaches must only need core dependencies.
+
 `mypy` is configured `strict` over `src/hermes` as a **target**, and is currently **not green**
 (~340 pre-existing errors; `hermes.webui.*` is exempt). Don't treat a mypy error in untouched
 code as your regression, and don't start a typing campaign unless that's the task. Do keep the
