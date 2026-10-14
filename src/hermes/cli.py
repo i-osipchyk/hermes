@@ -9,6 +9,7 @@ The loop it supports:
 
     hermes strategies                 what can I run?
     hermes run <name>                 run it (ledger hit = free) and record it
+    hermes run <name> --universe <u>  the same over many symbols, one shared capital pool
     hermes runs                       what have I already tried?
     hermes analyze <key>              execute the rubric; write analysis.json
     hermes show <key>                 look at a stored run
@@ -23,11 +24,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import __version__
+
+if TYPE_CHECKING:
+    from .research.ledger import RunLedger, RunRecord
+    from .research.universe_runs import UniverseRun
 
 EXIT_OK, EXIT_ERR, EXIT_EMPTY = 0, 1, 2
 
@@ -105,7 +111,9 @@ def cmd_strategies(args: argparse.Namespace) -> int:
     payload = {
         "strategies": [
             {"name": e.name, "path": str(e.path), "generated_by": e.generated_by,
-             "ai_generated": e.is_ai_generated}
+             "ai_generated": e.is_ai_generated,
+             "universe": e.build_universe_backtest is not None,
+             "single_symbol": e.build_backtest is not None}
             for e in entries
         ],
         "broken": [
@@ -114,7 +122,8 @@ def cmd_strategies(args: argparse.Namespace) -> int:
     }
     lines = [f"{len(entries)} runnable in {args.dir}/"]
     for e in entries:
-        lines.append(f"  {e.name}" + ("  🤖" if e.is_ai_generated else ""))
+        lines.append(f"  {e.name}" + ("  🤖" if e.is_ai_generated else "")
+                     + ("  [universe]" if e.build_universe_backtest is not None else ""))
     for b in broken:
         lines.append(f"  {b.name}  ✗ {b.error}")
     if broken:
@@ -196,9 +205,128 @@ def _meta_for(entry, bt, args, params: dict):
     )
 
 
+def _is_universe_request(args: argparse.Namespace) -> bool:
+    if getattr(args, "universe", None):
+        if getattr(args, "symbol", None):
+            raise SystemExit("hermes: --symbol and --universe are exclusive")
+        return True
+    return bool(_entry(args.strategy, args.dir).is_universe)
+
+
+def _build_universe(args: argparse.Namespace) -> UniverseRun:
+    """A configured UniverseRun from the CLI flags."""
+    from .research.universe_runs import universe_run
+
+    entry = _entry(args.strategy, args.dir)
+    try:
+        return universe_run(
+            entry, universe=getattr(args, "universe", None), source_name=args.source,
+            start=_parse_date(args.start) if args.start else None,
+            end=_parse_date(args.end) if args.end else None,
+            starting_cash=args.cash, params=_parse_params(args.param),
+            unconstrained=args.unconstrained,
+        )
+    except ValueError as e:
+        raise SystemExit(f"hermes: {e}") from e
+
+
+def _progress(label: str) -> Callable[[int, int, object], None]:
+    """A PortfolioBacktest progress callback that reports every 10% on stderr."""
+    last = [-1]
+
+    def cb(done: int, total: int, ts: object) -> None:
+        pct = int(done * 10 / total) if total else 10
+        if pct > last[0]:
+            last[0] = pct
+            _warn(f"  {label}: {pct * 10}%  ({str(ts)[:10]})")
+    return cb
+
+
+def _universe_lines(uni: dict[str, Any] | None, top: int = 10) -> list[str]:
+    if not uni:
+        return []
+    rows = sorted(uni.get("summary_rows", []), key=lambda r: r.get("net_pnl") or 0,
+                  reverse=True)
+    traded = [r for r in rows if r.get("trades")]
+    out = ["", f"  universe    {uni.get('universe_size', len(rows))} symbols, "
+               f"{len(traded)} traded"]
+    if traded:
+        out.append(f"  {'symbol':<16} {'trades':>6} {'win %':>7} {'net P&L':>12}")
+        shown = traded if len(traded) <= 2 * top else traded[:top] + [None] + traded[-top:]
+        for r in shown:
+            if r is None:
+                out.append(f"  {'…':<16}")
+                continue
+            win = f"{r['win_%']:.1f}" if r.get("win_%") is not None else "—"
+            out.append(f"  {r['symbol']:<16} {r['trades']:>6} {win:>7} "
+                       f"{_fmt(r.get('net_pnl')):>12}")
+    return out
+
+
+def cmd_run_universe(args: argparse.Namespace) -> int:
+    from .research.ledger import RunLedger
+
+    ur = _build_universe(args)
+    key = ur.key
+    ledger = RunLedger(args.runs_dir)
+
+    cached = None if args.no_cache else ledger.load(key)
+    uni = ledger.load_universe_meta(key) if cached is not None else None
+    if cached is not None and uni is not None:
+        result_dict, from_cache = cached.result, True
+    else:
+        if ur.has_advisor and not args.allow_advisor:
+            raise SystemExit(
+                f"hermes: '{ur.entry.name}' has an AI Advisor — a universe run makes a billed "
+                f"call per signal on every leg ({ur.size_hint or '?'} symbols). "
+                f"Pass --allow-advisor to spend it."
+            )
+        label = f"{ur.entry.name} · {ur.universe}"
+        _warn(f"running {label} ({ur.size_hint or '?'} symbols) · "
+              f"{ur.start.date()}→{ur.end.date()} …")
+        universe_result = ur.run(progress_callback=_progress(label))
+        pr = universe_result.portfolio_result
+        from_cache = False
+        uni = {
+            "universe_size": universe_result.universe_size,
+            "summary_rows": pr.summary_rows(),
+            "per_symbol_counts": {k: len(v) for k, v in pr.per_symbol.items()},
+        }
+        if args.no_save:
+            result_dict = pr.result.to_dict()
+        else:
+            result_dict = ur.save(ledger, universe_result, note=args.note or "")
+
+    m = result_dict.get("metrics", {})
+    note = cached.meta.note if cached is not None else (args.note or "")
+    payload = {
+        "run_key": key, "strategy": ur.entry.name, "universe": ur.universe,
+        "source": ur.source, "start": ur.start.isoformat(), "end": ur.end.isoformat(),
+        "from_cache": from_cache, "metrics": m, "note": note,
+        "universe_size": uni.get("universe_size"),
+        "per_symbol": uni.get("summary_rows", []),
+    }
+    lines = [
+        f"{ur.entry.name} · universe {ur.universe} · {ur.source}"
+        + ("   (from ledger)" if from_cache else ""),
+        f"run  {key}",
+    ]
+    if note:
+        lines.append(f"why  {note}")
+    lines.extend(_metric_lines(m))
+    lines.extend(_universe_lines(uni))
+    if not m.get("num_trades"):
+        lines.append("")
+        lines.append("  ⚠️  zero trades across the whole universe")
+    _emit(payload, args.json, lines)
+    return EXIT_OK if m.get("num_trades") else EXIT_EMPTY
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
 
+    if _is_universe_request(args):
+        return cmd_run_universe(args)
     entry, bt, key = _build(args)
     ledger = RunLedger(args.runs_dir)
 
@@ -297,6 +425,11 @@ def cmd_show(args: argparse.Namespace) -> int:
     lines.extend(_metric_lines(rec.metrics))
     if rec.fail_open_calls:
         lines.append(f"  ⚠️  {rec.fail_open_calls} advisor calls failed open")
+    uni = ledger.load_universe_meta(rec.key)
+    if uni is not None:
+        payload["universe_size"] = uni.get("universe_size")
+        payload["per_symbol"] = uni.get("summary_rows", [])
+        lines.extend(_universe_lines(uni))
     if args.trades:
         payload["trades"] = rec.trades
         lines.append("")
@@ -327,6 +460,18 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         raise SystemExit(f"hermes: unknown axis {unknown}. Known: {', '.join(ALL_AXES)}")
 
     ledger = RunLedger(args.runs_dir)
+
+    try:
+        stored = ledger.load(ledger.resolve(args.target))
+    except Exception:  # noqa: BLE001 — not a key; maybe a strategy name
+        stored = None
+    if stored is not None and stored.meta.universe:
+        return _analyze_universe(args, ledger, axes, stored)
+    if stored is None:
+        args.strategy = args.target
+        if _is_universe_request(args):
+            return _analyze_universe(args, ledger, axes, None)
+
     from .research.discovery import configured_backtest, default_config
 
     # `analyze` accepts either a stored run key or a strategy name. A key is richer:
@@ -385,6 +530,70 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             _warn(f"wrote {out / 'analysis.json'}")
 
     lines = [f"{strategy_name} · run {run_key}", ""]
+    for a in analysis.axes:
+        lines.append(f"  {'✓' if a.ran else '·'} {a.axis:<12} {a.note}")
+    _emit(analysis.to_dict(), args.json, lines)
+    return EXIT_OK if analysis.ran else EXIT_EMPTY
+
+
+# Axes that perturb and re-run one Backtest. A universe run is a PortfolioBacktest over
+# many legs, and nothing re-runs that with perturbed inputs yet.
+_UNIVERSE_UNMEASURED = ("costs", "params", "oos", "walkforward", "baseline")
+
+
+def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[str, ...],
+                      rec: RunRecord | None) -> int:
+    """The rubric over a universe run: what can be measured, and what can't (with why)."""
+    from .research.analysis import ALL_AXES, RESTORABLE_AXES, AxisResult, analyze
+    from .research.ledger import restore_result
+    from .research.universe_runs import universe_run
+
+    if rec is not None:
+        entry = _entry(rec.meta.strategy, args.dir)
+        try:
+            ur = universe_run(
+                entry, universe=rec.meta.universe, source_name=rec.meta.source,
+                start=_parse_date(rec.meta.start), end=_parse_date(rec.meta.end),
+                params=rec.meta.params, unconstrained=rec.meta.unconstrained,
+            )
+        except ValueError as e:
+            raise SystemExit(f"hermes: {e}") from e
+        run_key = rec.key
+    else:
+        ur = _build_universe(args)
+        run_key = ur.key
+        rec = ledger.load(run_key)
+
+    measurable = tuple(a for a in axes if a not in _UNIVERSE_UNMEASURED)
+    result = None
+    if rec is not None and set(measurable) <= RESTORABLE_AXES:
+        result = restore_result(rec.result)
+    elif measurable:
+        if ur.has_advisor and not getattr(args, "allow_advisor", False):
+            raise SystemExit(
+                f"hermes: re-running '{ur.entry.name}' over its universe makes billed AI "
+                f"Advisor calls. Pass --allow-advisor, or ask only for --axes trades,gate."
+            )
+        _warn(f"analysing {ur.entry.name} · {ur.universe} ({', '.join(measurable)}) — "
+              f"re-running the universe …")
+        result = ur.run(progress_callback=_progress(ur.entry.name)).portfolio_result.result
+
+    analysis = analyze(None, result, axes=measurable, run_key=run_key,
+                       strategy=ur.entry.name, seed=args.seed)
+    for axis in axes:
+        if axis in _UNIVERSE_UNMEASURED:
+            why = (f"not measured — {axis} re-runs a perturbed backtest, which is single-symbol "
+                   f"only; universe runs have no re-run path yet")
+            analysis.axes.append(AxisResult(axis, False, why, error=why))
+    order = {a: i for i, a in enumerate(ALL_AXES)}
+    analysis.axes.sort(key=lambda a: order.get(a.axis, 99))
+
+    if not args.no_save and (ledger.path / run_key).exists():
+        out = ledger.path / run_key / "analysis.json"
+        out.write_text(json.dumps(analysis.to_dict(), indent=2, default=str))
+        _warn(f"wrote {out}")
+
+    lines = [f"{ur.entry.name} · universe {ur.universe} · run {run_key}", ""]
     for a in analysis.axes:
         lines.append(f"  {'✓' if a.ran else '·'} {a.axis:<12} {a.note}")
     _emit(analysis.to_dict(), args.json, lines)
@@ -608,6 +817,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override a declared Strategy Parameter (repeatable)")
     p.add_argument("--unconstrained", action="store_true",
                    help="skip the capital check — orders are never rejected for funds")
+    p.add_argument("--universe", help="run over a universe: a tickers/<name>.json list or a "
+                   "calendar universe (sp500). A build_universe_backtest file needs none")
+    p.add_argument("--allow-advisor", action="store_true",
+                   help="let a universe run make billed AI Advisor calls on every leg")
     p.add_argument("--note", help="why this run — the hypothesis it tests, or what "
                                    "changed since the last variant. Recorded in the ledger.")
     p.add_argument("--no-cache", action="store_true", help="re-run even if the ledger has it")
@@ -646,6 +859,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cash", type=float)
     p.add_argument("-p", "--param", action="append", default=[], metavar="NAME=VALUE")
     p.add_argument("--unconstrained", action="store_true")
+    p.add_argument("--universe", help="analyse a universe run (see `hermes run --universe`)")
+    p.add_argument("--allow-advisor", action="store_true",
+                   help="allow re-running an AI-gated universe (billed calls)")
     _add_common(p)
     p.set_defaults(func=cmd_analyze)
 

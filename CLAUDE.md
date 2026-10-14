@@ -8,7 +8,7 @@ Hermes is a bar-based backtesting framework aimed at being driven by an AI resea
 | `docs/MANUAL.md` | The user manual — the five stages, with an agent and by hand. Where to look when you don't know the workflow. |
 | `CONTEXT.md` | The ubiquitous language (~50 terms). Use these words; the code does. |
 | `docs/adr/` | The load-bearing decisions. Cite them when behaviour hinges on one. |
-| `src/hermes/__init__.py` | The complete public inventory (156 names). If it's in Hermes, it's importable from `hermes`. |
+| `src/hermes/__init__.py` | The complete public inventory (163 names). If it's in Hermes, it's importable from `hermes`. |
 
 ## Environment
 
@@ -24,6 +24,7 @@ usable, `1` bad request.
 ```bash
 .venv/bin/hermes strategies        # what's runnable; broken files listed with their error
 .venv/bin/hermes run <name> --note "why"   # run + record. --symbol --start --end -p k=v
+.venv/bin/hermes run <name> --universe faang --note "why"  # many symbols, one capital pool
 .venv/bin/hermes runs              # the experiment log — CHECK IT BEFORE RE-RUNNING
 .venv/bin/hermes runs --note-contains "gap"      # find your own past reasoning
 .venv/bin/hermes show <key>        # a stored run; key prefixes work
@@ -53,7 +54,7 @@ Two rules about the review:
 Before calling anything done, both of these must pass:
 
 ```bash
-.venv/bin/python -m pytest          # 415 tests, offline, ~3.3s
+.venv/bin/python -m pytest          # ~435 tests, offline, ~3.5s
 .venv/bin/python -m ruff check .     # clean across the whole repo
 ```
 
@@ -193,7 +194,13 @@ in `hermes/research/`, and `hermes` is a real CLI. `hermes.webui` keeps back-com
 re-exports (`from hermes.webui import discovery` still resolves) — new code should import
 from `hermes.research`.
 
-Still open: **universe runs are not in the CLI.** `hermes run` handles single-symbol
-backtests; `UniverseBacktest`/`PortfolioBacktest` remain library- or UI-only, and
-discovery recognises `build_backtest` but not `build_universe_backtest`. That is the next
-piece.
+Universe runs are in the CLI (`hermes/research/universe_runs.py`): `hermes run <name>
+--universe <u>` over a `tickers/*.json` list or a calendar universe (`sp500`), or plain
+`hermes run <name>` for a `build_universe_backtest` file (recorded as universe `(own)`).
+One ledger row per run (`ticker=None`) plus `universe_meta.json` for the per-symbol split.
+A strategy with an AI Advisor needs `--allow-advisor`, because every leg makes billed calls.
+
+Still open: **`analyze` on a universe run measures only `trades`, `validation`, `regime`
+and `gate`.** `costs`/`params`/`oos`/`walkforward`/`baseline` perturb and re-run a single
+`Backtest`, and nothing re-runs a `PortfolioBacktest` that way yet. They come back
+`ran: false` saying so. Report them as not measured, never as clean.

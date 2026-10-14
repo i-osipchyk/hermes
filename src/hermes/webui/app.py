@@ -405,6 +405,8 @@ def _split_result(result, is_frac: float):
 # --- pick a strategy -------------------------------------------------------
 
 entries, broken = discovery.discover_all()
+# Universe-only files (build_universe_backtest alone) run from the CLI, not this form.
+entries = [e for e in entries if not e.is_universe]
 for b in broken:
     with st.expander(f"⚠️ `{b.path.name}` failed to load — {b.error}", expanded=False):
         st.code(b.traceback, language="text")
@@ -653,6 +655,7 @@ if run or st.session_state.pop("_auto_run", False):
                 source=source,
                 calendar=cal,
                 timeframes=defaults.timeframes,
+                cost_model=defaults.cost_model,
                 start=start_dt,
                 end=end_dt,
                 starting_cash=cash,

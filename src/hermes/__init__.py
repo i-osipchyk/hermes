@@ -165,6 +165,7 @@ from .research import (
     RunMeta,
     RunRecord,
     StrategyEntry,
+    UniverseRun,
     analyze,
     build_source,
     cache_key,
@@ -173,10 +174,12 @@ from .research import (
     default_config,
     discover,
     discover_all,
+    known_universes,
     restore_result,
     run_universe,
     source_names,
     strategy_hash,
+    universe_run,
 )
 from .skilltools import install_skills
 from .strategy import (
@@ -343,6 +346,9 @@ __all__ = [
     "declared_parameters",
     "configured_backtest",
     "run_universe",
+    "universe_run",
+    "UniverseRun",
+    "known_universes",
     "RunLedger",
     "RunMeta",
     "RunRecord",

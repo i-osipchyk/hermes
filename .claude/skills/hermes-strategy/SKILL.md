@@ -138,7 +138,8 @@ drops straight into `hermes-backtest` and the web UI (`hermes-ui`):
 
 A **universe-scale** strategy (every ever-member of an index, via `ConstituentCalendar`)
 returns a `UniverseBacktest` rather than a `Backtest`, so it exposes
-`build_universe_backtest(**overrides)` instead — mirror `strategies/gap_breakout_sp500.py`.
+`build_universe_backtest(**overrides)` instead — mirror
+`strategies/gap_breakout/gap_breakout_sp500.py`. `hermes run <name>` runs it (no `--universe`).
 
 Completion criterion: the file imports only names that exist in `hermes`'s public API
 (verify against `src/hermes/__init__.py`), exposes `GENERATED_BY` + `build_backtest`, and

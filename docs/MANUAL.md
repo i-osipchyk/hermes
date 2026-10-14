@@ -284,7 +284,8 @@ Three rules, all load-bearing:
 - **Omit `start`/`end`** unless the strategy needs a specific window — the default Trading
   Window is year-to-date.
 - A universe-scale run returns a `UniverseBacktest`, not a `Backtest`, so it exposes
-  `build_universe_backtest(**overrides)` instead (see `strategies/gap_breakout_sp500.py`).
+  `build_universe_backtest(**overrides)` instead (see
+  `strategies/gap_breakout/gap_breakout_sp500.py`). `hermes run` runs it without further flags.
 
 Check Hermes saw it:
 
@@ -337,6 +338,17 @@ why  baseline: does the 8/32 cross work on a mega-cap at all?
   sharpe      0.54   (param-adjusted 0.50)
   max DD      -21.31%   win rate 38.46%   profit factor 1.67
 ```
+
+Over many symbols at once, sharing one pool of capital (`tickers/<name>.json`, or the
+point-in-time `sp500` calendar if `sp500_history.csv` is present):
+
+```bash
+hermes run gap_breakout --universe faang --note "does the gap edge hold across mega-caps?"
+```
+
+That prints the portfolio metrics and then each symbol's trades and P&L; `hermes show <key>`
+repeats the breakdown. A file exposing `build_universe_backtest` defines its own universe,
+so `hermes run gap_breakout_sp500` needs no `--universe`.
 
 **Always pass `--note`.** It records *why* this configuration ran. Without it the ledger is
 a list of hashes; with it, it's a research log you — or a future session — can read:
@@ -673,6 +685,7 @@ and **what went unmeasured**.
 | `hermes ideas [add\|set\|rm]` | 1 | The idea backlog |
 | `hermes strategies` | 2 | What's runnable; broken files with their error |
 | `hermes run <name>` | 3 | Run + record. `--note` is effectively mandatory |
+| `hermes run <name> --universe <u>` | 3 | The same over a `tickers/*.json` list or `sp500`, one shared capital pool |
 | `hermes runs` | 3 | The research log. **Check before re-running** |
 | `hermes show <key>` | 3 | A stored run; `--trades` for the blotter |
 | `hermes analyze <key\|name>` | 3 | The rubric, computed → `analysis.json` |
@@ -755,8 +768,9 @@ Knowing the edges saves you from designing against them:
   to *watch* = a `Reference` feed.
 - **Credit dividends as cash.** Bars are split-adjusted; dividend-on-ex-date into the
   Account is a known TODO.
-- **Run universe backtests from the CLI.** `hermes run` is single-symbol;
-  `UniverseBacktest` is library- or UI-only for now.
+- **Stress-test a universe run.** `hermes run --universe` works, but `analyze` on it only
+  measures `trades`, `validation`, `regime` and `gate`. The re-run axes (costs, params,
+  OOS, walk-forward, baseline) are single-symbol for now and come back not measured.
 - **Tell you a strategy is good.** It measures; you decide. Every threshold above is a
   default someone chose.
 

@@ -14,7 +14,8 @@ sit on top of (ADR-0010). Four pieces:
 
 Plus :mod:`~hermes.research.sources` (a DataSource registry, so a strategy can be
 pointed at another provider without editing it) and
-:mod:`~hermes.research.universes` (ticker lists and constituent calendars).
+:mod:`~hermes.research.universes` (ticker lists and constituent calendars), which
+:mod:`~hermes.research.universe_runs` turns into ledger-recorded universe runs.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from .ledger import (
 )
 from .review import ReviewStatus
 from .sources import build_source, source_names
+from .universe_runs import UniverseRun, known_universes, universe_run
 
 __all__ = [
     # discovery
@@ -54,6 +56,10 @@ __all__ = [
     "declared_parameters",
     "configured_backtest",
     "run_universe",
+    # universe runs
+    "universe_run",
+    "UniverseRun",
+    "known_universes",
     # ideas
     "IdeaBook",
     "Idea",

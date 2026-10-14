@@ -1,7 +1,8 @@
 """Discover runnable strategies for the web UI.
 
 Convention (emitted by the hermes-strategy skill): each ``strategies/<family>/<name>.py``
-exposes a ``build_backtest(**overrides) -> Backtest`` factory and, when written by
+exposes a ``build_backtest(**overrides) -> Backtest`` factory — or, for a universe-scale
+run, ``build_universe_backtest(**overrides) -> UniverseBacktest`` — and, when written by
 Claude, a ``GENERATED_BY = "hermes-strategy"`` provenance marker. This module is
 Streamlit-free so it stays unit-testable without the ``[ui]`` extra.
 """
@@ -12,9 +13,11 @@ import importlib.util
 import sys
 import traceback
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 from ..backtest import Backtest
 from ..core import Symbol
@@ -41,12 +44,19 @@ class BrokenStrategy:
 class StrategyEntry:
     name: str
     path: Path
-    build_backtest: object          # callable(**overrides) -> Backtest
+    build_backtest: object | None   # callable(**overrides) -> Backtest; None if universe-only
     generated_by: str | None        # provenance marker, e.g. "hermes-strategy"
+    # callable(**overrides) -> UniverseBacktest, for a file that defines its own universe
+    build_universe_backtest: object | None = None
 
     @property
     def is_ai_generated(self) -> bool:
         return self.generated_by == "hermes-strategy"
+
+    @property
+    def is_universe(self) -> bool:
+        """True for a file that only builds a universe run (no single-symbol factory)."""
+        return self.build_backtest is None
 
 
 def _load_module(path: Path):
@@ -62,16 +72,21 @@ def _load_module(path: Path):
 def discover(directory: Path = DEFAULT_STRATEGIES_DIR) -> list[StrategyEntry]:
     """Return the strategies in ``directory`` that expose ``build_backtest``.
 
-    Import failures are skipped, not raised — use :func:`discover_all` to see them.
+    Universe-only files (``build_universe_backtest`` alone) are left out, since every
+    caller of this function builds a single-symbol Backtest; :func:`discover_all`
+    includes them. Import failures are skipped, not raised.
     """
     entries, _ = discover_all(directory)
-    return entries
+    return [e for e in entries if e.build_backtest is not None]
 
 
 def discover_all(
     directory: Path = DEFAULT_STRATEGIES_DIR,
 ) -> tuple[list[StrategyEntry], list[BrokenStrategy]]:
     """Return ``(working, broken)`` for every ``*.py`` under ``directory``.
+
+    "Working" includes universe-only files (``entry.is_universe``); a file that
+    defines both factories is one entry carrying both.
 
     Loading a strategy executes its module, so a syntax error or a bad import in
     one file used to abort the whole scan. Each file is now isolated: failures
@@ -117,28 +132,38 @@ def discover_all(
             )
             continue
         factory = getattr(module, "build_backtest", None)
-        if not callable(factory):
+        universe_factory = getattr(module, "build_universe_backtest", None)
+        if not callable(factory) and not callable(universe_factory):
             continue
         entries.append(
             StrategyEntry(
                 name=path.stem,
                 path=path,
-                build_backtest=factory,
+                build_backtest=factory if callable(factory) else None,
                 generated_by=getattr(module, "GENERATED_BY", None),
+                build_universe_backtest=universe_factory if callable(universe_factory) else None,
             )
         )
     return entries, broken
 
 
+def _single(entry: StrategyEntry) -> Callable[..., Backtest]:
+    """The single-symbol factory, or a clear error for a universe-only file."""
+    if entry.build_backtest is None:
+        raise ValueError(f"'{entry.name}' only defines build_universe_backtest; "
+                         f"run it as a universe")
+    return cast(Callable[..., Backtest], entry.build_backtest)
+
+
 def default_config(entry: StrategyEntry) -> Backtest:
     """A fresh Backtest with the strategy's defaults — introspect for form values."""
-    return entry.build_backtest()
+    return _single(entry)()
 
 
 def declared_parameters(entry: StrategyEntry):
     """The strategy's tunable Parameters (specs), by running ``setup()`` on a fresh
     instance. Returns ``list[Parameter]`` the UI renders as editable controls."""
-    strat = entry.build_backtest().strategy
+    strat = _single(entry)().strategy
     strat.run_setup()
     return strat.declared_parameters()
 
@@ -161,13 +186,14 @@ def configured_backtest(
     source, ticker, dates, cash, and strategy Parameter overrides."""
     from .sources import build_source
 
-    bt = entry.build_backtest()
+    factory = _single(entry)
+    bt = factory()
     if ticker != bt.symbol.ticker:
         # Rebuild through the factory so symbol-dependent parts (a cost model priced in
         # ticks, an instrument-specific default) are derived for THIS symbol; a bare
         # replace(symbol=...) would keep the default symbol's.
         try:
-            bt = entry.build_backtest(symbol=Symbol(ticker, bt.symbol.source))
+            bt = factory(symbol=Symbol(ticker, bt.symbol.source))
         except TypeError:       # a factory that takes no overrides keeps the old behaviour
             pass
     source = (
@@ -175,7 +201,7 @@ def configured_backtest(
         if source_name and (source_name != bt.source.name or leverage is not None)
         else bt.source
     )
-    kw = dict(
+    kw: dict[str, Any] = dict(
         source=source,
         symbol=Symbol(ticker, source.name),
         start=start,
