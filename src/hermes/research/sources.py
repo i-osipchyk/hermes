@@ -1,9 +1,9 @@
 """Registry of DataSources selectable in the web UI, so a strategy can run against a
 different provider without editing its file.
 
-cTrader/Pepperstone credentials are read from the environment (``CTRADER_*``); the
-source builds fine without them, but a fetch will error clearly until they're set (and
-the live cTrader transport is wired).
+cTrader/Pepperstone credentials are resolved by the source itself: the shared token pair
+from AWS SSM, ``CTRADER_ACCOUNT_ID`` from the environment (see ``ctrader_source``). The
+source builds fine without them; a fetch errors clearly until they're available.
 """
 
 from __future__ import annotations
@@ -21,14 +21,9 @@ from ..data import (
 
 
 def _ctrader_from_env() -> PepperstoneSource:
-    account_id = os.environ.get("CTRADER_ACCOUNT_ID")
-    return PepperstoneSource(
-        client_id=os.environ.get("CTRADER_CLIENT_ID"),
-        client_secret=os.environ.get("CTRADER_CLIENT_SECRET"),
-        access_token=os.environ.get("CTRADER_ACCESS_TOKEN"),
-        account_id=int(account_id) if account_id else None,
-        host=os.environ.get("CTRADER_HOST", "live"),
-    )
+    # Credentials are left to the source: passing the env token here would make a
+    # stale .env copy win over the shared one in SSM.
+    return PepperstoneSource(host=os.environ.get("CTRADER_HOST", "live"))
 
 
 _FACTORIES: dict[str, Callable[[], DataSource]] = {

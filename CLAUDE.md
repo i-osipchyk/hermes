@@ -120,7 +120,11 @@ codebase is organised to prevent.
 - `research/output/` — hundreds of MB of intermediate CSVs. The scripts in `research/` are
   fine to track (grouped by topic: `research/<topic>/`, writing to the shared `research/output/`);
   their output is not.
-- `.env` — credentials (`CTRADER_*`, `TIINGO_API_KEY`, `POLYGON_API_KEY`).
+- `.env` — credentials (`CTRADER_ACCOUNT_ID`, `TIINGO_API_KEY`, `POLYGON_API_KEY`). The cTrader
+  client id, secret and **token are not in `.env`**: `CTraderSource` reads the account's shared
+  pair from SSM `/platform/shared/ctrader-*` with your AWS credentials (the `pepperstone` extra
+  brings boto3). Hermes never refreshes it; a copy in `.env` goes dead on the next platform
+  refresh. `HERMES_CTRADER_SHARED_PATH=""` turns SSM off (tests do).
 
 **Do commit `research/ideas.json`.** The idea backlog is work product, not cache — losing
 it loses the thinking. It is the one Hermes artifact that is neither code nor cache.
@@ -128,7 +132,7 @@ it loses the thinking. It is the one Hermes artifact that is neither code nor ca
 ## Configuration
 
 Hermes' own knobs are namespaced `HERMES_*`: `HERMES_AI_MODEL`, `HERMES_AI_MAX_TOKENS`,
-`HERMES_EDGAR_CHARS_PER_SECTION`, `HERMES_NEWS_COUNT`, `HERMES_NO_TRUSTSTORE`. Third-party
+`HERMES_EDGAR_CHARS_PER_SECTION`, `HERMES_NEWS_COUNT`, `HERMES_NO_TRUSTSTORE`, `HERMES_CTRADER_SHARED_PATH`. Third-party
 credentials keep their conventional names. Add new knobs with the `HERMES_` prefix and read
 them at call time, not import time.
 

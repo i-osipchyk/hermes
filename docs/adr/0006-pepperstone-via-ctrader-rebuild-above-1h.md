@@ -25,7 +25,10 @@ MetaTrader5. Two cTrader realities drive the design:
 - `CTraderSource`/`PepperstoneSource` read credentials from `CTRADER_CLIENT_ID` /
   `CTRADER_CLIENT_SECRET` / `CTRADER_ACCESS_TOKEN` / `CTRADER_ACCOUNT_ID` when not
   passed explicitly, so `PepperstoneSource()` works with no arguments once those are
-  exported.
+  exported. *Amended 2026-10-14:* the client id, secret and access token now come first
+  from the account's shared pair in SSM (`/platform/shared/ctrader-*`, refreshed only by
+  the platform), re-read every 60 s; the env vars are the offline fallback. Only
+  `CTRADER_ACCOUNT_ID` is per project.
 - `day_anchor` is a general `SessionCalendar` field (default `None` = midnight), so
   stocks/crypto are unaffected; only forex/CFD set it.
 - Matching a *specific* TradingView chart may still need the user to tune

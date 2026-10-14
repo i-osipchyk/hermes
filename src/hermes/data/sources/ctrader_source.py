@@ -12,9 +12,13 @@ Two cTrader-specific quirks are handled here (see ADR-0006):
 2. **Optional whole-hour offset.** If the raw bar timestamps still look shifted for a
    given account/symbol, ``bar_utc_offset_minutes`` corrects them to true UTC.
 
-Credentials default from the environment (``CTRADER_CLIENT_ID``, ``CTRADER_CLIENT_SECRET``,
-``CTRADER_ACCESS_TOKEN``, ``CTRADER_ACCOUNT_ID``) so ``CTraderSource()`` / ``PepperstoneSource()``
-work with no arguments once those are exported.
+Credentials need no arguments. The client id, secret and access token are the account's
+**one shared pair** in AWS SSM (``/platform/shared/ctrader-*``), which only the platform's
+refresher writes; they're re-read every ``_SHARED_TTL_S`` so a refresh is picked up without a
+restart. Explicit arguments win over SSM, and the ``CTRADER_*`` env vars are the fallback when
+SSM is off (``HERMES_CTRADER_SHARED_PATH=""``) or unreachable. ``CTRADER_ACCOUNT_ID`` stays in
+the environment: the account is per project, the token is not. Never copy the token into
+``.env``: a refresh kills the copy (``~/dev/platform/docs/conventions.md`` § cTrader tokens).
 
 The transport is the Spotware Open API (Protobuf over TLS, via the ``ctrader-open-api``
 Twisted client). ``_CTraderConnection`` bridges that async, callback-driven client behind
@@ -25,8 +29,10 @@ decode/normalise/paginate/resample logic *is* tested.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
+import time as time_mod
 from datetime import UTC, datetime, time
 from queue import Queue
 from zoneinfo import ZoneInfo
@@ -159,6 +165,43 @@ def _ms(dt: datetime) -> int:
 def _int_env(name: str) -> int | None:
     raw = os.environ.get(name)
     return int(raw) if raw else None
+
+
+log = logging.getLogger(__name__)
+
+# How long a read of the shared pair is trusted. Short, because after the platform
+# refreshes the token the old one stops working.
+_SHARED_TTL_S = 60.0
+_shared_cache: dict[str, tuple[float, dict[str, str]]] = {}
+_shared_lock = threading.Lock()
+
+
+def _fetch_shared(path: str) -> dict[str, str]:
+    """``{"client-id": ..., "client-secret": ..., "access-token": ...}`` from SSM under ``path``."""
+    import boto3
+
+    ssm = boto3.client("ssm", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    names = [f"{path}/ctrader-{k}" for k in ("client-id", "client-secret", "access-token")]
+    res = ssm.get_parameters(Names=names, WithDecryption=True)
+    return {p["Name"].rsplit("/ctrader-", 1)[1]: p["Value"] for p in res["Parameters"]}
+
+
+def shared_credentials() -> dict[str, str]:
+    """The shared cTrader pair, cached for ``_SHARED_TTL_S``; ``{}`` when off or unreachable."""
+    path = os.environ.get("HERMES_CTRADER_SHARED_PATH", "/platform/shared").rstrip("/")
+    if not path:
+        return {}
+    with _shared_lock:
+        hit = _shared_cache.get(path)
+        if hit is not None and time_mod.monotonic() - hit[0] < _SHARED_TTL_S:
+            return hit[1]
+        try:
+            values = _fetch_shared(path)
+        except Exception as exc:  # no boto3, no AWS credentials, no network
+            log.warning("cTrader: can't read %s/ctrader-* from SSM (%s); using CTRADER_* env", path, exc)
+            values = {}
+        _shared_cache[path] = (time_mod.monotonic(), values)
+        return values
 
 
 class _CTraderConnection:
@@ -346,11 +389,11 @@ class CTraderSource(DataSource):
         leverage: float = 30.0,
         volume_step: float = _DEFAULT_VOLUME_STEP,
     ) -> None:
-        # Explicit args win; otherwise fall back to the environment so
-        # CTraderSource()/PepperstoneSource() work with no arguments.
-        self.client_id = client_id or os.environ.get("CTRADER_CLIENT_ID")
-        self.client_secret = client_secret or os.environ.get("CTRADER_CLIENT_SECRET")
-        self.access_token = access_token or os.environ.get("CTRADER_ACCESS_TOKEN")
+        # Explicit args win; otherwise the shared SSM pair, then the environment
+        # (resolved on each access, see the properties below).
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._access_token = access_token
         self.account_id = account_id if account_id is not None else _int_env("CTRADER_ACCOUNT_ID")
         self.host = host
         self.cache = cache or BarCache()
@@ -361,6 +404,23 @@ class CTraderSource(DataSource):
         self.leverage = leverage
         self.volume_step = volume_step
         self._broker_specs: dict[str, tuple[float, float, float]] = {}
+
+    def _credential(self, explicit: str | None, key: str) -> str | None:
+        return explicit or shared_credentials().get(key) or os.environ.get(
+            "CTRADER_" + key.upper().replace("-", "_")
+        )
+
+    @property
+    def client_id(self) -> str | None:
+        return self._credential(self._client_id, "client-id")
+
+    @property
+    def client_secret(self) -> str | None:
+        return self._credential(self._client_secret, "client-secret")
+
+    @property
+    def access_token(self) -> str | None:
+        return self._credential(self._access_token, "access-token")
 
     def get_instrument(self, symbol: Symbol) -> Cfd:
         tick_size, lot_size, volume_step = _SYMBOL_SPECS.get(
@@ -477,8 +537,8 @@ class CTraderSource(DataSource):
         if not self._has_credentials():
             raise RuntimeError(
                 "CTraderSource requires client_id, client_secret, access_token, account_id "
-                "(pass explicitly, or set CTRADER_CLIENT_ID / CTRADER_CLIENT_SECRET / "
-                "CTRADER_ACCESS_TOKEN / CTRADER_ACCOUNT_ID)."
+                "(pass explicitly; the first three come from SSM /platform/shared/ctrader-* "
+                "with AWS credentials, or CTRADER_* env; set CTRADER_ACCOUNT_ID)."
             )
         try:
             import ctrader_open_api  # noqa: F401
@@ -486,6 +546,7 @@ class CTraderSource(DataSource):
             raise ImportError(
                 "CTraderSource needs 'ctrader-open-api'. pip install 'hermes[pepperstone]'."
             ) from e
+        # The connection pool is keyed on the token, so a refreshed one opens a new session.
         return _CTraderConnection.get(
             self.client_id, self.client_secret, self.access_token, self.account_id, self.host
         )

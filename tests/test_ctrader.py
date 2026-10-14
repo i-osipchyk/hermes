@@ -246,3 +246,74 @@ def test_get_instrument_looks_up_each_ticker_once():
     for _ in range(3):
         source.get_instrument(Symbol("USDJPY", "pepperstone"))
     assert conn.calls == ["USDJPY"]
+
+
+# --- the shared token pair in SSM (platform conventions § cTrader tokens) ------------
+
+@pytest.fixture
+def shared_ssm(monkeypatch):
+    """Turn the SSM lookup on, against a fake parameter store."""
+    from hermes.data.sources import ctrader_source
+
+    store = {"client-id": "shared-id", "client-secret": "shared-secret",
+             "access-token": "shared-token"}
+    fetches = []
+
+    def fake_fetch(path):
+        fetches.append(path)
+        return dict(store)
+
+    monkeypatch.setenv("HERMES_CTRADER_SHARED_PATH", "/platform/shared")
+    monkeypatch.setattr(ctrader_source, "_fetch_shared", fake_fetch)
+    ctrader_source._shared_cache.clear()
+    yield store, fetches
+    ctrader_source._shared_cache.clear()
+
+
+def test_shared_token_wins_over_a_stale_env_copy(monkeypatch, shared_ssm):
+    """A token copied into .env goes dead when the platform refreshes the shared
+    pair, so the shared one must win."""
+    _clear_ctrader_env(monkeypatch)
+    monkeypatch.setenv("CTRADER_ACCESS_TOKEN", "stale-token")
+    monkeypatch.setenv("CTRADER_ACCOUNT_ID", "42")
+
+    source = PepperstoneSource()
+    assert (source.client_id, source.client_secret, source.access_token) == (
+        "shared-id", "shared-secret", "shared-token")
+    assert source.account_id == 42  # the account stays per project
+
+
+def test_explicit_credentials_win_over_shared(monkeypatch, shared_ssm):
+    _clear_ctrader_env(monkeypatch)
+    assert CTraderSource(access_token="explicit").access_token == "explicit"
+
+
+def test_shared_token_is_reread_after_a_refresh(monkeypatch, shared_ssm):
+    """The platform refresher replaces the token; a long-lived process must pick
+    the new one up rather than hold the old one until restart."""
+    from hermes.data.sources import ctrader_source
+
+    store, fetches = shared_ssm
+    now = [1000.0]
+    monkeypatch.setattr(ctrader_source.time_mod, "monotonic", lambda: now[0])
+    source = CTraderSource()
+
+    assert source.access_token == "shared-token"
+    assert source.access_token == "shared-token"
+    assert len(fetches) == 1  # cached, not one SSM call per access
+
+    store["access-token"] = "refreshed-token"
+    now[0] += ctrader_source._SHARED_TTL_S + 1
+    assert source.access_token == "refreshed-token"
+
+
+def test_unreachable_ssm_falls_back_to_env(monkeypatch, shared_ssm):
+    from hermes.data.sources import ctrader_source
+
+    def boom(path):
+        raise RuntimeError("no AWS credentials")
+
+    monkeypatch.setattr(ctrader_source, "_fetch_shared", boom)
+    _clear_ctrader_env(monkeypatch)
+    monkeypatch.setenv("CTRADER_ACCESS_TOKEN", "token-from-env")
+    assert CTraderSource().access_token == "token-from-env"
