@@ -9,10 +9,13 @@ Cache terminology used here:
   from_decision_cache   True when the Hermes DecisionCache answered the call;
                         no API request was made and all token / cost / latency
                         fields are None.
-  cache_read_tokens     Tokens served from Anthropic's prompt-cache (cheaper
-                        input tokens).  Only present on live calls.
+  cache_read_tokens     Input tokens served from the provider's prompt cache
+                        (cheaper).  Only present on live calls.
   cache_creation_tokens Tokens written to Anthropic's prompt-cache.  Only
                         present on live calls.
+
+``cost_usd`` comes from llmkit (``hermes.ai.llm``), the platform's only price table;
+this log is the per-backtest view of the calls llmkit records across projects.
 """
 
 from __future__ import annotations
@@ -22,75 +25,6 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-
-# ---------------------------------------------------------------------------
-# Pricing table — USD per million tokens (MTok).
-#
-# Matching is LONGEST-PREFIX, so a more specific row always wins over a less
-# specific one ("claude-opus-4-8" must not be priced by the "claude-opus-4" row)
-# and dated snapshots ("claude-opus-5-20260401") still resolve. There is
-# deliberately NO bare "claude-*" catch-all: an unknown model must return None
-# so callers can show "unpriced" rather than silently bill it at another
-# generation's rates.
-#
-# Verified against Anthropic's published rates on 2026-09-30. Cache rates follow
-# the standard 0.1x (read) / 1.25x (write) of input, except where a model
-# documents its own read rate. Re-check before trusting a cost figure.
-# ---------------------------------------------------------------------------
-PRICING_VERIFIED_ON = "2026-09-30"
-
-_PRICING: list[tuple[str, dict[str, float]]] = [
-    # --- Claude 5 generation --------------------------------------------------
-    ("claude-fable-5-1",   {"input": 10.00, "output": 50.00, "cache_read": 0.25,  "cache_write": 12.50}),
-    ("claude-fable-5",     {"input": 10.00, "output": 50.00, "cache_read": 1.00,  "cache_write": 12.50}),
-    ("claude-opus-5",      {"input":  5.00, "output": 25.00, "cache_read": 0.50,  "cache_write":  6.25}),
-    ("claude-sonnet-5",    {"input":  2.00, "output": 10.00, "cache_read": 0.20,  "cache_write":  2.50}),
-    # --- Claude 4.6-4.8 -------------------------------------------------------
-    ("claude-opus-4-8",    {"input":  5.00, "output": 25.00, "cache_read": 0.50,  "cache_write":  6.25}),
-    ("claude-opus-4-7",    {"input":  5.00, "output": 25.00, "cache_read": 0.50,  "cache_write":  6.25}),
-    ("claude-opus-4-6",    {"input":  5.00, "output": 25.00, "cache_read": 0.50,  "cache_write":  6.25}),
-    ("claude-sonnet-4-6",  {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
-    ("claude-haiku-4-5",   {"input":  1.00, "output":  5.00, "cache_read": 0.10,  "cache_write":  1.25}),
-    # --- Claude 4 generation (kept so old cached runs still price) -------------
-    ("claude-opus-4",      {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75}),
-    ("claude-sonnet-4",    {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75}),
-    ("claude-haiku-4",     {"input":  0.80, "output":  4.00, "cache_read": 0.08,  "cache_write":  1.00}),
-    # --- DeepSeek -------------------------------------------------------------
-    ("deepseek-reasoner",  {"input":  0.55, "output":  2.19, "cache_read": 0.14,  "cache_write":  0.55}),
-    ("deepseek-chat",      {"input":  0.27, "output":  1.10, "cache_read": 0.07,  "cache_write":  0.27}),
-    ("deepseek",           {"input":  0.27, "output":  1.10, "cache_read": 0.07,  "cache_write":  0.27}),
-]
-
-
-def _price_for(model_id: str) -> dict[str, float] | None:
-    """Longest-prefix lookup, or None when the model is not in the table."""
-    lower = model_id.lower()
-    best: tuple[int, dict[str, float]] | None = None
-    for prefix, rates in _PRICING:
-        if lower.startswith(prefix) and (best is None or len(prefix) > best[0]):
-            best = (len(prefix), rates)
-    return None if best is None else best[1]
-
-
-def compute_cost(
-    model_id: str,
-    input_tokens: int,
-    output_tokens: int,
-    cache_read_tokens: int = 0,
-    cache_creation_tokens: int = 0,
-) -> float | None:
-    """Return estimated USD cost, or None if the model is not in the pricing table."""
-    rates = _price_for(model_id)
-    if rates is None:
-        return None
-    per = 1_000_000
-    return (
-        input_tokens         * rates["input"]        / per
-        + output_tokens      * rates["output"]       / per
-        + cache_read_tokens  * rates["cache_read"]   / per
-        + cache_creation_tokens * rates["cache_write"] / per
-    )
-
 
 # ---------------------------------------------------------------------------
 # Per-call record
@@ -107,7 +41,7 @@ class LLMCallRecord:
     # Populated only for live API calls (None for cache hits).
     input_tokens: int | None
     output_tokens: int | None
-    cache_read_tokens: int | None      # Anthropic prompt-cache read tokens
+    cache_read_tokens: int | None      # prompt-cache read tokens
     cache_creation_tokens: int | None  # Anthropic prompt-cache write tokens
     latency_ms: float | None
     cost_usd: float | None

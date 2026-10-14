@@ -1039,8 +1039,8 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "exchange-calendars" },
+    { name = "llmkit" },
     { name = "numpy" },
-    { name = "openai" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "truststore" },
@@ -1052,6 +1052,9 @@ ai = [
 ]
 binance = [
     { name = "python-binance" },
+]
+deepseek = [
+    { name = "openai" },
 ]
 dev = [
     { name = "mypy" },
@@ -1082,10 +1085,11 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'ai'", specifier = ">=0.40" },
     { name = "ctrader-open-api", marker = "extra == 'pepperstone'", specifier = ">=0.9.2" },
     { name = "exchange-calendars", specifier = ">=4.5" },
+    { name = "llmkit", git = "https://github.com/i-osipchyk/platform?subdirectory=llmkit&tag=v0.1.2" },
     { name = "matplotlib", marker = "extra == 'report'", specifier = ">=3.9" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "openai", specifier = ">=3.19.0" },
+    { name = "openai", marker = "extra == 'deepseek'", specifier = ">=3.19.0" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pandas-ta", marker = "extra == 'indicators'", specifier = ">=0.3.14b0" },
     { name = "plotly", marker = "extra == 'ui'", specifier = ">=5.22" },
@@ -1099,7 +1103,7 @@ requires-dist = [
     { name = "truststore", specifier = ">=0.9" },
     { name = "yfinance", marker = "extra == 'yfinance'", specifier = ">=0.2.40" },
 ]
-provides-extras = ["yfinance", "binance", "pepperstone", "ai", "indicators", "report", "ui", "dev"]
+provides-extras = ["yfinance", "binance", "pepperstone", "ai", "deepseek", "indicators", "report", "ui", "dev"]
 
 [[package]]
 name = "httpcore2"
@@ -1561,6 +1565,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/4a/1f1978c200f563beda63c36adff2d65bbecb81e365e8e69e572f5f70fbc6/librt-0.15.0-cp315-cp315t-win_amd64.whl", hash = "sha256:dbd605739f228912dc49027cb764456b9757750bdc2b6b7773164db7096c6fd1", size = 126889, upload-time = "2026-08-07T10:49:13.881Z" },
     { url = "https://files.pythonhosted.org/packages/38/a6/800800bfed7b1fb10fc3f3d557785c3854e80d3f7a9800d784b176a1fc2d/librt-0.15.0-cp315-cp315t-win_arm64.whl", hash = "sha256:84d244b00604d17df3fc7736c327892d6bba66181254aa4087be807b6c342bdc", size = 110700, upload-time = "2026-08-07T10:49:15.499Z" },
 ]
+
+[[package]]
+name = "llmkit"
+version = "0.1.0"
+source = { git = "https://github.com/i-osipchyk/platform?subdirectory=llmkit&tag=v0.1.2#d35afdc28ade19abbee24377843973fbfb8ae91a" }
 
 [[package]]
 name = "llvmlite"

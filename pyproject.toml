@@ -18,6 +18,7 @@ dependencies = [
     "pyarrow>=16",          # Parquet cache
     "exchange-calendars>=4.5",  # Session Calendars for stocks/CFDs
     "truststore>=0.9",      # trust the OS cert store (corporate proxies) for fetches
+    "llmkit",               # platform LLM usage/cost tracking; stdlib-only core, so not an extra
 ]
 
 [project.optional-dependencies]
@@ -50,6 +51,9 @@ dev = [
 [project.scripts]
 hermes = "hermes.cli:main"
 hermes-ui = "hermes.webui.launch:main"
+
+[tool.uv.sources]
+llmkit = { git = "https://github.com/i-osipchyk/platform", subdirectory = "llmkit", tag = "v0.1.2" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hermes"]

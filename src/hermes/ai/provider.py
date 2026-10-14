@@ -9,17 +9,26 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True, slots=True)
 class LLMUsage:
-    """Raw token counts and timing from a live API response."""
+    """Token counts and timing from a live API response.
 
-    input_tokens: int
+    Split the way llmkit prices them: ``input_tokens`` is *uncached* input only, so
+    a provider whose prompt count includes cache hits (DeepSeek, OpenAI) must
+    subtract them — ``llmkit.Usage.from_openai`` does.
+    """
+
+    input_tokens: int            # uncached input
     output_tokens: int
-    cache_read_tokens: int       # Anthropic prompt-cache read tokens
-    cache_creation_tokens: int   # Anthropic prompt-cache write tokens
+    cache_read_tokens: int       # input served from the provider's prompt cache
+    cache_creation_tokens: int   # input written to the prompt cache (Anthropic)
     latency_ms: float
+    # When the request started (UTC). DeepSeek prices by time of day, so cost
+    # depends on it; None falls back to when the advisor was asked.
+    started_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +48,9 @@ class AdvisorDecision:
 class AIProvider(ABC):
     #: Stable identifier folded into the cache key and recorded on decisions.
     model_id: str
+    #: Billing backend name reported to llmkit ("anthropic", "deepseek"). None for
+    #: stubs and local models, whose calls cost nothing and are not reported.
+    llm_provider: str | None = None
 
     @abstractmethod
     def decide(self, system_prompt: str, user_prompt: str) -> AdvisorDecision:

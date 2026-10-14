@@ -9,7 +9,11 @@ in the system prompt instead.
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 
+from llmkit import Usage
+
+from . import llm
 from .provider import AdvisorDecision, AIProvider, LLMUsage
 
 DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
@@ -56,6 +60,8 @@ def _is_reasoning_model(model_id: str) -> bool:
 
 
 class DeepSeekProvider(AIProvider):
+    llm_provider = "deepseek"
+
     def __init__(self, model_id: str = DEFAULT_MODEL, max_tokens: int | None = None) -> None:
         self.model_id = model_id
         self.max_tokens = max_tokens or int(os.getenv("HERMES_AI_MAX_TOKENS", "1024"))
@@ -89,6 +95,7 @@ class DeepSeekProvider(AIProvider):
         import time
 
         client = self._get_client()
+        started_at = datetime.now(UTC)
         t0 = time.perf_counter()
         try:
             response = client.chat.completions.create(
@@ -106,7 +113,7 @@ class DeepSeekProvider(AIProvider):
             return self._error(e)
 
         latency_ms = (time.perf_counter() - t0) * 1000
-        usage = self._usage(response, latency_ms)
+        usage = self._usage(response, started_at, latency_ms)
 
         tool_calls = getattr(response.choices[0].message, "tool_calls", None)
         if tool_calls:
@@ -133,6 +140,7 @@ class DeepSeekProvider(AIProvider):
         import time
 
         client = self._get_client()
+        started_at = datetime.now(UTC)
         t0 = time.perf_counter()
         # Reasoning models need budget for both thinking + output tokens.
         max_tokens = max(self.max_tokens, 4096)
@@ -151,7 +159,7 @@ class DeepSeekProvider(AIProvider):
             return self._error(e)
 
         latency_ms = (time.perf_counter() - t0) * 1000
-        usage = self._usage(response, latency_ms)
+        usage = self._usage(response, started_at, latency_ms)
 
         content = _strip_code_fence(response.choices[0].message.content or "")
         try:
@@ -173,13 +181,10 @@ class DeepSeekProvider(AIProvider):
                 self.model_id, usage=usage,
             )
 
-    def _usage(self, response, latency_ms: float) -> LLMUsage:
-        return LLMUsage(
-            input_tokens=response.usage.prompt_tokens,
-            output_tokens=response.usage.completion_tokens,
-            cache_read_tokens=0,
-            cache_creation_tokens=0,
-            latency_ms=latency_ms,
+    def _usage(self, response, started_at: datetime, latency_ms: float) -> LLMUsage:
+        # prompt_tokens includes DeepSeek's cache hits; from_openai splits them out.
+        return llm.usage_from(
+            Usage.from_openai(response.usage), started_at=started_at, latency_ms=latency_ms
         )
 
     def _error(self, exc: Exception) -> AdvisorDecision:

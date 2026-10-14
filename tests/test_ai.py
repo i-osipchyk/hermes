@@ -102,38 +102,124 @@ def test_decision_cache_roundtrip_and_reuse(tmp_path):
     assert got == d
 
 
-# --- pricing table ---------------------------------------------------------
+# --- llmkit: usage, pricing and reporting ------------------------------------
 
-def test_pricing_uses_longest_prefix_not_first_match():
-    """``claude-opus-4-8`` must not be priced by the ``claude-opus-4`` row.
+class ListSink:
+    def __init__(self):
+        self.records = []
 
-    The old first-match lookup billed Opus 4.8 and Opus 5 at Opus 4's
-    $15/$75 — a 3x overstatement on every AI-gated run.
-    """
-    from hermes.ai.observability import compute_cost
+    def emit(self, record):
+        self.records.append(record)
 
-    one_m = 1_000_000
-    assert compute_cost("claude-opus-5", one_m, one_m) == pytest.approx(30.0)
-    assert compute_cost("claude-opus-4-8", one_m, one_m) == pytest.approx(30.0)
-    assert compute_cost("claude-sonnet-5", one_m, one_m) == pytest.approx(12.0)
-    assert compute_cost("claude-haiku-4-5", one_m, one_m) == pytest.approx(6.0)
-    # the older generation still prices at its own (higher) rates
-    assert compute_cost("claude-opus-4", one_m, one_m) == pytest.approx(90.0)
+    def flush(self):
+        pass
 
 
-def test_pricing_resolves_dated_snapshots():
-    from hermes.ai.observability import compute_cost
+def _tracker():
+    from llmkit import Tracker
 
-    assert compute_cost("claude-opus-5-20260401", 1_000_000, 0) == pytest.approx(5.0)
+    sink = ListSink()
+    return Tracker(project="hermes", env="test", sinks=[sink]), sink
 
 
-def test_unknown_model_is_unpriced_rather_than_guessed():
-    """No bare ``claude-*`` catch-all: an unknown id must return None so callers
-    can show 'unpriced' instead of silently billing another generation's rates."""
-    from hermes.ai.observability import compute_cost
+# Saturday: DeepSeek's off-peak rate applies all day.
+OFF_PEAK = datetime(2026, 10, 10, 12, tzinfo=UTC)
 
-    assert compute_cost("claude-something-unreleased", 1_000, 1_000) is None
-    assert compute_cost("gpt-4", 1_000, 1_000) is None
+
+class MeteredProvider(AIProvider):
+    """A stub that reports usage like a real API backend does."""
+
+    llm_provider = "deepseek"
+    model_id = "deepseek-flash"
+
+    def __init__(self, is_error: bool = False):
+        self._is_error = is_error
+
+    def decide(self, system_prompt: str, user_prompt: str) -> AdvisorDecision:
+        from hermes.ai.provider import LLMUsage
+
+        if self._is_error:
+            return AdvisorDecision(True, 0.0, "boom", self.model_id, is_error=True)
+        usage = LLMUsage(input_tokens=200, output_tokens=50, cache_read_tokens=800,
+                         cache_creation_tokens=0, latency_ms=12.0, started_at=OFF_PEAK)
+        return AdvisorDecision(True, 1.0, "ok", self.model_id, usage=usage)
+
+
+def test_deepseek_usage_splits_cache_hits_from_uncached_input():
+    """DeepSeek's prompt_tokens includes cache hits. Counting them all as uncached
+    input billed every cached token at the full rate."""
+    from types import SimpleNamespace as NS
+
+    from hermes.ai.deepseek import DeepSeekProvider
+
+    tool_call = NS(function=NS(name="record_decision",
+                               arguments='{"approved": true, "confidence": 0.9, "reason": "r"}'))
+    response = NS(
+        choices=[NS(message=NS(tool_calls=[tool_call]))],
+        usage=NS(prompt_tokens=1000, completion_tokens=50,
+                 prompt_cache_hit_tokens=800, prompt_cache_miss_tokens=200),
+    )
+    provider = DeepSeekProvider("deepseek-chat")
+    provider._client = NS(chat=NS(completions=NS(create=lambda **_: response)))
+
+    usage = provider.decide("sys", "user").usage
+    assert usage is not None
+    assert (usage.input_tokens, usage.cache_read_tokens, usage.output_tokens) == (200, 800, 50)
+    assert usage.started_at is not None
+
+
+def test_live_call_is_reported_to_llmkit_and_priced_by_it(tmp_path):
+    from llmkit import Usage, cost
+
+    tracker, sink = _tracker()
+    advisor = AIAdvisor(MeteredProvider(), cache=DecisionCache(tmp_path), tracker=tracker)
+    _run(advisor)
+
+    [rec] = sink.records
+    assert (rec.project, rec.component, rec.provider, rec.model) == (
+        "hermes", "advisor", "deepseek", "deepseek-flash")
+    assert rec.metadata == {"strategy": "GatedBuyOnce", "symbol": "BTCUSDT"}
+    expected = cost("deepseek-flash", Usage(200, 50, 800), OFF_PEAK)
+    assert expected is not None
+    assert rec.cost_usd == pytest.approx(expected.total)
+    # the per-backtest log carries the same number llmkit recorded
+    [call] = advisor.obs_log.calls
+    assert call.cost_usd == rec.cost_usd
+
+
+def test_decision_cache_hits_are_not_reported_to_llmkit(tmp_path):
+    tracker, sink = _tracker()
+    cache = DecisionCache(tmp_path)
+    _run(AIAdvisor(MeteredProvider(), cache=cache, tracker=tracker))
+    _run(AIAdvisor(MeteredProvider(), cache=cache, tracker=tracker))
+    assert len(sink.records) == 1
+
+
+def test_provider_error_is_reported_to_llmkit_as_an_error(tmp_path):
+    tracker, sink = _tracker()
+    _run(AIAdvisor(MeteredProvider(is_error=True), cache=DecisionCache(tmp_path), tracker=tracker))
+    [rec] = sink.records
+    assert rec.error == "boom"
+    assert rec.input_tokens == 0
+
+
+def test_providers_without_a_billing_backend_are_not_reported(tmp_path):
+    """Stubs and local models have no ``llm_provider``; they cost nothing and
+    must not pollute the cross-project spend log."""
+    tracker, sink = _tracker()
+    _run(AIAdvisor(StubProvider(approved=True), cache=DecisionCache(tmp_path), tracker=tracker))
+    assert sink.records == []
+
+
+def test_unknown_model_is_unpriced_rather_than_guessed(tmp_path):
+    class Unreleased(MeteredProvider):
+        llm_provider = "anthropic"
+        model_id = "claude-something-unreleased"
+
+    tracker, _ = _tracker()
+    advisor = AIAdvisor(Unreleased(), cache=DecisionCache(tmp_path), tracker=tracker)
+    _run(advisor)
+    assert advisor.obs_log.calls[0].cost_usd is None
 
 
 # --- fail-open visibility --------------------------------------------------

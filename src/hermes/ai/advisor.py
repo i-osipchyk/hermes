@@ -7,7 +7,8 @@ adjust one. Responsibilities:
   * call optional ContextEnrichers (PIT fundamentals, filings, news) and append
     their text to the assembled context;
   * route through the DecisionCache so backtests are reproducible;
-  * call the pluggable AIProvider (Claude by default) on cache miss.
+  * call the pluggable AIProvider (Claude by default) on cache miss;
+  * report every live call to llmkit (``component="advisor"``) and price it there.
 """
 
 from __future__ import annotations
@@ -17,8 +18,11 @@ import logging
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
+from llmkit import CallRecord, Tracker
+
+from . import llm
 from .cache import DecisionCache
-from .observability import LLMObservabilityLog, compute_cost
+from .observability import LLMObservabilityLog
 from .provider import AdvisorDecision, AIProvider
 
 log = logging.getLogger(__name__)
@@ -36,12 +40,14 @@ class AIAdvisor:
         cache: DecisionCache | None = None,
         enrichers: list[ContextEnricher] | None = None,
         min_confidence: float = 0.0,
+        tracker: Tracker | None = None,
     ) -> None:
         self.provider = provider
         self.system_prompt = system_prompt
         self.cache = cache or DecisionCache()
         self.enrichers: list[ContextEnricher] = enrichers or []
         self.min_confidence = min_confidence
+        self._tracker = tracker  # None: the process-wide one from hermes.ai.llm
         self._obs_log = LLMObservabilityLog()
 
     @property
@@ -77,6 +83,7 @@ class AIAdvisor:
             return final
         log.debug("cache miss model=%s — calling provider", self.provider.model_id)
         decision = self.provider.decide(self.system_prompt, user_prompt)
+        reported = self._report(strategy, decision, request_time)
         if decision.is_error:
             log.warning("provider error model=%s — fail-open (approved). reason: %s",
                         decision.model_id, decision.reason)
@@ -114,17 +121,12 @@ class AIAdvisor:
             # total_calls / approval_rate / fail_open_rate all read as if the
             # advisor had never run.
             u = decision.usage
-            cost = (
-                compute_cost(
-                    final.model_id,
-                    u.input_tokens,
-                    u.output_tokens,
-                    u.cache_read_tokens,
-                    u.cache_creation_tokens,
-                )
-                if u is not None
-                else None
-            )
+            if reported is not None:
+                cost = reported.cost_usd
+            elif u is not None:
+                cost = llm.price(final.model_id, u, request_time)
+            else:
+                cost = None
             self._obs_log.record_live_call(
                 request_time=request_time,
                 model_id=final.model_id,
@@ -141,6 +143,24 @@ class AIAdvisor:
                 user_prompt=user_prompt,
             )
         return final
+
+    def _report(self, strategy, decision: AdvisorDecision, request_time: datetime) -> CallRecord | None:
+        """Report a live call to llmkit, or None when the provider bills nothing."""
+        provider = self.provider.llm_provider
+        if provider is None:
+            return None
+        u = decision.usage
+        tracker = self._tracker or llm.tracker()
+        return tracker.record(
+            provider=provider,
+            model=decision.model_id,
+            component=llm.COMPONENT,
+            usage=llm.to_llmkit(u),
+            started_at=(u.started_at if u and u.started_at else request_time),
+            latency_ms=u.latency_ms if u else 0.0,
+            error=decision.reason if decision.is_error else None,
+            metadata={"strategy": type(strategy).__name__, "symbol": strategy.instrument.symbol.ticker},
+        )
 
     def _apply_threshold(self, decision: AdvisorDecision) -> AdvisorDecision:
         """Downgrade an approval to a veto if confidence < min_confidence.

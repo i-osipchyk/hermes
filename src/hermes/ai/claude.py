@@ -10,8 +10,12 @@ does not hard-depend on ``anthropic``.
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 
-from .provider import AdvisorDecision, AIProvider, LLMUsage
+from llmkit import Usage
+
+from . import llm
+from .provider import AdvisorDecision, AIProvider
 
 # Default to the latest capable model. Override per-instance via the constructor,
 # or globally via HERMES_AI_MODEL. (Read at call time, not import time, so setting
@@ -43,6 +47,8 @@ _DECISION_TOOL = {
 
 
 class ClaudeProvider(AIProvider):
+    llm_provider = "anthropic"
+
     def __init__(self, model_id: str | None = None, max_tokens: int | None = None) -> None:
         self.model_id = model_id or _default_model()
         self.max_tokens = max_tokens or _default_max_tokens()
@@ -65,6 +71,7 @@ class ClaudeProvider(AIProvider):
 
         import anthropic
         client = self._get_client()
+        started_at = datetime.now(UTC)
         t0 = time.perf_counter()
         try:
             response = client.messages.create(
@@ -98,12 +105,8 @@ class ClaudeProvider(AIProvider):
             )
             return AdvisorDecision(True, 0.0, f"connection error: {e}", self.model_id, is_error=True)
         latency_ms = (time.perf_counter() - t0) * 1000
-        usage = LLMUsage(
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
-            cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-            cache_creation_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
-            latency_ms=latency_ms,
+        usage = llm.usage_from(
+            Usage.from_anthropic(response.usage), started_at=started_at, latency_ms=latency_ms
         )
         for block in response.content:
             if getattr(block, "type", None) == "tool_use" and block.name == "record_decision":

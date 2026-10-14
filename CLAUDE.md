@@ -53,7 +53,7 @@ Two rules about the review:
 Before calling anything done, both of these must pass:
 
 ```bash
-.venv/bin/python -m pytest          # 337 tests, offline, ~2.8s
+.venv/bin/python -m pytest          # 415 tests, offline, ~3.3s
 .venv/bin/python -m ruff check .     # clean across the whole repo
 ```
 
@@ -128,9 +128,14 @@ Hermes' own knobs are namespaced `HERMES_*`: `HERMES_AI_MODEL`, `HERMES_AI_MAX_T
 credentials keep their conventional names. Add new knobs with the `HERMES_` prefix and read
 them at call time, not import time.
 
-The LLM pricing table in `src/hermes/ai/observability.py` carries a `PRICING_VERIFIED_ON` date.
-If you touch model defaults, check it — a stale table silently misreports what a research run
-cost.
+**LLM usage and cost go through llmkit** (`~/dev/platform/llmkit`, pinned by tag in
+`pyproject.toml`). `src/hermes/ai/llm.py` is the only module that talks to it: `AIAdvisor`
+reports every live call there with `component="advisor"` and `{strategy, symbol}` metadata,
+and the `cost_usd` on `LLMObservabilityLog` is llmkit's price. There is no price table in
+Hermes. A new model with no row is recorded *unpriced*: add it to llmkit's `pricing.py` (a
+platform PR + tag bump), not here. `llmkit report` shows spend across all projects; tests run
+with `LLMKIT_SINKS=none` (`tests/conftest.py`). A new provider sets `llm_provider` so its
+calls are reported; stubs leave it `None`.
 
 ## The five-step process (ADR-0011)
 
