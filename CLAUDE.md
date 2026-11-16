@@ -12,7 +12,7 @@ Hermes is a bar-based backtesting framework aimed at being driven by an AI resea
 
 **In progress: the agentic research pipeline.** Not implemented yet, so don't assume any of it
 exists in code. Start at `docs/pipeline-design.md`; the audit that precedes it is
-`docs/audit-2026-11.md` (open findings, F1 is a look-ahead in coarser-timeframe References);
+`docs/audit-2026-11.md` (fix-status table at the top; F13/F17 are accepted risks);
 phase 2 is `docs/phase-2-validation-plan.md`; decisions are ADR-0012 to 0014.
 
 ## Environment
@@ -59,7 +59,7 @@ Two rules about the review:
 Before calling anything done, both of these must pass:
 
 ```bash
-.venv/bin/python -m pytest          # ~435 tests, offline, ~3.5s
+.venv/bin/python -m pytest          # ~517 tests, offline, ~8s
 .venv/bin/python -m ruff check .     # clean across the whole repo
 ```
 
