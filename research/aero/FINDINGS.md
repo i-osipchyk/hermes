@@ -250,3 +250,13 @@ pick within 60 min +0.106 R (78) vs with one -0.044 (19).
 Reading: the 2026-only silver result (section M) was the favourable end of a mixed record. Over the
 full period silver does NOT show a reliable transferable selection (p=0.20); the memorised-outcomes
 explanation is not ruled out. Gold remains uniformly strong in every year.
+
+## Correction (2026-10-14): the 3h rule is armed permanently
+
+The tester log shows the recovery-grid limits are placed exactly 3h after entry even when the
+trade is in profit (e.g. 2018-02-02 short 1344.27, market 1341.20; 2019-03-19 long 1308.59,
+market 1310.08) and stay live until the trade closes. `aero_daybreak_sim.py` and
+`aero_knn_filter.simulate` check once at 3h and only when under water, so on non-EA breaks
+~10% of trades reach the 3.6 x ATR catastrophe stop, which the EA never hits. Tables I/J/K for
+"all breaks" are biased by this; EA-pick agreement (88.8%) is barely affected because picks rarely
+hit that path. See research/rapid_break/rapid_break_aero_exits.py for the corrected exit.
