@@ -25,6 +25,11 @@ class DataSource(ABC):
 
     name: str
 
+    def data_epoch(self, ticker: str) -> str | None:
+        """Identity of the (adjusted) data this source would serve for ``ticker``, for the
+        run key. ``None`` when the data does not drift (the default)."""
+        return None
+
     @abstractmethod
     def get_instrument(self, symbol: Symbol) -> Instrument:
         """Resolve a Symbol into a fully-populated Instrument (metadata, session)."""

@@ -47,7 +47,9 @@ from zoneinfo import ZoneInfo
 
 from ...core import Bar, Instrument, SessionCalendar, Stock, Symbol, Timeframe
 from .._ssl import ensure_system_trust
+from ..adjustments import AdjustmentEvent, tiingo_rows_to_raw
 from ..cache import BarCache, checked_through
+from ..raw_daily import RawDailyMixin
 from ..source import DataSource
 
 _US_SESSION = SessionCalendar(
@@ -62,7 +64,7 @@ _RESAMPLE: dict[str, str] = {
 }
 
 
-class TiingoSource(DataSource):
+class TiingoSource(RawDailyMixin, DataSource):
     """Tiingo EOD DataSource.
 
     Supports active *and* delisted US equity tickers — ideal for
@@ -75,6 +77,10 @@ class TiingoSource(DataSource):
                  used when omitted.
         session: Trading session calendar.  Defaults to US equities
                  (09:30–16:00 America/New_York).
+        adjust:  ``"total"`` (default; splits + dividends, as before), ``"split"``
+                 (splits only, so real ex-dividend gaps stay) or ``"none"``. Daily bars
+                 are cached **raw** with their corporate-action events and adjusted when
+                 read (ADR-0016); weekly bars keep Tiingo's own adjusted fields.
     """
 
     name = "tiingo"
@@ -84,7 +90,9 @@ class TiingoSource(DataSource):
         api_key: str | None = None,
         cache: BarCache | None = None,
         session: SessionCalendar = _US_SESSION,
+        adjust: str = "total",
     ) -> None:
+        self._init_adjust(adjust)
         self._api_key = api_key or os.environ.get("TIINGO_API_KEY") or ""
         self.cache = cache or BarCache()
         self.session = session
@@ -99,6 +107,8 @@ class TiingoSource(DataSource):
         start: datetime,
         end: datetime,
     ) -> list[Bar]:
+        if self._uses_raw_path(timeframe):
+            return self._history_raw_daily(instrument, timeframe, start, end)
         for gap_start, gap_end in self.cache.missing_ranges(
             instrument, timeframe, start, end
         ):
@@ -117,13 +127,8 @@ class TiingoSource(DataSource):
     # internals
     # ------------------------------------------------------------------
 
-    def _fetch(
-        self,
-        ticker: str,
-        timeframe: Timeframe,
-        start: datetime,
-        end: datetime,
-    ) -> list[Bar]:
+    def _get_rows(self, ticker: str, start: datetime, end: datetime, resample: str) -> list[dict]:
+        """The one network call: Tiingo EOD rows for ``[start, end]``."""
         ensure_system_trust()
         try:
             import requests
@@ -131,19 +136,11 @@ class TiingoSource(DataSource):
             raise ImportError(
                 "TiingoSource needs 'requests'.  pip install requests."
             ) from exc
-
-        resample = _RESAMPLE.get(str(timeframe))
-        if resample is None:
-            raise ValueError(
-                f"TiingoSource does not support timeframe {timeframe}. "
-                f"Supported: {sorted(_RESAMPLE)}"
-            )
         if not self._api_key:
             raise RuntimeError(
                 "TiingoSource requires an API key.  Pass api_key= or set "
                 "the TIINGO_API_KEY environment variable."
             )
-
         url = f"https://api.tiingo.com/tiingo/daily/{ticker}/prices"
         params = {
             "startDate": start.strftime("%Y-%m-%d"),
@@ -156,7 +153,28 @@ class TiingoSource(DataSource):
         }
         resp = requests.get(url, params=params, headers=headers, timeout=30)
         resp.raise_for_status()
-        data = resp.json()
+        return resp.json()
+
+    def _fetch_raw_daily(
+        self, ticker: str, start: datetime, end: datetime
+    ) -> tuple[list[Bar], list[AdjustmentEvent]]:
+        rows = self._get_rows(ticker, start, end, "daily")
+        return tiingo_rows_to_raw(rows or [], Timeframe.parse("1d"))
+
+    def _fetch(
+        self,
+        ticker: str,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+    ) -> list[Bar]:
+        resample = _RESAMPLE.get(str(timeframe))
+        if resample is None:
+            raise ValueError(
+                f"TiingoSource does not support timeframe {timeframe}. "
+                f"Supported: {sorted(_RESAMPLE)}"
+            )
+        data = self._get_rows(ticker, start, end, resample)
         if not data:
             return []
 

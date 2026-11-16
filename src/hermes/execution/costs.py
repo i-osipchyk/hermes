@@ -132,13 +132,27 @@ class SpreadModel:
     points: float = 0.0
     schedule: SpreadSchedule | None = None
 
+    def points_at(self, ts: datetime | None) -> float:
+        """The full spread in force at ``ts`` (schedule applied)."""
+        if self.schedule is not None and ts is not None:
+            return self.points * self.schedule.multiplier(ts)
+        return self.points
+
+    def quote_offsets(self, instrument, ts: datetime | None = None) -> tuple[float, float]:
+        """``(buy_offset, sell_offset)``: what to add to a bar price to get the price a
+        buy / a sell actually trades at (ADR-0015). BID bars: ``(spread, 0)``; otherwise the
+        bar is a mid/last and the spread splits half each side. Triggers use this so a
+        buy-side order is not evaluated one spread late."""
+        points = self.points_at(ts)
+        if instrument.price_basis is PriceBasis.BID:
+            return points, 0.0
+        return points / 2, -points / 2
+
     def adjust_fill(
         self, instrument, side: Side, price: float, liquidity=Liquidity.TAKER,
         ts: datetime | None = None,
     ) -> float:
-        points = self.points
-        if self.schedule is not None and ts is not None:
-            points *= self.schedule.multiplier(ts)
+        points = self.points_at(ts)
         if points <= 0 or liquidity is Liquidity.MAKER:
             return price
         if instrument.price_basis is PriceBasis.BID:
@@ -238,6 +252,9 @@ class CostModel:
     spread: SpreadModel
     slippage: SlippageModel
     financing: FinancingModel
+    # A resting limit (entry or take-profit) fills only once the market trades this many
+    # ticks THROUGH its level; a touch does not fill it (ADR-0015). 0 = fill on touch.
+    limit_penetration_ticks: float = 1.0
 
     def fill_price(
         self, instrument: Instrument, side: Side, raw_price: float, liquidity=Liquidity.TAKER,
@@ -276,6 +293,7 @@ class CostModel:
                 percent=self.slippage.percent * factor,
             ),
             financing=self.financing.scaled(factor),
+            limit_penetration_ticks=self.limit_penetration_ticks,
         )
 
     @classmethod

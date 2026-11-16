@@ -359,14 +359,25 @@ def axis_walkforward(backtest: Any, *, is_frac: float = 0.6,
     return AxisResult("walkforward", True, "; ".join(bits), data)
 
 
-def axis_validation(result: Any, *, seed: int = 42) -> AxisResult:
-    """Rubric 4 — is the result distinguishable from luck, and is the sample big enough?"""
+def axis_validation(result: Any, *, seed: int = 42, coverage: float | None = None) -> AxisResult:
+    """Rubric 4 — is the result distinguishable from luck, and is the sample big enough?
+
+    ``coverage`` is the share of a universe's legs that actually ran; below the
+    thresholds in :mod:`hermes.backtest.validation` it caps the evidence tier.
+    """
     from ..backtest import validate
+    from ..backtest.validation import cap_tier_for_coverage
 
     sv = validate(result, seed=seed)
+    sq = sv.sample_quality
+    sq.tier, sq.tier_reason = cap_tier_for_coverage(sq.tier, sq.tier_reason, coverage)
     data = sv.to_dict()
+    data["universe_coverage"] = coverage
 
     flags = []
+    if coverage is not None and coverage < 1.0:
+        flags.append(f"universe coverage {coverage:.0%} — some legs had no data, so the "
+                     f"result may carry survivorship bias")
     q = sv.sample_quality
     if q.warning:
         flags.append(q.warning)
@@ -498,6 +509,7 @@ def analyze(
     baseline_n: int = 50,
     baseline_workers: int = 1,
     build_backtest: Any | None = None,
+    coverage: float | None = None,
 ) -> Analysis:
     """Run the requested rubric axes and collect the evidence.
 
@@ -535,7 +547,7 @@ def analyze(
     add("oos", lambda: axis_oos(backtest, is_frac), backtest, "needs a Backtest to re-run")
     add("walkforward", lambda: axis_walkforward(backtest, is_frac=is_frac, param_grid=param_grid),
         backtest, "needs a Backtest to re-run")
-    add("validation", lambda: axis_validation(result, seed=seed), result, "needs a result")
+    add("validation", lambda: axis_validation(result, seed=seed, coverage=coverage), result, "needs a result")
     add("regime", lambda: axis_regime(result), result, "needs a result")
     add("gate", lambda: axis_gate(result), result, "needs a result")
 

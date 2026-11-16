@@ -154,7 +154,7 @@ A distribution of backtests in which the [[ai-advisor]]'s confirm/veto is replac
 _Avoid_: Control group, null model
 
 **Statistical Validation**:
-The set of checks that ask whether a result is distinguishable from luck, rather than merely positive: bootstrap confidence intervals on the headline metrics, Monte Carlo reshuffling of the trade sequence, Probabilistic and Deflated Sharpe (the latter penalising the number of configurations tried), a minimum-track-record length, and a sample-quality verdict. Attaches to a [[backtestresult]] as `stat_validation`.
+The set of checks that ask whether a result is distinguishable from luck, rather than merely positive: bootstrap confidence intervals on the headline metrics, Monte Carlo resampling of the trades (with replacement; a reshuffle cannot move compounded end equity), Probabilistic and Deflated Sharpe (the latter penalising the number of configurations tried), a minimum-track-record length, and a sample-quality verdict. Attaches to a [[backtestresult]] as `stat_validation`.
 _Avoid_: Significance testing (too narrow), p-value
 
 **Context Enricher**:

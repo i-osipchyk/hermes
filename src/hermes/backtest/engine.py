@@ -43,6 +43,37 @@ _USD_BASE_QUOTES = frozenset(
 )
 
 
+def _ref_lag(base: Timeframe, ref_base: Timeframe) -> timedelta:
+    """How long a Reference bar must have been closed before it is shown.
+
+    Bar timestamps are *open* times, so a Reference bar stamped ``ts`` closes at
+    ``ts + ref_base``. The base bar at ``t`` is fully visible (ADR-0002), so a coarser
+    Reference bar is pushed once ``ts + ref_base <= t + base``, i.e. ``ts <= t - lag``
+    with ``lag = ref_base - base``. A Reference no coarser than the base has lag 0 (the
+    long-standing ``ts <= t`` rule). Without this, a D1 bar's final close showed at the
+    first hourly step of its day (audit F1).
+    """
+    return timedelta(seconds=max(0, ref_base.seconds - base.seconds))
+
+
+def _seed_forming(view, tf_to_indicators: dict) -> None:
+    """Feed the current Forming Bar to ``latest``-mode indicators.
+
+    ``precompute`` seeds indicators from closed bars only, and the first trading step does
+    not take the incremental branch that every later step does, so a ``latest`` indicator
+    ignored its Forming Bar for exactly that one step (audit F18). Call this right after
+    ``precompute`` so the first step matches a step reached incrementally (ADR-0002).
+    """
+    for tf, inds in tf_to_indicators.items():
+        series = view[tf]
+        if series.forming is None:
+            continue
+        bfc = series.bars_for_compute()
+        for ind in inds:
+            if ind.mode == "latest":
+                ind.on_forming_bar(bfc)
+
+
 def _as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=_UTC) if dt.tzinfo is None else dt.astimezone(_UTC)
 
@@ -147,11 +178,13 @@ class Backtest:
         ref_feeds = []  # [ref_view, sorted_ref_bars, pointer]
         for _ref, ref_view, ref_inst, ref_source, ref_base in refs:
             rb = [b for b in ref_source.history(ref_inst, ref_base, lead_start, end) if b.timestamp <= end]
-            ref_feeds.append([ref_view, rb, 0])
+            ref_feeds.append([ref_view, rb, 0, _ref_lag(base, ref_base)])
 
         equity_curve: list[tuple[datetime, float]] = []
         benchmark_equity_curve: list[tuple[datetime, float]] = []
         trading = False
+        warmup_skipped = 0                 # in-window bars lost to a too-short lead-in (F11)
+        effective_start: datetime | None = None
         first_close: float | None = None   # for buy-and-hold benchmark
         last_close: float | None = None
 
@@ -178,10 +211,10 @@ class Backtest:
 
             # Advance reference feeds up to now — no look-ahead.
             for i, feed in enumerate(ref_feeds):
-                rv, rb, ptr = feed
+                rv, rb, ptr, lag = feed
                 rtf = ref_tf_indicators[i]
                 rc = ref_closed_counts[i]
-                while ptr < len(rb) and rb[ptr].timestamp <= t:
+                while ptr < len(rb) and rb[ptr].timestamp <= t - lag:
                     rv.push(rb[ptr])
                     ptr += 1
                 feed[2] = ptr
@@ -211,11 +244,13 @@ class Backtest:
             if t < start:
                 continue
             if not self._warm(view, tf_to_indicators, refs, ref_tf_indicators,
-                               [rv for rv, _, _ in ref_feeds]):
+                               [feed[0] for feed in ref_feeds]):
+                warmup_skipped += 1
                 continue
 
             if not trading:
                 trading = True
+                effective_start = t
                 # Precompute all strategy indicators from lead-in history.
                 for tf, inds in tf_to_indicators.items():
                     closed = view[tf].closed()
@@ -229,6 +264,10 @@ class Backtest:
                         for ind in inds:
                             ind.precompute(closed)
                         ref_closed_counts[i][tf] = len(closed)
+                # ...then the Forming Bar, as every later step would (F18).
+                _seed_forming(view, tf_to_indicators)
+                for i, (_ref, ref_view, *_) in enumerate(refs):
+                    _seed_forming(ref_view, ref_tf_indicators[i])
                 strat._current_bar = bar
                 strat.on_start()
                 first_close = bar.close
@@ -264,7 +303,13 @@ class Backtest:
             last_bar = next((b for b in reversed(bars) if b.timestamp >= start), None)
             if last_bar is not None:
                 venue.force_close_all(last_bar.timestamp)
-                equity_curve.append((last_bar.timestamp, venue.equity()))
+                # The last in-loop point is already stamped with this bar. Replace it
+                # with the post-close equity rather than adding a zero-duration step that
+                # carried only the exit costs (audit F12).
+                if equity_curve and equity_curve[-1][0] == last_bar.timestamp:
+                    equity_curve[-1] = (last_bar.timestamp, venue.equity())
+                else:
+                    equity_curve.append((last_bar.timestamp, venue.equity()))
         num_params = len(strat.declared_parameters())
         # Annualise against the bars this Instrument's session actually produces,
         # not against continuous 24/7 time (see SessionCalendar.bars_per_year).
@@ -274,6 +319,19 @@ class Backtest:
             vetoed_signals=venue.vetoed_orders,
             periods_per_year=periods_per_year,
         )
+        result.effective_start = effective_start
+        result.warmup_bars_skipped = warmup_skipped
+        if warmup_skipped:
+            import warnings
+
+            when = (f"began {warmup_skipped} bars after the requested start "
+                    f"({start:%Y-%m-%d %H:%M} -> {effective_start:%Y-%m-%d %H:%M})"
+                    if effective_start else
+                    f"never began: all {warmup_skipped} bars in the window were spent warming up")
+            warnings.warn(
+                f"lead-in too short: trading {when}. The indicators needed more history "
+                f"than the source returned before `start`, so the window is smaller than "
+                f"asked.", stacklevel=2)
 
         # --- LLM observability log -------------------------------------------
         if self.advisor is not None:

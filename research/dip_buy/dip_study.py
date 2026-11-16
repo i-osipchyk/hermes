@@ -298,8 +298,11 @@ def main() -> None:
     start, end = WINDOWS[a.window]
     panel = load_panel()
     print(f"panel: {len(panel)} tickers  window {start}..{end}")
-    cfg = Cfg(depth=a.depth, slots=a.slots, max_fills_per_day=a.max_fills_per_day, cost_bp=a.cost_bp, entry=a.entry, through=a.through,
-              vol_min=a.vol_min, stop_atr=a.stop_atr, stop_pct=a.stop_pct)
+    cfg = Cfg(
+        depth=a.depth, slots=a.slots, max_fills_per_day=a.max_fills_per_day,
+        cost_bp=a.cost_bp, entry=a.entry, through=a.through,
+        vol_min=a.vol_min, stop_atr=a.stop_atr, stop_pct=a.stop_pct,
+    )
     tr, eq = simulate(panel, cfg, start, end)
     tag = a.tag or f"{a.window}_d{a.depth}_s{a.slots}_c{a.cost_bp:g}_{a.entry}"
     OUT.mkdir(parents=True, exist_ok=True)

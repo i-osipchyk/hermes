@@ -66,3 +66,16 @@ def load_calendar(name: str):
     """Return a :class:`~hermes.data.ConstituentCalendar` for the named universe."""
     from hermes.data import ConstituentCalendar
     return ConstituentCalendar.from_snapshot_csv(Path(_CALENDAR_CSVS[name]))
+
+
+def universe_hash(name: str | None, directory: Path = TICKERS_DIR) -> str | None:
+    """Content hash of the file that defines a universe (JSON list or calendar CSV), so
+    editing the constituents changes a run's identity. ``None`` for a file's own universe."""
+    from .ledger import file_hash
+
+    if name is None:
+        return None
+    if name in _CALENDAR_CSVS and Path(_CALENDAR_CSVS[name]).exists():
+        return file_hash(_CALENDAR_CSVS[name])
+    path = Path(directory) / f"{name}.json"
+    return file_hash(path) if path.exists() else None

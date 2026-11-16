@@ -194,6 +194,80 @@ def test_a_malformed_param_is_rejected(project, capsys):
     assert "expected name=value" in capsys.readouterr().err
 
 
+# --- F3 / F2: the key identifies the run, not the moment it was asked for ----
+
+OPEN_ENDED = STRATEGY.replace("end=bars[-1].timestamp,", "end=datetime.now(timezone.utc),")
+
+
+def test_a_strategy_whose_default_end_is_now_still_hits_the_cache(project, capsys):
+    common, sdir, _ = project
+    (sdir / "buyhold.py").write_text(OPEN_ENDED)
+    main(["run", "buyhold", *common, "--json"])
+    first = _json(capsys)
+    main(["run", "buyhold", *common, "--json"])
+    second = _json(capsys)
+    assert first["run_key"] == second["run_key"]
+    assert second["from_cache"] is True
+
+
+def test_an_explicit_end_is_left_alone(project, capsys):
+    common, _, _ = project
+    main(["run", "buyhold", *common, "--end", "2023-01-02", "--json"])
+    a = _json(capsys)
+    main(["run", "buyhold", *common, "--end", "2023-01-03", "--json"])
+    assert _json(capsys)["run_key"] != a["run_key"]
+
+
+def test_a_fixed_default_end_is_not_truncated(project, capsys):
+    """Only an open-ended ('now') default is floored to a day; a strategy that pins an
+    intraday end keeps it."""
+    common, _, _ = project
+    main(["run", "buyhold", *common, "--json"])
+    assert _json(capsys)["end"] == "2023-01-03T11:00:00+00:00"
+
+
+def test_starting_cash_is_part_of_the_run_identity(project, capsys):
+    common, _, _ = project
+    main(["run", "buyhold", *common, "--cash", "10000", "--json"])
+    a = _json(capsys)["run_key"]
+    main(["run", "buyhold", *common, "--cash", "50000", "--json"])
+    assert _json(capsys)["run_key"] != a
+
+
+# --- F16: the key follows the data the run actually read ---------------------
+
+EPOCH_SRC = STRATEGY.replace(
+    "from hermes.data import InMemorySource",
+    "from pathlib import Path\nfrom hermes.data import InMemorySource\n"
+    "EPOCH = Path(__file__).with_name('epoch.txt')\n"
+    "class EpochSource(InMemorySource):\n"
+    "    def data_epoch(self, ticker):\n"
+    "        return EPOCH.read_text()\n"
+    "    def history(self, *a, **k):\n"
+    "        # a first fetch that learns a corporate action moves the epoch\n"
+    "        if EPOCH.read_text() == 'e0':\n"
+    "            EPOCH.write_text('e1')\n"
+    "        return super().history(*a, **k)\n",
+).replace("source=InMemorySource(", "source=EpochSource(")
+
+
+def test_run_key_follows_the_data_epoch_including_one_learned_during_the_run(project, capsys):
+    common, sdir, _ = project
+    (sdir / "buyhold.py").write_text(EPOCH_SRC)
+    (sdir / "epoch.txt").write_text("e0")
+    main(["run", "buyhold", *common, "--json"])
+    first = _json(capsys)
+    assert (sdir / "epoch.txt").read_text() == "e1"          # the run moved it
+    main(["run", "buyhold", *common, "--json"])
+    second = _json(capsys)
+    assert second["from_cache"] is True                       # keyed on the post-run epoch
+    assert second["run_key"] == first["run_key"]
+    (sdir / "epoch.txt").write_text("e2")                    # a later corporate action
+    main(["run", "buyhold", *common, "--json"])
+    third = _json(capsys)
+    assert third["from_cache"] is False and third["run_key"] != first["run_key"]
+
+
 # --- runs / show ------------------------------------------------------------
 
 def test_runs_lists_the_ledger(project, capsys):

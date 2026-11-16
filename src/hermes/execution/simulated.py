@@ -8,7 +8,8 @@ Owns every simulation concern so the rest of the framework stays honest:
     else assume Stop first;
   * Cost Model applied (spread + slippage embedded in fill price; commission +
     financing as explicit cash);
-  * margin checked against the Account (reject over-margin orders; no liquidation).
+  * margin checked against the Account at submit AND at the fill (reject over-margin
+    orders); equity at or below zero liquidates (ADR-0015).
 
 The engine calls :meth:`on_base_bar` for every new base bar BEFORE the strategy
 sees it, then the strategy places orders that fill on subsequent bars.
@@ -65,6 +66,10 @@ class SimulatedVenue(ExecutionVenue):
         # and their open (unrealised) P&L, both of which move shared free margin.
         self._external_margin: Callable[[], float] | None = None
         self._external_unrealised: Callable[[], float] | None = None
+        # Quote-side offsets and limit penetration for the current bar (ADR-0015).
+        self._buy_off = 0.0
+        self._sell_off = 0.0
+        self._pen = 0.0
 
     # --- engine hook -----------------------------------------------------------
 
@@ -82,6 +87,9 @@ class SimulatedVenue(ExecutionVenue):
         if self._last_day is not None and day != self._last_day and self._open:
             self._accrue_financing(self._last_day + timedelta(days=1), (day - self._last_day).days)
         self._last_day = day
+        self._buy_off, self._sell_off = self.cost_model.spread.quote_offsets(
+            self.instrument, self._price_time(bar))
+        self._pen = self.cost_model.limit_penetration_ticks * self.instrument.tick_size
 
         # 2. Exits decided on the previous bar fill at this bar's open.
         for trade in list(self._pending_closes):
@@ -117,15 +125,38 @@ class SimulatedVenue(ExecutionVenue):
         for order in list(self._working):
             fill = self._try_fill_entry(order, bar)
             if fill is not None:
+                # Re-check margin at the price the order actually fills at: a gap can
+                # make an order that was affordable at submit unaffordable (ADR-0015).
+                # Take it off the book first so it does not reserve against itself.
+                self._working.remove(order)
+                if not self._can_afford(order.side, order.size, fill):
+                    order.status = OrderStatus.REJECTED
+                    continue
                 tp_reachable = order.type is not OrderType.LIMIT
                 trade = self._open_trade(order, fill, bar.timestamp, self._price_time(bar))
-                self._working.remove(order)
                 hit = self._check_exit(trade, bar, allow_take_profit=tp_reachable)
                 if hit is not None:
                     raw_price, reason = hit
                     self._close_trade(trade, raw_price, reason, bar.timestamp, self._price_time(bar))
 
         self._last_bar = bar
+        self._liquidate_if_bankrupt(bar)
+
+    def _liquidate_if_bankrupt(self, bar: Bar) -> None:
+        """Close everything at the bar close when equity (other legs' open P&L included)
+        is at or below zero. A bankruptcy floor, not a broker stop-out (ADR-0015)."""
+        if self._unconstrained or not self._open:
+            return
+        ext = self._external_unrealised() if self._external_unrealised else 0.0
+        if self.account.equity(self.unrealised_pnl() + ext) > 0:
+            return
+        for trade in list(self._open):
+            self._close_trade(trade, bar.close, "liquidation", bar.timestamp,
+                              self._price_time(bar))
+        for order in self._working:
+            order.status = OrderStatus.CANCELLED
+        self._working.clear()
+        self._pending_closes.clear()
 
     def _financing_day(self, ts: datetime) -> date:
         session = self.instrument.session
@@ -273,21 +304,28 @@ class SimulatedVenue(ExecutionVenue):
         return req <= self.account.free_margin(reserved + external, equity_pnl) + 1e-9
 
     def _try_fill_entry(self, order: Order, bar: Bar) -> float | None:
-        """Return the RAW fill price if this bar fills the order, else None."""
+        """Return the RAW fill price if this bar fills the order, else None.
+
+        Buy-side orders see the ask (``bar + buy_off``), sell-side the bid
+        (``bar + sell_off``). A resting LIMIT must be traded through by ``_pen``; a STOP
+        converts on a touch. A LIMIT is a maker, so its return value is its final price;
+        a STOP/MARKET is a taker and the cost model adds the spread (ADR-0015).
+        """
+        b, s_off = self._buy_off, self._sell_off
         if order.type is OrderType.MARKET:
             return bar.open
         if order.type is OrderType.LIMIT:
             lp = order.limit_price
-            if order.side is Side.BUY and bar.low <= lp:
-                return min(lp, bar.open)
-            if order.side is Side.SELL and bar.high >= lp:
-                return max(lp, bar.open)
+            if order.side is Side.BUY and bar.low + b <= lp - self._pen:
+                return min(lp, bar.open + b)
+            if order.side is Side.SELL and bar.high + s_off >= lp + self._pen:
+                return max(lp, bar.open + s_off)
         if order.type is OrderType.STOP:
             sp = order.stop_price
-            if order.side is Side.BUY and bar.high >= sp:
-                return max(sp, bar.open)   # gap up fills worse
-            if order.side is Side.SELL and bar.low <= sp:
-                return min(sp, bar.open)   # gap down fills worse
+            if order.side is Side.BUY and bar.high + b >= sp:
+                return max(sp - b, bar.open)       # gap up fills worse
+            if order.side is Side.SELL and bar.low + s_off <= sp:
+                return min(sp - s_off, bar.open)   # gap down fills worse
         return None
 
     def _open_trade(
@@ -316,18 +354,30 @@ class SimulatedVenue(ExecutionVenue):
         self._open.append(trade)
         return trade
 
+    def _sl_touched(self, trade: Trade, low: float, high: float) -> bool:
+        """Stop-loss: a long's is a sell stop (bid), a short's a buy stop (ask)."""
+        sl = trade.stop_loss
+        if sl is None:
+            return False
+        if trade.side is Side.BUY:
+            return low + self._sell_off <= sl
+        return high + self._buy_off >= sl
+
+    def _tp_touched(self, trade: Trade, low: float, high: float) -> bool:
+        """Take-profit: a resting limit that must be traded through by ``_pen``."""
+        tp = trade.take_profit
+        if tp is None:
+            return False
+        if trade.side is Side.BUY:
+            return high + self._sell_off >= tp + self._pen
+        return low + self._buy_off <= tp - self._pen
+
     def _check_exit(
         self, trade: Trade, bar: Bar, *, allow_take_profit: bool = True
     ) -> tuple[float, str] | None:
         long = trade.side is Side.BUY
-        sl, tp = trade.stop_loss, trade.take_profit
-        if long:
-            sl_hit = sl is not None and bar.low <= sl
-            tp_hit = tp is not None and bar.high >= tp
-        else:
-            sl_hit = sl is not None and bar.high >= sl
-            tp_hit = tp is not None and bar.low <= tp
-        tp_hit = tp_hit and allow_take_profit
+        sl_hit = self._sl_touched(trade, bar.low, bar.high)
+        tp_hit = allow_take_profit and self._tp_touched(trade, bar.low, bar.high)
 
         if sl_hit and tp_hit:
             reason = self._resolve_clash(trade, bar)
@@ -338,12 +388,16 @@ class SimulatedVenue(ExecutionVenue):
         else:
             return None
 
-        level = sl if reason == "stop_loss" else tp
-        # Gap handling: a gap beyond the level fills at the open.
+        # Gap handling: a gap beyond the level fills at the open. A stop is a taker (the
+        # cost model adds the spread, so the raw price is in bar terms); a take-profit is
+        # a maker and is returned at its final price.
         if reason == "stop_loss":
-            raw = min(level, bar.open) if long else max(level, bar.open)
+            sl = trade.stop_loss
+            raw = min(sl - self._sell_off, bar.open) if long else max(sl - self._buy_off, bar.open)
         else:
-            raw = max(level, bar.open) if long else min(level, bar.open)
+            tp = trade.take_profit
+            raw = (max(tp, bar.open + self._sell_off) if long
+                   else min(tp, bar.open + self._buy_off))
         return raw, reason
 
     def _resolve_clash(self, trade: Trade, bar: Bar) -> str:
@@ -351,18 +405,11 @@ class SimulatedVenue(ExecutionVenue):
         assume Stop first (conservative)."""
         subbars = self._magnifier(bar) if self._magnifier else None
         if subbars:
-            long = trade.side is Side.BUY
             for sb in subbars:
-                if long:
-                    if sb.low <= trade.stop_loss:
-                        return "stop_loss"
-                    if sb.high >= trade.take_profit:
-                        return "take_profit"
-                else:
-                    if sb.high >= trade.stop_loss:
-                        return "stop_loss"
-                    if sb.low <= trade.take_profit:
-                        return "take_profit"
+                if self._sl_touched(trade, sb.low, sb.high):
+                    return "stop_loss"
+                if self._tp_touched(trade, sb.low, sb.high):
+                    return "take_profit"
         return "stop_loss"
 
     def _close_trade(

@@ -698,6 +698,8 @@ if run or st.session_state.pop("_auto_run", False):
                 universe_size=universe_result.universe_size,
                 summary_rows=pr.summary_rows(),
                 per_symbol_counts={k: len(v) for k, v in pr.per_symbol.items()},
+                skipped=list(pr.skipped),
+                legs_requested=pr.legs_requested,
             )
             st.session_state.update(universe_result=universe_result, mode="universe")
             st.session_state.pop("result", None)
@@ -755,6 +757,8 @@ if run or st.session_state.pop("_auto_run", False):
                 universe_size=universe_result.universe_size,
                 summary_rows=pr.summary_rows(),
                 per_symbol_counts={k: len(v) for k, v in pr.per_symbol.items()},
+                skipped=list(pr.skipped),
+                legs_requested=pr.legs_requested,
             )
 
             st.session_state.update(universe_result=universe_result, mode="universe")

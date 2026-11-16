@@ -264,6 +264,11 @@ def _tiingo_response(ticker="AAPL", n=3):
         d = datetime(2020, 1, 2 + i, tzinfo=UTC)
         rows.append({
             "date": d.isoformat(),
+            # Tiingo always sends the printed prices alongside the adjusted ones; daily
+            # bars are cached from these (ADR-0016).
+            "open": 100.0 + i, "high": 105.0 + i, "low": 99.0 + i,
+            "close": 104.0 + i, "volume": 1_000_000,
+            "divCash": 0.0, "splitFactor": 1.0,
             "adjOpen": 100.0 + i,
             "adjHigh": 105.0 + i,
             "adjLow": 99.0 + i,

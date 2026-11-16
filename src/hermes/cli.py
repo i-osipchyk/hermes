@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
+from .research.jsonsafe import decode_nonfinite, encode_nonfinite
 
 if TYPE_CHECKING:
     from .research.ledger import RunLedger, RunRecord
@@ -45,11 +46,15 @@ EXIT_OK, EXIT_ERR, EXIT_EMPTY = 0, 1, 2
 def _emit(payload: dict, as_json: bool, lines: list[str]) -> None:
     """One JSON document on stdout, or the human lines. Never both."""
     if as_json:
-        json.dump(payload, sys.stdout, indent=2, default=str)
+        json.dump(encode_nonfinite(payload), sys.stdout, indent=2, default=str, allow_nan=False)
         sys.stdout.write("\n")
     else:
         for ln in lines:
             print(ln)
+
+
+def _analysis_json(analysis: Any) -> str:
+    return json.dumps(encode_nonfinite(analysis.to_dict()), indent=2, default=str, allow_nan=False)
 
 
 def _warn(msg: str) -> None:
@@ -154,8 +159,8 @@ def _entry(name: str, directory: str):
 
 def _build(args: argparse.Namespace):
     """A configured Backtest plus the ledger inputs that identify it."""
-    from .research.discovery import configured_backtest, default_config
-    from .research.ledger import cache_key, strategy_hash
+    from .research.discovery import configured_backtest, default_config, stable_end
+    from .research.ledger import advisor_fingerprint, cache_key, source_epoch, strategy_hash
 
     entry = _entry(args.strategy, args.dir)
     defaults = default_config(entry)
@@ -163,7 +168,7 @@ def _build(args: argparse.Namespace):
     ticker = args.symbol or defaults.symbol.ticker
     source_name = args.source or defaults.source.name
     start = _parse_date(args.start) if args.start else defaults.start
-    end = _parse_date(args.end) if args.end else defaults.end
+    end = _parse_date(args.end) if args.end else stable_end(defaults.end)
     cash = args.cash if args.cash is not None else defaults.starting_cash
     params = _parse_params(args.param)
 
@@ -182,6 +187,9 @@ def _build(args: argparse.Namespace):
         params=params,
         sizer=repr(bt.sizer),
         unconstrained=args.unconstrained,
+        starting_cash=cash,
+        advisor=advisor_fingerprint(bt.advisor),
+        data_epoch=source_epoch(bt.source, ticker),
     )
     return entry, bt, key
 
@@ -250,6 +258,18 @@ def _universe_lines(uni: dict[str, Any] | None, top: int = 10) -> list[str]:
     traded = [r for r in rows if r.get("trades")]
     out = ["", f"  universe    {uni.get('universe_size', len(rows))} symbols, "
                f"{len(traded)} traded"]
+    coverage = uni.get("coverage")
+    if coverage is None:
+        out.append("  coverage    not recorded (run predates coverage tracking)")
+    else:
+        skipped = uni.get("skipped", [])
+        line = (f"  coverage    {coverage:.0%} "
+                f"({uni['legs_requested'] - len(skipped)}/{uni['legs_requested']} legs had data)")
+        if skipped:
+            shown = ", ".join(skipped[:10]) + (f" … +{len(skipped) - 10}" if len(skipped) > 10
+                                              else "")
+            line += f" — skipped: {shown}"
+        out.append(line)
     if traded:
         out.append(f"  {'symbol':<16} {'trades':>6} {'win %':>7} {'net P&L':>12}")
         shown = traded if len(traded) <= 2 * top else traded[:top] + [None] + traded[-top:]
@@ -285,12 +305,17 @@ def cmd_run_universe(args: argparse.Namespace) -> int:
         _warn(f"running {label} ({ur.size_hint or '?'} symbols) · "
               f"{ur.start.date()}→{ur.end.date()} …")
         universe_result = ur.run(progress_callback=_progress(label))
+        ur = _build_universe(args)      # re-key on the data epoch the run left behind
+        key = ur.key
         pr = universe_result.portfolio_result
         from_cache = False
         uni = {
             "universe_size": universe_result.universe_size,
             "summary_rows": pr.summary_rows(),
             "per_symbol_counts": {k: len(v) for k, v in pr.per_symbol.items()},
+            "legs_requested": pr.legs_requested,
+            "skipped": list(pr.skipped),
+            "coverage": pr.coverage,
         }
         if args.no_save:
             result_dict = pr.result.to_dict()
@@ -304,6 +329,9 @@ def cmd_run_universe(args: argparse.Namespace) -> int:
         "source": ur.source, "start": ur.start.isoformat(), "end": ur.end.isoformat(),
         "from_cache": from_cache, "metrics": m, "note": note,
         "universe_size": uni.get("universe_size"),
+        "legs_requested": uni.get("legs_requested"),
+        "skipped": uni.get("skipped", []),
+        "coverage": uni.get("coverage"),
         "per_symbol": uni.get("summary_rows", []),
     }
     lines = [
@@ -338,6 +366,9 @@ def cmd_run(args: argparse.Namespace) -> int:
               f"{bt.start.date()}→{bt.end.date()} …")
         result = bt.run()
         result_dict, from_cache = result.to_dict(), False
+        # Fetching may have taught the source a split/dividend: key the run on the data
+        # it actually read, or the next identical request would miss the ledger once.
+        key = _build(args)[2]
         if not args.no_save:
             ledger.save(key, result_dict, _meta_for(entry, bt, args, _parse_params(args.param)),
                         llm_log=getattr(result, "llm_log", None))
@@ -428,6 +459,8 @@ def cmd_show(args: argparse.Namespace) -> int:
     uni = ledger.load_universe_meta(rec.key)
     if uni is not None:
         payload["universe_size"] = uni.get("universe_size")
+        payload["coverage"] = uni.get("coverage")
+        payload["skipped"] = uni.get("skipped", [])
         payload["per_symbol"] = uni.get("summary_rows", [])
         lines.extend(_universe_lines(uni))
     if args.trades:
@@ -526,7 +559,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if run_key and not args.no_save:
         out = ledger.path / run_key
         if out.exists():
-            (out / "analysis.json").write_text(json.dumps(analysis.to_dict(), indent=2, default=str))
+            (out / "analysis.json").write_text(_analysis_json(analysis))
             _warn(f"wrote {out / 'analysis.json'}")
 
     lines = [f"{strategy_name} · run {run_key}", ""]
@@ -578,8 +611,10 @@ def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[s
               f"re-running the universe …")
         result = ur.run(progress_callback=_progress(ur.entry.name)).portfolio_result.result
 
+    uni_meta = ledger.load_universe_meta(run_key) or {}
     analysis = analyze(None, result, axes=measurable, run_key=run_key,
-                       strategy=ur.entry.name, seed=args.seed)
+                       strategy=ur.entry.name, seed=args.seed,
+                       coverage=uni_meta.get("coverage"))
     for axis in axes:
         if axis in _UNIVERSE_UNMEASURED:
             why = (f"not measured — {axis} re-runs a perturbed backtest, which is single-symbol "
@@ -590,7 +625,7 @@ def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[s
 
     if not args.no_save and (ledger.path / run_key).exists():
         out = ledger.path / run_key / "analysis.json"
-        out.write_text(json.dumps(analysis.to_dict(), indent=2, default=str))
+        out.write_text(_analysis_json(analysis))
         _warn(f"wrote {out}")
 
     lines = [f"{ur.entry.name} · universe {ur.universe} · run {run_key}", ""]
@@ -756,7 +791,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     rv.write_result(rec.result, rid)
     analysis_path = ledger.path / key / "analysis.json"
     if analysis_path.exists():
-        rv.attach_analysis(rid, json.loads(analysis_path.read_text()))
+        rv.attach_analysis(rid, decode_nonfinite(json.loads(analysis_path.read_text())))
     else:
         _warn("no analysis.json for this run — the review will have no computed evidence. "
               f"Run `hermes analyze {key}` first.")

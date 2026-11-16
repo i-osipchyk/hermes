@@ -184,3 +184,42 @@ def test_backtest_defaults_to_year_to_date():
     )
     assert bt.start == datetime(now.year, 1, 1, tzinfo=UTC)   # beginning of the year
     assert (now - bt.end).total_seconds() < 60               # ~today
+
+
+# --- F11: a short lead-in must not silently shrink the trading window ------------
+
+def _sma_run(bars, start):
+    class S(Strategy):
+        def setup(self):
+            self.sma = self.use(SMA(H1, 5))
+
+        def on_bar(self, bar):
+            pass
+
+    src = InMemorySource(_btc(), {H1: bars})
+    return Backtest(strategy=S(), source=src, symbol=Symbol("BTCUSDT", "binance"),
+                    timeframes=[H1], start=start, end=bars[-1].timestamp, starting_cash=10_000,
+                    cost_model=_zero_costs()).run()
+
+
+def test_a_lead_in_that_is_too_short_is_reported_not_swallowed():
+    import pytest
+
+    bars = [_bar(i, 100, 101, 99, 100) for i in range(20)]
+    with pytest.warns(UserWarning, match="lead-in"):
+        r = _sma_run(bars, start=bars[0].timestamp)      # no history before `start`
+    assert r.warmup_bars_skipped == 4                    # SMA(5) needs 5 bars: 4 skipped
+    assert r.effective_start == bars[4].timestamp
+    assert r.to_dict()["effective_start"] == bars[4].timestamp.isoformat()
+    assert r.to_dict()["warmup_bars_skipped"] == 4
+
+
+def test_a_sufficient_lead_in_reports_no_delay_and_does_not_warn():
+    import warnings
+
+    bars = [_bar(i, 100, 101, 99, 100) for i in range(20)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        r = _sma_run(bars, start=bars[10].timestamp)     # ten bars of history before start
+    assert r.warmup_bars_skipped == 0
+    assert r.effective_start == bars[10].timestamp

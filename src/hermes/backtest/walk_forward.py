@@ -20,6 +20,8 @@ class WalkForwardWindow:
     oos_end: datetime
     oos_result: BacktestResult
     best_params: dict[str, Any] = field(default_factory=dict)
+    # In-sample parameter combinations that raised instead of scoring (audit F7).
+    is_failures: int = 0
 
 
 @dataclass(slots=True)
@@ -153,6 +155,8 @@ class WalkForward:
             base_params: dict[str, Any] = dict(self.template.params)  # type: ignore[union-attr]
             best_params = dict(base_params)
 
+            is_failures = 0
+            first_error: Exception | None = None
             if combos:
                 best_metric = float("-inf")
                 for combo in combos:
@@ -163,12 +167,23 @@ class WalkForward:
                     )
                     try:
                         is_result = is_bt.run()  # type: ignore[union-attr]
-                    except Exception:
+                    except Exception as e:  # noqa: BLE001 — counted and re-raised below
+                        is_failures += 1
+                        first_error = first_error or e
                         continue
                     score = self._metric_value(is_result)
                     if score > best_metric:
                         best_metric = score
                         best_params = merged
+
+            if combos and is_failures == len(combos):
+                # Falling back to the base parameters would present an un-optimised
+                # run as a walk-forward result.
+                raise RuntimeError(
+                    f"walk-forward: every in-sample combination failed ({is_failures}/"
+                    f"{len(combos)}) in window {is_start:%Y-%m-%d}..{is_end:%Y-%m-%d}; "
+                    f"first error: {type(first_error).__name__}: {first_error}"
+                ) from first_error
 
             # OOS: run with params selected on IS --------------------------
             oos_bt = dataclasses.replace(
@@ -184,6 +199,7 @@ class WalkForward:
                 oos_end=oos_end,
                 oos_result=oos_result,
                 best_params=best_params,
+                is_failures=is_failures,
             ))
 
             oos_start = oos_end
@@ -215,7 +231,15 @@ class WalkForward:
             if stitched_curve:
                 prev_end_equity = stitched_curve[-1][1]
 
-        combined_result = BacktestResult.compute(stitched_curve, stitched_trades)
+        # Carry what each window knew about its own annualisation and parameter count:
+        # re-estimating from the stitched curve, with num_params=0, made IS and OOS
+        # Sharpe incomparable (audit F6).
+        steps = next((w.oos_result.steps_per_year for w in windows
+                      if w.oos_result.steps_per_year is not None), None)
+        num_params = max((w.oos_result.metrics.num_params for w in windows), default=0)
+        combined_result = BacktestResult.compute(
+            stitched_curve, stitched_trades, num_params=num_params, periods_per_year=steps,
+        )
         return WalkForwardResult(
             windows=windows,
             oos_result=combined_result,

@@ -15,7 +15,7 @@ import traceback
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -153,6 +153,22 @@ def _single(entry: StrategyEntry) -> Callable[..., Backtest]:
         raise ValueError(f"'{entry.name}' only defines build_universe_backtest; "
                          f"run it as a universe")
     return cast(Callable[..., Backtest], entry.build_backtest)
+
+
+def stable_end(end: datetime, *, now: datetime | None = None) -> datetime:
+    """Resolve an open-ended default window end ("now") to the start of today (UTC).
+
+    A strategy whose default ``end`` is the moment of the call would key a different run
+    every time it is asked for (audit F3). The still-forming current day is excluded, so
+    the window is reproducible for the whole day. An ``end`` that is not "now" (a fixed
+    date the strategy pins, or one the caller passed) is returned unchanged.
+    """
+    if end.tzinfo is None:
+        return end
+    now = now or datetime.now(UTC)
+    if abs(now - end) <= timedelta(minutes=5):
+        return end.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    return end
 
 
 def default_config(entry: StrategyEntry) -> Backtest:

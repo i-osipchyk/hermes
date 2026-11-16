@@ -24,13 +24,17 @@ Formerly ``hermes.webui.run_cache``; it is library surface, not UI surface (ADR-
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
+import re
 import shutil
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .jsonsafe import decode_nonfinite, encode_nonfinite
 
 DEFAULT_RUNS_DIR = Path(".hermes_cache/runs")
 
@@ -112,8 +116,86 @@ class RunRecord:
         return int(self.result.get("llm_summary", {}).get("fail_open_calls", 0) or 0)
 
 
+_SIBLING = re.compile(r"""with_name\(\s*['"]([^'"]+)['"]\s*\)""")
+
+# Packages whose code decides what a run produces. ``ai``/``research``/``webui`` do not
+# change a simulation's numbers; the advisor's model is keyed separately.
+_ENGINE_PACKAGES = ("backtest", "core", "data", "execution", "indicators", "strategy")
+
+
+def _hash_with_siblings(path: Path, seen: set[Path]) -> list[bytes]:
+    path = Path(path).resolve()
+    if path in seen:
+        return []
+    seen.add(path)
+    data = path.read_bytes()
+    parts = [data]
+    for name in sorted(set(_SIBLING.findall(data.decode("utf-8", errors="replace")))):
+        sibling = path.with_name(name)
+        if sibling.is_file():
+            parts.append(name.encode())
+            parts += _hash_with_siblings(sibling, seen)
+    return parts
+
+
 def strategy_hash(path: Path) -> str:
-    """SHA-256[:16] of the strategy file bytes — changes when the file is edited."""
+    """SHA-256[:16] of the strategy file bytes — changes when the file is edited.
+
+    A variant that loads its base as a sibling (``Path(__file__).with_name("base.py")``,
+    see CLAUDE.md) also covers that file, transitively: editing the base changes every
+    variant's hash. A file with no sibling keeps its plain content hash.
+    """
+    parts = _hash_with_siblings(Path(path), set())
+    if len(parts) == 1:
+        return hashlib.sha256(parts[0]).hexdigest()[:16]
+    h = hashlib.sha256()
+    for part in parts:
+        h.update(hashlib.sha256(part).digest())
+    return h.hexdigest()[:16]
+
+
+def _hash_engine(base: Path) -> str:
+    h = hashlib.sha256()
+    for pkg in _ENGINE_PACKAGES:
+        for f in sorted((base / pkg).rglob("*.py")):
+            h.update(str(f.relative_to(base)).encode())
+            h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+@functools.lru_cache(maxsize=1)
+def _installed_engine_fingerprint() -> str:
+    return _hash_engine(Path(__file__).resolve().parent.parent)
+
+
+def engine_fingerprint(root: Path | None = None) -> str:
+    """SHA-256[:16] of the simulation code (backtest, execution, data, …).
+
+    Part of every :func:`cache_key`, so fixing the engine invalidates the runs it
+    produced instead of serving them as valid. ``root`` is for tests; the installed
+    package is hashed once per process.
+    """
+    return _installed_engine_fingerprint() if root is None else _hash_engine(Path(root))
+
+
+def advisor_fingerprint(advisor: Any | None) -> str | None:
+    """Identity of an AI Advisor for the cache key: its model and system prompt."""
+    if advisor is None:
+        return None
+    model = getattr(getattr(advisor, "provider", None), "model_id", None) or type(advisor).__name__
+    prompt = str(getattr(advisor, "system_prompt", ""))
+    return f"{model}:{hashlib.sha256(prompt.encode()).hexdigest()[:8]}"
+
+
+def source_epoch(source: Any, ticker: str) -> str | None:
+    """A source's data epoch for ``ticker``; ``None`` for sources that do not define one
+    (duck-typed sources in user strategy files need not subclass ``DataSource``)."""
+    fn = getattr(source, "data_epoch", None)
+    return fn(ticker) if callable(fn) else None
+
+
+def file_hash(path: Path | str) -> str:
+    """SHA-256[:16] of a file's bytes (e.g. a constituent calendar CSV)."""
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
 
 
@@ -129,8 +211,16 @@ def cache_key(
     sizer: str,
     unconstrained: bool,
     leverage: float | None = None,
+    starting_cash: float | None = None,
+    advisor: str | None = None,
+    universe_hash: str | None = None,
+    data_epoch: str | None = None,
 ) -> str:
-    """SHA-256[:16] of all inputs — any change produces a different key."""
+    """SHA-256[:16] of all inputs — any change produces a different key.
+
+    Includes the engine code (:func:`engine_fingerprint`), so a fix to the simulation
+    retires the runs it invalidates.
+    """
     inputs = {
         "strategy": strategy,
         "strategy_hash": strategy_hash,
@@ -143,6 +233,11 @@ def cache_key(
         "sizer": sizer,
         "unconstrained": unconstrained,
         "leverage": leverage,
+        "starting_cash": starting_cash,
+        "advisor": advisor,
+        "universe_hash": universe_hash,
+        "data_epoch": data_epoch,
+        "engine": engine_fingerprint(),
     }
     blob = json.dumps(inputs, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
@@ -178,7 +273,7 @@ class RunLedger:
     def save(self, key: str, result: dict, meta: RunMeta, llm_log: Any | None = None) -> str:
         d = self._dir(key)
         d.mkdir(parents=True, exist_ok=True)
-        (d / "result.json").write_text(json.dumps(result, indent=2))
+        (d / "result.json").write_text(json.dumps(encode_nonfinite(result), indent=2, allow_nan=False))
         (d / "meta.json").write_text(json.dumps(meta.to_dict(), indent=2))
         if llm_log is not None and getattr(llm_log, "total_calls", 0) > 0:
             llm_log.save(d / "llm_log.jsonl")
@@ -199,7 +294,7 @@ class RunLedger:
         result_path, meta_path = d / "result.json", d / "meta.json"
         if not result_path.exists() or not meta_path.exists():
             return None
-        result = json.loads(result_path.read_text())
+        result = decode_nonfinite(json.loads(result_path.read_text()))
         meta = RunMeta.from_dict(json.loads(meta_path.read_text()))
         log = None
         log_path = d / "llm_log.jsonl"
@@ -271,18 +366,28 @@ class RunLedger:
         universe_size: int,
         summary_rows: list[dict],
         per_symbol_counts: dict[str, int],
+        skipped: list[str] | None = None,
+        legs_requested: int | None = None,
     ) -> None:
         d = self._dir(key)
         d.mkdir(parents=True, exist_ok=True)
-        (d / "universe_meta.json").write_text(json.dumps({
+        meta: dict[str, Any] = {
             "universe_size": universe_size,
             "summary_rows": summary_rows,
             "per_symbol_counts": per_symbol_counts,
-        }, indent=2))
+        }
+        if legs_requested is not None:
+            skipped = list(skipped or [])
+            meta["legs_requested"] = legs_requested
+            meta["skipped"] = skipped
+            meta["coverage"] = ((legs_requested - len(skipped)) / legs_requested
+                                if legs_requested else None)
+        (d / "universe_meta.json").write_text(
+            json.dumps(encode_nonfinite(meta), indent=2, allow_nan=False))
 
     def load_universe_meta(self, key: str) -> dict | None:
         path = self._dir(key) / "universe_meta.json"
-        return json.loads(path.read_text()) if path.exists() else None
+        return decode_nonfinite(json.loads(path.read_text())) if path.exists() else None
 
 
 # ---------------------------------------------------------------------------
@@ -317,8 +422,10 @@ def delete_run(key: str) -> None:
 
 
 def save_universe_meta(key: str, universe_size: int, summary_rows: list[dict],
-                       per_symbol_counts: dict[str, int]) -> None:
-    _default().save_universe_meta(key, universe_size, summary_rows, per_symbol_counts)
+                       per_symbol_counts: dict[str, int], skipped: list[str] | None = None,
+                       legs_requested: int | None = None) -> None:
+    _default().save_universe_meta(key, universe_size, summary_rows, per_symbol_counts,
+                                  skipped, legs_requested)
 
 
 def load_universe_meta(key: str) -> dict | None:

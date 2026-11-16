@@ -237,3 +237,38 @@ def test_random_simulations_are_reproducible_for_a_fixed_seed():
     a = hermes.run_random_simulations(_backtest, n=3, p=0.5, seed=99, workers=1)
     b = hermes.run_random_simulations(_backtest, n=3, p=0.5, seed=99, workers=1)
     assert [s["total_return"] for s in a] == pytest.approx([s["total_return"] for s in b])
+
+
+# --- F6: the stitched OOS result keeps the run's annualisation and parameter count ---
+
+def test_stitched_walk_forward_result_keeps_annualisation_and_param_penalty():
+    res = hermes.WalkForward(
+        template=_backtest(), total_start=BARS[0].timestamp, total_end=BARS[-1].timestamp,
+        is_frac=0.6, param_grid={"fast": [4, 6], "slow": [18, 24]},
+    ).run()
+    window = res.windows[0].oos_result
+    assert window.steps_per_year is not None
+    assert res.oos_result.steps_per_year == window.steps_per_year
+    assert window.metrics.num_params == 2
+    assert res.oos_result.metrics.num_params == 2
+
+
+# --- F7: in-sample failures are surfaced, not swallowed ---------------------------
+
+def test_walk_forward_raises_when_every_in_sample_combination_fails():
+    wf = hermes.WalkForward(
+        template=_backtest(), total_start=BARS[0].timestamp, total_end=BARS[-1].timestamp,
+        is_frac=0.6, param_grid={"fast": [0, -1]},
+    )
+    with pytest.raises(RuntimeError, match="every in-sample"):
+        wf.run()
+
+
+def test_walk_forward_counts_partial_in_sample_failures():
+    res = hermes.WalkForward(
+        template=_backtest(), total_start=BARS[0].timestamp, total_end=BARS[-1].timestamp,
+        is_frac=0.6, param_grid={"fast": [0, 4]},
+    ).run()
+    for w in res.windows:
+        assert w.is_failures == 1
+        assert w.best_params["fast"] == 4
