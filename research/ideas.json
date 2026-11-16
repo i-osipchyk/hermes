@@ -419,5 +419,168 @@
     "tags": [],
     "created_at": "2026-10-11T18:29:54.025219+00:00",
     "updated_at": "2026-10-11T19:00:37.249042+00:00"
+  },
+  {
+    "id": "771bd086",
+    "title": "Cross-market trend following: time-series momentum across a diversified CFD basket",
+    "hypothesis": "Claim: on daily bars, across a diversified basket of liquid markets reachable through Pepperstone cTrader (equity indices US500/NAS100/GER40/JPN225, FX majors, XAUUSD/XAGUSD, oil, and bonds if a source exists), going long a market whose trailing 3-12 month return is positive and short when negative (or a Donchian 50/100-day break with an ATR trailing stop), each leg volatility-sized to an equal risk budget and the whole run as one capital pool, earns a positive risk-adjusted return over multi-week to multi-month holds -- with most of it coming from a few large trends per year. The edge is a property of the BASKET, not of any one market: any single leg is expected to be marginal or negative most years. Mechanism: prices under-react to slow-moving fundamental shifts (central-bank cycles, growth/inflation regimes, supply shocks) because information diffuses gradually and participants anchor; then herding, de-risking by leveraged and risk-parity holders, hedging by producers/consumers and CTA flow itself extend the move. Trend payoffs are convex (crisis alpha, positive skew), so they persist as a risk premium paid for bearing long choppy flat periods that most capital cannot tolerate. Diversification across weakly correlated markets is what turns many small-win-rate legs into a usable equity curve. Counter: the CTA premium was weak 2011-2019 and is crowded; CFD financing (swap) on multi-month holds is a real cost that futures do not pay and must be modelled; Pepperstone history depth per symbol may be ~3y on intraday but daily depth needs checking; a 3y window covers too few independent trends for more than an exploratory tier. Prior: single-instrument silver Turtle breakouts were rejected (silver trend breakouts idea) -- consistent with the claim that a single leg is not the test; this is a test of the portfolio. Parameters: lookback (one, prefer a hard-coded 12m or a fixed 3/6/12m blend) + vol target constant; target <= 2 tunables. Needs a universe run (hermes run --universe) over a new tickers/*.json multi-asset list; note analyze on universe runs measures only trades/validation/regime/gate today.",
+    "source": "other",
+    "source_detail": "agent-generated (Claude) from mechanism; classic managed-futures/CTA idea (time-series momentum literature, e.g. Moskowitz/Ooi/Pedersen 2012)",
+    "status": "rejected",
+    "strategy": "strategies/cross_market_trend/xm_tsmom.py",
+    "run_keys": [
+      "a49178646becad36"
+    ],
+    "verdict": "Rejected on the Pepperstone CFD basket after 4 trials, in-sample only (2006-01..2020-07); holdout 2020-07+ NEVER touched, so it stays clean for a futures version. Basket tickers/xm_trend.json = 8 indices + 3 spot metals + 7 FX; Treasury CFDs (history 2023-09..2025-09 only) and all rolled-futures commodities (raw series carry roll gaps, e.g. NatGas 120 open gaps >3%) excluded -- i.e. the bond and commodity sleeves that carried classic CTA returns are unreachable here. T1 engine baseline a49178646becad36 (12m sign, monthly, 2.5% vol/leg, always in): 314 trades, CAGR -4.3%, Sharpe -0.19, maxDD -67%, evidence tier credible, PSR 24%. Gross +166k vs costs 639k on 1M: financing dominates (measured live cTrader swaps confirm benchmark +/-2.5% on indices, gold ~+7.2%/-2.6%, FX markups ~1.9% round trip), ~0.12-0.17 Sharpe drag per leg for an always-in vol-targeted position. Vectorised screen (research/trend_following/screen.py, replica matches engine) T2 sleeve-parity net SR -0.18 (gross 0.08), T3 3/6/12m blend net -0.10 (gross 0.14), T4 indices long/flat net -0.07 (gross 0.19, mostly equity beta). Per sleeve gross/net SR: indices -0.22/-0.41, metals 0.02/-0.13, FX 0.21/0.04. Dissected by side (index shorts -255k gross: V-recoveries), signal strength at entry (strong entries worst -- trend-strength filter refuted), vol regime (FX edge in high vol, indices/metals in low vol -- sleeves disagree, dropped as pattern), basket correlation (indices rho 0.77, metals 0.68, FX 0.42: ~3 effective bets). No mechanism-backed pocket survives costs. Untested: the same idea on continuous futures incl. bonds/commodities (yfinance =F, free) -- a new research task. FX carry not modelled (simplification).",
+    "tags": [
+      "trend",
+      "cross-market",
+      "portfolio"
+    ],
+    "created_at": "2026-10-14T10:37:11.917310+00:00",
+    "updated_at": "2026-10-14T10:53:40.300586+00:00"
+  },
+  {
+    "id": "c706aa04",
+    "title": "Gold London-range targets at the NY open: trade toward the London high/low",
+    "hypothesis": "Claim: on XAUUSD 5m, the high/low of the London session before the New York open (London 08:00 Europe/London to the NY open ~08:20-08:30 America/New_York, the COMEX gold open / US data time; session in local time zones so DST does not move it) is a target that price reaches after the NY open more often than chance. Trade from the NY open: long with target = London high, or short with target = London low, stop on the other side (fraction of the London range or ATR), flat before 20:50 UTC. OPEN at capture: the direction rule is not yet pinned -- candidates are (a) toward the edge price is farther from / the side not yet swept, (b) fade a sweep of one edge at/after the NY open back toward the other, (c) direction of the first NY-open move. Pick ONE before quantifying; they are different mechanisms. Mechanism: London builds the day's main liquidity pool -- resting stops and breakout orders just beyond its high and low; NY open brings the second large wave of participants (US data at 08:30 ET, COMEX open, US real-money flow) that needs that liquidity to fill size, so the London extremes act as magnets. Counter: a target at the range edge with a stop beyond the opposite side has bad geometry unless entry is near one edge; the London range is often already wide by NY so the target may be far vs the day's remaining move; 'price reaches level X' is common by chance, so the first test is a random-direction / random-entry control with the same target/stop geometry. Related: 0945d084 (gold Tokyo range breakout, validated -- a break-and-continue claim; this one targets the range edge, so check correlation in step 4), e97af039 variant B (silver London range broken during COMEX, rejected), 08e23fa6 (US index ORB, rejected). Data: XAUUSD 5m cached 2018-2026.09; costs spread 0.12 + 3.5/lot, 2x costs. Protocol: choose on 2018-22, score 2023-25 once, <= 2 params.",
+    "source": "other",
+    "source_detail": "user's idea, logged 2026-10-14; provenance (own observation vs trader/course) not stated",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [
+      "645c22399b0da7bd",
+      "089582e5cf7b24f0",
+      "e1134885c65c77c3"
+    ],
+    "verdict": "REJECTED 2026-10-14 on IS 2018-22, 3 engine trials, holdout 2023+ never touched (nothing earned it). (1) Magnet claim absent: after 08:30 ET the London (08:00 LDN-08:30 ET) high/low are touched 62.2%/59.0% vs 62.5%/59.8% for the same distances from random days, within 0.03 in every bucket. (2) Direction rules, 1:1 stop: far -0.024, near -0.041, sweep-fade -0.005, first-30m -0.019 net ATR/trade; engine 645c22399b0da7bd PF 0.91. (3) Brackets with the opposite edge as stop: G_far (RR>1) gross -0.021R / net -0.232R, G_near (RR<1) gross -0.021R / net -0.058R -- a random-walk bracket; engine 089582e5cf7b24f0 Sharpe 0.06 at 0x costs, -0.87 at 1x, e1134885c65c77c3 -0.36 at 0x, -1.17 at 1x; both lose in every regime. Filter dissection (width, width vs prior-20, RR, ATR level, Asia width, London-vs-Asia break, London/last-30m direction, newest extreme, extreme age, prior day, p0 vs prior-day range, weekday, side, year): no bucket with gross |t|>~1.5 except NFP Fridays (G_far +0.61R, n=56) which is the print bar itself -- +0.02R at a realistic .00 print cost, negative entering 08:35/08:45, carried by 2021. Only cost hygiene survives: G_far with RR<=3 is ~breakeven (net -0.01R), no edge. Scripts: research/london_range/.",
+    "tags": [
+      "xauusd",
+      "session"
+    ],
+    "created_at": "2026-10-14T11:03:56.968016+00:00",
+    "updated_at": "2026-10-14T11:47:36.807081+00:00"
+  },
+  {
+    "id": "16458973",
+    "title": "Gold rapid breakout through 30m/1h fractal levels, sized up when the fractal is also a session/day extreme",
+    "hypothesis": "Claim: on XAUUSD, a break by $0.50 of a confirmed M30/H1 fractal swing (n=1-2, known only after n closed bars, ADR-0002) that arrives FAST (approach speed = distance covered toward the level over the last ~15-30 min in ATR units, or 1m/5m arrival gap; one hard-coded definition) continues over the following minutes-to-hours more than slow/grinding breaks of the same levels. Position size is weighted UP when the fractal is also the current broker-day high/low or the current session (Tokyo/London/NY) high/low (confluence tier: fractal-only = 1x, fractal + session extreme = w, fractal + day extreme = w2; weights hard-coded, not tuned). Mechanism: a level that is both a structural swing and the session/day extreme is where the most participants put stops and breakout orders, so breaking it releases the most forced flow; a fast arrival is fresh order flow that runs those stops instead of an exhausted grind that gets absorbed. Priors against (all gold, 2018-2026): M30 n=1 swing breaks have no edge (7f3d026e: net R IS -0.017 / OOS -0.011), and adding the fast-approach profile made swing breaks WORSE (OOS -0.031); H1 fractal breakouts with structure = random-side control (13374202); day-range fast approach is real but tiny (e61a4161: +0.018R OOS, p=0.034); 'confluence of other levels within $1' was WORSE for held day breaks (FINDINGS.md section J: -$1.62 vs +$0.29/oz); EA's observable selection carries no profit (af10eff8). What is NOT yet measured and is the point of this idea: (1) net R by the three confluence tiers on the same exits (if tiers do not order fractal-only < session < day, sizing cannot help -- sizing only re-weights an expectancy that must differ first); (2) approach speed as a continuous VELOCITY measure crossed with tier; (3) exits matched to a momentum claim (fixed-time exit 30/60/120 min or ATR trail) rather than the Aero scalp exits ($12 TP / 3h-armed stop), which may hide a continuation effect. Protocol: event study first (research/aero/ or research/rapid_break/), choose speed definition + exit on 2018-22, score 2023-26.08 once, data after 2026-08-06 held out; random-entry control with identical exits and month matching; 2x costs (spread 0.12 + 3.5/lot); k<=3 params (fractal n, speed threshold, one exit) with tier weights fixed. Only if tiers and speed separate gross R does it become a Hermes strategy run. Check correlation with 0945d084 (Tokyo breakout) in step 4.",
+    "source": "trader",
+    "source_detail": "Aero MT5 EA component (87eb623e), user follow-up 2026-10-14: isolate the 'rapid breakout through the level' piece; level = M30/H1 fractal, higher position weight when it coincides with the session/day high/low, approach speed as the trigger condition",
+    "status": "rejected",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "Rejected (research/rapid_break/FINDINGS.md; 18 IS readings, 2 holdout touches, event study on 1m, no engine run since nothing survived). XAUUSD 2018-22 selection, 2023-26.08 holdout, net of $0.20/oz, vs same-side/hour/month random control. (1) Confluence tiers: day-extreme fractals > session ~= fractal-only; session extremes add nothing. (2) Approach speed has the WRONG sign: fastest v15 quintile worst in all 4 fractal defs; flat inside the day tier. (3) Faithful T1 (H1 n=2, fast, size 1/1.5/2 by tier, 0.5ATR stop, 120min): IS +0.018 ATR/trade t=1.3, holdout +0.004 t=0.2, 2x costs -0.012. (4) Refined T2 (H1 n=2 fractal = day extreme, NY 12-18 UTC): IS +0.066 t=3.8, holdout +0.025 t=1.2, 2x +0.008 -- but in the holdout ALL of it is breaks where the level is the Tokyo 00-09 UTC range edge (+0.067, n=543; rest -0.007, n=723), i.e. the validated 0945d084, not a new edge. Not tested: H4/daily fractals, other instruments, Aero-style exits on these tiers. || AERO EXITS (2026-10-14, rapid_break_aero_exits.py): Aero entry (limit at level, chase) + exits with TP = 5.61 x ATR(1h,14) (calibrated: 2018-22 median = $20), Aero lock/trail ratios, 3.6 ATR4h catastrophe, -0.5 ATR4h exit armed permanently from 3h (EA log shows grid placed at 3h even in profit -> old one-off check was wrong). Holdout 2023-26.08 once: A tier-weighted +0.016 ATR4h/trade, excess vs random-entry control +0.007 (t 0.1); B day extreme + NY +0.020, PF 1.04, excess +0.019 (t 0.5), 2x costs +0.003; C = B with fixed $20 +0.006, excess +0.042 (t 1.3). Win ~33% vs EA ~80%: mechanics without the EA's selection earn nothing. Still rejected. Cumulative ~54 IS readings, 5 holdout touches.",
+    "tags": [],
+    "created_at": "2026-10-14T15:53:14.857122+00:00",
+    "updated_at": "2026-10-14T16:10:06.732172+00:00"
+  },
+  {
+    "id": "96c71c0b",
+    "title": "Gold intraday breaks that carry price beyond the previous day's range (Aero mechanics)",
+    "hypothesis": "Claim: on XAUUSD, a $0.50 break of a confirmed H1 n=2 fractal whose level is >= 0.25 ATR(4h) beyond the previous broker-day high (low), traded with Aero mechanics (limit at level then chase; TP 5.61 x ATR(1h); lock/trail at 0.6/0.5 TP; -0.5 ATR4h exit armed from 3h; 3.6 ATR4h catastrophe), earns more than breaks inside yesterday's range and more than random entries with the same exits. Mechanism: a break into new multi-day territory is range expansion with no overhead daily supply and trapped shorts; a break deep inside yesterday's range is intraday noise inside a range. Evidence so far: IS 2018-22 +0.091 ATR4h/trade (n 1599, excess +0.094 t 2.7, 3/5 yrs); holdout 2023-26.08 +0.059 (n 1148, excess +0.037 t 0.95, 2x costs +0.045, 3/4 yrs); rest -0.001. Not the Tokyo breakout (non-Tokyo-edge holdout +0.050). Found by searching 24 features (~85 IS readings, 7 holdout touches on this data) -> the 2023-26 holdout is spent; next evidence must be post-2026-08-06 data or a second instrument (silver), and the rule must be frozen first. Also check whether the fractal is needed at all (plain previous-day-extreme breaks with the same exits).",
+    "source": "data",
+    "source_detail": "research/rapid_break/rapid_break_win_loss.py 2026-10-14, child of 16458973: the only stable separator among 24 entry features of H1 n=2 fractal breaks under Aero exits",
+    "status": "raw",
+    "strategy": "",
+    "run_keys": [],
+    "verdict": "",
+    "tags": [],
+    "created_at": "2026-10-14T16:19:01.703293+00:00",
+    "updated_at": "2026-10-14T16:19:01.703293+00:00"
+  },
+  {
+    "id": "21060772",
+    "title": "US equity value: long the cheapest S&P 500 names by point-in-time earnings/book yield, rebalanced quarterly",
+    "hypothesis": "Claim: within the point-in-time S&P 500 calendar universe, stocks in the top quintile of a valuation yield (E/P or B/P from the latest SEC filing known as of the rebalance date, via MassiveFundamentals filing_date) outperform the equal-weight universe over the following 3-12 months; trade it as an equal-weight long-only top-quintile basket rebalanced quarterly (a long/short version vs the bottom quintile is the purer test). Mechanism: investors extrapolate past growth and distress, so recently disappointing, unglamorous firms get priced too cheaply and glamour stocks too dearly; mean reversion in fundamentals then rerates them (LSV). The alternative explanation is a distress-risk premium (Fama-French), which predicts the excess return is real but comes with deep drawdowns in crises. Known caveats to test, not assume away: the US value premium was weak to negative ~2007-2020, so the window chosen matters a lot; must use filing_date not period end (look-ahead); delisted names must stay in (survivorship) - the sp500 calendar handles membership but bars/fundamentals for delisted tickers need checking. Parameters: 1 (the yield metric choice is the variant axis; quintile and quarterly rebalance are fixed constants).",
+    "source": "book",
+    "source_detail": "Academic value literature: Fama & French (1992, 1993) HML; Lakonishok, Shleifer & Vishny (1994) 'Contrarian Investment, Extrapolation, and Risk'. User asked to try a value strategy on US stocks (2026-10-14).",
+    "status": "rejected",
+    "strategy": "sp500_value",
+    "run_keys": [
+      "9a7366ee9dd5848f",
+      "bf439a94830157bf",
+      "8fd3ddd12a46c56e",
+      "2678eb70182f208f"
+    ],
+    "verdict": "Rejected in-sample (2011-2021) even on survivor-biased, value-favouring data (yfinance-only, 201 delisted names unpriced). Top-quintile E/P, B/P and E/P+B/P combo all ~10.5-10.8% CAGR / Sharpe ~0.6 vs 16.1% / 0.93 for the equal-weight benchmark (3 trials). Quintile sorts: no monotonic premium (E/P Q1 -0.36%/qtr vs EW; B/P most-expensive Q5 +0.87%/qtr); sector-neutral ranking worse; cheap-and-profitable did worse than cheap-and-loss-making; value won only in 2013/2016/2020 rotations. Holdout 2022-2026 not touched (no candidate survived). Not worth paying Tiingo to remove a bias that already flatters value. Builder: research/value/build_panel.py; dissection: research/value/dissect.py.",
+    "tags": [
+      "equities",
+      "value",
+      "cross-sectional",
+      "sp500"
+    ],
+    "created_at": "2026-10-14T16:57:03.056097+00:00",
+    "updated_at": "2026-10-15T09:19:34.144384+00:00"
+  },
+  {
+    "id": "f99af81f",
+    "title": "US equity value with intangibles: book + capitalized R&D (and organization capital) to market, S&P 500, quarterly",
+    "hypothesis": "Claim: on the point-in-time S&P 500, ranking by intangible-adjusted book-to-market -- (book equity + capitalised R&D [+ capitalised 30% of SG&A as organization capital]) / market cap, from SEC filings filed by the rebalance date -- gives a top quintile that beats the equal-weight universe over 2011-2021, where plain B/P (idea 21060772) did not. Mechanism: GAAP expenses R&D and brand/organization spending, so book equity omits the main assets of knowledge-economy firms; plain B/P therefore labels intangible-heavy firms expensive and loads on asset-heavy, declining firms. Correcting the denominator should restore value's original meaning (cheap relative to productive capital). Falsifier: if adjusted B/P does no better than plain B/P in-sample, mis-measurement is not why value failed here. Constants (not knobs): R&D and org capital depreciate 20%/yr (BEA-style), 30% of SG&A is investment (EKP), initial stock = first observed flow / (depreciation + 10% growth). Parameters: 1 (metric).",
+    "source": "book",
+    "source_detail": "Lev & Srivastava (2019) 'Explaining the Recent Failure of Value Investing'; Eisfeldt, Kim & Papanikolaou (2020) 'Intangible Value'; Peters & Taylor (2017) for the perpetual-inventory capitalisation. Follow-up to rejected idea 21060772 (plain B/P lost to equal weight 2011-2021). Prompted by Ilmanen, Expected Returns.",
+    "status": "rejected",
+    "strategy": "sp500_value",
+    "run_keys": [
+      "0ffa30f19f82cf57",
+      "f344430d127ddbcb",
+      "9a7366ee9dd5848f"
+    ],
+    "verdict": "Rejected in-sample (2011-2021, survivor-biased yfinance-only data that favours value). Capitalising R&D (+30% SG&A) moved results the predicted way but not enough: top-quintile backtests 11.0% (ibp) / 11.2% (ibp_org) CAGR vs 10.8% plain B/P vs 16.1% equal weight (2 trials). Quintile sorts: cheapest-quintile excess vs EW -0.17 -> -0.02 -> +0.08%/qtr (t~0.1); improvement over plain B/P +0.25%/qtr, t=1.3; ex-financials +0.24%/qtr t=0.4. What it does explain: the cheap-minus-expensive spread shrinks from -1.09 to -0.21%/qtr ex-financials, i.e. mis-measured intangibles account for much of why glamour beat value here, but no value premium appears. Only suggestive pocket: manufacturing (+0.68%/qtr vs plain B/P, t=1.5), not pursued (narrowing the universe on a t<2 cut is search). Holdout 2022+ untouched.",
+    "tags": [
+      "equities",
+      "value",
+      "cross-sectional",
+      "sp500"
+    ],
+    "created_at": "2026-10-15T10:19:37.486043+00:00",
+    "updated_at": "2026-10-15T10:36:30.726394+00:00"
+  },
+  {
+    "id": "f62f0c77",
+    "title": "US equity value + momentum: 50/50 combination of the cheapest and the strongest-trending S&P 500 quintiles, quarterly",
+    "hypothesis": "Claim: on the point-in-time S&P 500, a 50/50 portfolio of the cheapest B/P quintile and the top 12-1 month momentum quintile (rebalanced quarterly) has a higher Sharpe than momentum alone and than the equal-weight universe over 2011-2021, because the two sleeves' excess returns are negatively correlated. Mechanism: momentum buys what has risen (often expensive), value buys what has fallen (often cheap), so they hold opposite stocks; momentum crashes are sharp reversals into beaten-down stocks, which is exactly when value pays. The combination earns a premium from diversification even if value's own premium is ~0 (as found in 21060772/f99af81f). Falsifier: if the quarterly excess returns of the value and momentum sleeves are not clearly negatively correlated in-sample (rho > -0.2), the diversification case fails here and the combo is just a diluted momentum book. Constants: 12-1 month lookback (252 minus 21 trading days), quintiles, quarterly, 50/50. Parameters: 1 (metric).",
+    "source": "book",
+    "source_detail": "Ilmanen, Expected Returns (2011), value chapter: value and momentum negatively correlated, so the combination beats either; Asness, Moskowitz & Pedersen (2013) 'Value and Momentum Everywhere'; Jegadeesh & Titman (1993) for 12-1 momentum. Follows rejected value ideas 21060772 and f99af81f.",
+    "status": "rejected",
+    "strategy": "sp500_value",
+    "run_keys": [
+      "c71c2487dcdbd2b5",
+      "c72e3a676d133503",
+      "3bfdff0c1a9ce5d0",
+      "9a7366ee9dd5848f"
+    ],
+    "verdict": "Rejected in-sample (2011-2021, S&P 500, survivor-biased yfinance-only data). The diversification half of the claim holds: value and momentum quintiles' quarterly excess returns correlate -0.55 (long-short -0.73); momentum's worst quarters (Q3/Q4 2020) were value's best (+10-15%), and 50/50 cuts excess vol from 2.6-4.5 to ~1.9%/qtr and the worst quarter from -6/-14% to -4.7%. But neither sleeve had a premium here: momentum top quintile -0.54%/qtr vs EW quarterly-rebalanced, -0.08%/mo (t -0.5) monthly; value ~0 (ideas 21060772, f99af81f). Combining two ~zero-premium sleeves gives a low-tracking-error ~zero premium: backtests mom 11.6% CAGR / Sharpe 0.70, 50/50 bp+mom 11.1% / 0.68, 50/50 ibp_org+mom 11.5% / 0.71, vs EW 16.1% / 0.93 (3 trials). Holdout untouched. Large-cap US 2011-2021 may simply be the wrong place: AMP's evidence is long-short across many markets and asset classes.",
+    "tags": [
+      "equities",
+      "value",
+      "momentum",
+      "cross-sectional",
+      "sp500"
+    ],
+    "created_at": "2026-10-15T10:44:15.363392+00:00",
+    "updated_at": "2026-10-15T10:53:37.046637+00:00"
+  },
+  {
+    "id": "6f4f38e2",
+    "title": "S&P 500 volatile-dip limit buy: >3% down day in an uptrend, limit 0.9 ATR(5) below, short-hold rebound exit",
+    "hypothesis": "Claim: within the point-in-time S&P 500 calendar universe on daily bars, a stock above its 200-day SMA that closes down >3% vs the prior close (signal day) with 100*ATR(5)/Close > 3, bought next day with a limit order 0.9*ATR(5) below the signal-day close, rebounds within days: exit on the first close above the previous day's high, or at a profit target of the previous close + 0.5*ATR(5) (from the day after entry), or after 10 trading days. When several signals compete for capital in one pool, take the highest ATR(5)/Close first. Net of costs it beats (a) the equal-weight universe and (b) random entries on random uptrend days held with the same exits. Mechanism: in an established uptrend a sharp one- or two-day selloff is mostly liquidity-driven (forced or impatient sellers, stop cascades, de-risking, overreaction to news), not information that breaks the trend. Liquidity providers who buy that capitulation are paid a short-term reversal premium. The deeper limit entry buys only on days the selling extends into a second session, which is when the premium is largest, and the ATR scaling makes 'deep' comparable across names. The high-volatility ranking concentrates on the names where the overshoot is largest. Counter: the short-term reversal premium has decayed since the 1990s and is concentrated in small, illiquid names, so S&P 500 large caps may be too efficient. A dip that continues through a limit that sits far below the close is adverse selection: fills happen most often on the days the news is real (earnings misses), so the falling-knife tail must be measured, not assumed away. Mean-reversion edges are short-vol and lose in crashes (2008, 2020, 2022). Testing hazards: survivorship (use the sp500 calendar universe with delisted names kept); limit fills (OHLC-touch fills at the limit when low <= limit, but a gap down below the limit should fill at the open, ADR-0004, and touch-only fills flatter the result, so also measure fills that need the low to trade through by a tick); the 'previous close + 0.5 ATR' target is ambiguous (the entry day's close vs the signal close), so pin one; earnings gaps; the many fixed constants (3%, 3 vol, 0.9, 0.5, 10 days, 200 SMA) are book values to be hard-coded, not tuned, and at most one (the limit depth) is a declared Parameter. Protocol: choose on an early window, score a later window once, 2x costs, random-entry baseline with identical exits, regime split (2008/2020/2022). Note: analyze on universe runs measures only trades/validation/regime/gate today, so costs/params/oos need the event-study or a per-symbol path.",
+    "source": "other",
+    "source_detail": "user-supplied rule set (pasted article text, original author unstated; Connors/Alvarez-style short-term mean reversion; source text names Nasdaq 100, tested here on S&P 500)",
+    "status": "validated",
+    "strategy": "dip_buy_sp500",
+    "run_keys": [
+      "9a4033697a743c49",
+      "ee8902705d645df2"
+    ],
+    "verdict": "2026-10-15: edge looks real, ready to forward test (not deployable). Book rule untuned (depth 0.9). Study w/ ATR/close ranking: IS 2011-22 991 trades +0.90%/trade t6.5 Sharpe 0.93; holdout 2023-26 451 trades +0.99% t4.4 Sharpe 1.22 (2x costs 1.10); random uptrend entries ~0. Engine (no ranking) IS Sharpe 0.83 tier deployable PSR 0.996; holdout Sharpe 0.83 tier credible. Depth 0.6-1.2 plateau. 15/16 years positive. 11 IS trials, 3 holdout touches. Unmeasured on universe runs: costs/params/oos/walkforward/baseline/regime axes (substituted by research/dip_buy/dip_study.py). Biggest threat: ~300 delisted ever-members missing from yfinance (survivor bias, falling knives). See research/dip_buy/FINDINGS.md.",
+    "tags": [
+      "mean-reversion",
+      "equities",
+      "daily",
+      "universe"
+    ],
+    "created_at": "2026-10-15T11:23:07.631539+00:00",
+    "updated_at": "2026-10-15T11:43:10.232822+00:00"
   }
 ]
