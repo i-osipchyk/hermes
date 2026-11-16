@@ -10,6 +10,11 @@ Hermes is a bar-based backtesting framework aimed at being driven by an AI resea
 | `docs/adr/` | The load-bearing decisions. Cite them when behaviour hinges on one. |
 | `src/hermes/__init__.py` | The complete public inventory (163 names). If it's in Hermes, it's importable from `hermes`. |
 
+**In progress: the agentic research pipeline.** Not implemented yet, so don't assume any of it
+exists in code. Start at `docs/pipeline-design.md`; the audit that precedes it is
+`docs/audit-2026-11.md` (open findings, F1 is a look-ahead in coarser-timeframe References);
+phase 2 is `docs/phase-2-validation-plan.md`; decisions are ADR-0012 to 0014.
+
 ## Environment
 
 Use the project venv — `.venv/bin/python`, and `.venv/bin/hermes` for the CLI. Extras
