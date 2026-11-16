@@ -1,0 +1,8 @@
+{
+  "source": "pepperstone",
+  "tickers": [
+    "US500", "US2000", "GER40", "UK100", "JPN225", "AUS200", "HK50", "EUSTX50",
+    "XAUUSD", "XAGUSD", "XPTUSD",
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"
+  ]
+}
