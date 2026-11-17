@@ -128,8 +128,8 @@ Never pushes.
 3. **Memory and state** — richer idea records, the state machine. **Implemented**; plan and
    as-built notes in [phase-3-memory-and-state-plan.md](phase-3-memory-and-state-plan.md), decision
    in ADR-0017.
-4. **Roles and the single-idea pipeline**, including the advisor cost estimate. Plan (not yet
-   implemented) in [phase-4-roles-and-pipeline-plan.md](phase-4-roles-and-pipeline-plan.md); ADR-0018 reserved.
+4. **Roles and the single-idea pipeline**, including the advisor cost estimate. **Implemented**; plan and as-built
+   notes in [phase-4-roles-and-pipeline-plan.md](phase-4-roles-and-pipeline-plan.md), decision in ADR-0018.
 5. **Test of the workflow** — one real raw idea from backlog to verdict with no human input beyond
    parked approvals; a crash resumes from files; planted-answer ideas (one bogus, one real) as a
    regression check on the validation.

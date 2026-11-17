@@ -247,6 +247,24 @@ Everything one iteration needs to know about an idea in one command (`hermes pip
 **Reads Log**:
 `research/ideas/<id>/reads.jsonl`, written when `HERMES_IDEA` is set: what the idea looked at. A targeted read of another idea's results (`show`, `analyze`, `trials`, `pipeline context`) makes that idea's trial clusters count against this one whether or not it was declared in `informed_by`; listings (`runs`, `ideas`) are logged but not counted.
 
+**Role**:
+One of the agents in the research pipeline — Researcher (Opus), Quant (Sonnet), Validator (Opus), Developer (Sonnet), Mechanical (Haiku) — defined by a file in `src/hermes/research/roles/` (model, tool allow/deny lists, skills, what it may write, standing prompt). The role a process runs as is `HERMES_ROLE`; artifact and idea guards read it.
+
+**Driver**:
+`hermes pipeline run <id>`: a loop around `next_action` that performs one [[step]] at a time for one idea and keeps no state of its own beyond `run.jsonl`. It verifies what a role wrote instead of trusting its exit code, retries twice, then parks; it never waits on the owner and never decides.
+
+**Step**:
+One unit of the driver's loop, named by `next_action` (`write_spec`, `review_plan`, `run_variants`, `validate`, …). A *role step* is run by an agent; a *transition step* (`mark_quantified`, `reject_idea`, `unlock_holdout`, …) is a library call the driver makes itself.
+
+**Role Runner**:
+The one seam between the [[driver]] and an agent: `ClaudeCodeRunner` launches a headless `claude -p` with the role's model, tools and environment; `ScriptedRunner` stands in for it in tests.
+
+**Extension**:
+A Developer branch (`dev/<idea>-<n>`, built in its own git worktree) that adds a missing capability to an idea in `needs_infra`. Classified mechanically from its diff as `dev_merge` or `engine_semantics`, merged locally only on an owner [[approval]] after both gates are re-run. At most three per idea.
+
+**Advisor Estimate**:
+The computed cost range of running an AI Advisor over a variant (signals × tokens per call × llmkit's price, minus cached signals), carried on an `advisor` [[approval]]. An unpriced model cannot be approved; a run needs `--advisor-approval` and stops when the high figure is spent.
+
 **Thesis**:
 `research/thesis.md`: what the whole backlog has taught — what survived, what failed by `failure.kind`, recurring mechanisms, open questions, next hypotheses. Written only by the Strategist; due when five ideas have lessons newer than it, or the queue is empty.
 

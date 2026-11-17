@@ -1,6 +1,6 @@
 # Phase 4 — roles and the single-idea pipeline: implementation plan
 
-Status: **plan only; decisions confirmed by the owner (2026-11-17, "sounds good"), ready to implement.** Read
+Status: **implemented** (branch `feat/phase-4-roles-and-pipeline`; see "As built" at the end for where the code differs from this plan). Decisions confirmed by the owner (2026-11-17, "sounds good"). Read
 [pipeline-design.md](pipeline-design.md) first, then [ADR-0014](adr/0014-research-pipeline-roles-state-and-approvals.md)
 and [phase-3-memory-and-state-plan.md](phase-3-memory-and-state-plan.md) (its "As built" section
 lists what this phase plugs into). Phases 1–3 are on `master`.
@@ -315,3 +315,44 @@ Trigger: a role records `needs_infra` with `failure.detail` naming the missing c
 - Whether the Validator should be a different *model family* from the Quant as well as a
   different session. Proposed: same Opus/Sonnet split as agreed; revisit if the planted-answer
   tests show correlated mistakes.
+
+## As built (deviations and open items)
+
+- **Spikes** are recorded in ADR-0018. The headless flags exist as planned; there is **no per-run
+  turn cap**, so bounds are the step/attempt limits and `HERMES_ROLE_TIMEOUT`. The token-limit
+  behaviour **could not be provoked**: detection is by message, a miss is a failed step. F13 was
+  reproduced and fixed (integer parameters stay integer in the walk-forward grid).
+- **`next_action`** gained: `driver` as a role for transition steps (`reject_idea`,
+  `unlock_holdout`, `resume_from_infra`), a plan-not-locked check in `testing` (an amended plan is
+  reviewed before any run), and a send-back loop (a plan with Validator objections goes to the
+  Quant, not back to review).
+- **The Validator's `review_plan`** can approve *or* write objections; both verify. The mechanical
+  refusal is `validate_plan` (now including "no more than half the variants on one axis"), applied
+  by the driver before the Validator is invoked and again by `approve_plan`.
+- **Validation** got `recommendation`, `recommendation_reason`, `candidate_run`, `rationale`,
+  `override_reason`, `failure` and `plan_check`. The store enforces "verdict no more permissive than
+  the recommendation" and restores the computed fields from the filled file. The recommendation is
+  `reject` (holdout failed, no positive cluster, or the cluster budget spent with the gate
+  failing), `continue` (an axis not measured, gate failing with budget left, undeclared reads) or
+  `ready_for_unlock`.
+- **Sealing** is a read-only file mode *plus* a store check (an atomic replace ignores the mode).
+- **Advisor estimate**: the signal count comes from an advisor-off run's trades (or `--signals`);
+  tokens per call from ledger `llm_log` history, else given by the caller (`source: given`). The
+  **5-call live sample is not implemented**. `--advisor-approval` is enforced for runs with an idea
+  or a role; a human run with neither is unchanged. Spend is checked *before* a run, so one run can
+  overshoot the high figure; the next one parks a new approval.
+- **Developer flow**: files touched and classification come from `git diff base...branch`; the
+  Developer only records `adds`/`tests` (`hermes pipeline extension`). Test counts and ruff output on
+  the approval are the gate output captured at submit. `ENGINE_PATHS` also lists the pipeline's own
+  guard modules. Worktrees live in `../.hermes_worktrees/<repo>/`. The merge is wired into
+  `hermes pipeline answer`, so only the CLI merges.
+- **Acceptance tests** map to: 1/2/3/9/10 `tests/test_driver.py`; 4/5 `tests/test_driver_guards.py`,
+  `tests/test_validation_guard.py`, `tests/test_variants.py`; 6 `tests/test_validation_fill.py`;
+  7 `tests/test_advisor_estimate.py`, `tests/test_pipeline_driver_cli.py`; 8 `tests/test_dev_flow.py`,
+  `tests/test_driver_devflow.py`. The "planted real / planted bogus idea" end-to-end through real
+  backtests is phase 5; here `ready_for_unlock` and `reject` are exercised on fixture analyses.
+- **Not done / open**: the real `claude` runner has never been run in anger (only its command line
+  and result parsing are tested); `hermes-research`'s holdout was already 20%; the Researcher's
+  unrestricted web access is as proposed (links are recorded, not restricted); queue selection and
+  the Strategist remain phase 6.
+

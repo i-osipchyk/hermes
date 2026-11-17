@@ -12,12 +12,15 @@ Hermes is a bar-based backtesting framework aimed at being driven by an AI resea
 
 **In progress: the agentic research pipeline.** Not implemented yet, so don't assume any of it
 exists in code. Start at `docs/pipeline-design.md`; the audit that precedes it is
-`docs/audit-2026-11.md` (fix-status table at the top; F13/F17 are accepted risks);
+`docs/audit-2026-11.md` (fix-status table at the top; F17 is an accepted risk; F13 was fixed in phase 4);
 phase 2 is `docs/phase-2-validation-plan.md` and phase 3
 (`docs/phase-3-memory-and-state-plan.md`) is implemented: idea transitions are guarded in the
 library (ADR-0017), per-idea artifacts live in `research/ideas/<id>/`, and `hermes pipeline`
-is the read/answer side. Don't hand-edit `ideas.json` statuses. Decisions are ADR-0012 to 0014
-and 0017.
+is the read/answer side. Phase 4 (`docs/phase-4-roles-and-pipeline-plan.md`) is implemented too:
+`hermes pipeline run <id>` is the driver (ADR-0018), roles are files in
+`src/hermes/research/roles/`, and the agent boundary is `RoleRunner` (tests use a scripted one,
+never a real agent). Don't hand-edit `ideas.json` statuses or sealed artifacts. Decisions are
+ADR-0012 to 0014, 0017 and 0018.
 
 ## Environment
 
@@ -63,7 +66,7 @@ Two rules about the review:
 Before calling anything done, both of these must pass:
 
 ```bash
-.venv/bin/python -m pytest          # ~825 tests, offline, ~20s
+.venv/bin/python -m pytest          # ~925 tests, offline, ~20s
 .venv/bin/python -m ruff check .     # clean across the whole repo
 ```
 

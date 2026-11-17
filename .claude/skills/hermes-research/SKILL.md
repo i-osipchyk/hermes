@@ -47,12 +47,19 @@ You run **unattended**, so you get a leash and you say what it is. It has three 
   reports **effective trials**, including the clusters of any idea this one drew on
   (`hermes ideas set <id> --informed-by <other>`: declare it honestly, undeclared reading is
   how a search launders trials). The deflated Sharpe uses that number. Report it.
-- **Build budget: ~15 variants** (default; the user may set it), and **≤ 3 tunable
-  Parameters** in any variant. Hard-coded economic constants (a session open, a
+- **Test plan and cluster budget.** Before the first run you write `plan.json` (pipeline: the
+  Quant), the Validator approves and locks it, and every scored run carries
+  `--idea <id> --variant <variant id>`. A variant changes one *structural* axis (entry, exit,
+  regime filter, instrument, timeframe, horizon) — a parameter nudge is not a variant, and a
+  plan whose variants mostly share an axis is refused. The plan's `max_clusters` replaces the
+  old ~15-variant cap: `hermes run --variant` refuses to start a cluster past it (a
+  `--diagnostic` stays free), and another variant is a reviewed amendment
+  (`hermes pipeline amend-plan`). **≤ 3 tunable Parameters** in any variant. Hard-coded economic constants (a session open, a
   round-number level, a 14-day lookback) are not knobs. Scale the budget to the idea: a
   rich one earns more, but say so in your first message.
 
-State all three, then work. Stop per §6. If you hit the budget without a verdict, say
+State all three, then work. (Run by the pipeline, the Quant role follows this skill and the
+Validator — not you — decides continue or reject; see `hermes-pipeline`.) Stop per §6. If you hit the budget without a verdict, say
 so and report what you learned — "inconclusive after N trials, here is where the edge
 seems to live" is a real result.
 
