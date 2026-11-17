@@ -340,6 +340,11 @@ class IdeaBook:
             return idea
         raise KeyError(target.id)
 
+    @property
+    def ideas_dir(self) -> Path:
+        """Where each idea's artifacts live (``holdout_dir`` is the older name for it)."""
+        return self.holdout_dir
+
     def legal_targets(self, idea: Idea) -> frozenset[str]:
         """The statuses an idea may move to from where it is (edges only, not the rules)."""
         return _targets(idea)
@@ -356,6 +361,8 @@ class IdeaBook:
         if to not in _targets(was):
             raise IllegalTransition(f"{idea.id}: {before} → {to} is not a legal transition "
                                     f"(from {before}: {', '.join(sorted(_targets(was))) or 'none'})")
+        if before not in ("parked", "awaiting_approval"):    # resuming is not re-judged
+            self._require_artifacts(idea, to)
         if to == "validated" and not self._holdout_passed(idea.id):
             raise IllegalTransition(
                 f"{idea.id}: validated is earned, not asserted — no passed holdout on record "
@@ -375,6 +382,26 @@ class IdeaBook:
         if to == "needs_infra" and not (idea.failure or {}).get("detail"):
             raise IllegalTransition(
                 f"{idea.id}: needs_infra must name the missing capability (failure.detail)")
+
+    def _require_artifacts(self, idea: Idea, to: str) -> None:
+        from .artifacts import ArtifactStore, validate_plan, validate_spec, variants_hash
+
+        store = ArtifactStore(self.ideas_dir)
+        if to == "quantified":
+            spec = store.read(idea.id, "spec")
+            problems = ["no spec.json"] if spec is None else validate_spec(spec)
+            if problems:
+                raise IllegalTransition(f"{idea.id}: quantified needs a valid spec.json "
+                                        f"({store.path(idea.id, 'spec')}): " + "; ".join(problems))
+        if to == "testing":
+            plan = store.read(idea.id, "plan")
+            ok = (plan is not None and plan.review.get("approved") is True
+                  and plan.locked_hash == variants_hash(plan.variants)
+                  and not validate_plan(plan))
+            if not ok:
+                raise IllegalTransition(
+                    f"{idea.id}: testing needs a reviewed, locked plan.json "
+                    f"({store.path(idea.id, 'plan')}) — the Validator approves it first")
 
     def _holdout_passed(self, idea_id: str) -> bool:
         path = self.holdout_dir / idea_id / "holdout.json"

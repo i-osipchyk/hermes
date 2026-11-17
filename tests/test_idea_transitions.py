@@ -18,6 +18,7 @@ from hermes.research.ideas import (
     IdeaBook,
     IllegalTransition,
 )
+from tests.artifact_helpers import ready_for_testing
 
 FAILURE = {"kind": "no_edge", "assumption": "momentum persists", "detail": ""}
 
@@ -63,6 +64,8 @@ def test_every_legal_edge_passes_and_is_recorded(book, src, dst):
     idea = _at(book, src)
     if src == "awaiting_approval":
         book._save([_with(book._load()[0], resume_status=dst)])
+    if dst in ("quantified", "testing"):
+        ready_for_testing(book.ideas_dir, idea.id)
     done = book.update(idea.id, status=dst, reason="because", **_changes(dst))
 
     assert done.status == dst
@@ -107,6 +110,7 @@ def test_the_graph_has_no_edge_out_of_rejected():
 
 def test_a_parked_idea_resumes_where_it_was(book):
     idea = _at(book, "raw")
+    ready_for_testing(book.ideas_dir, idea.id)
     book.update(idea.id, status="quantified")
     book.update(idea.id, status="parked", reason="blocked")
     with pytest.raises(IllegalTransition):

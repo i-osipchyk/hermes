@@ -388,6 +388,12 @@ def ideas(tmp_path):
     return ["--ideas-file", str(tmp_path / "ideas.json")]
 
 
+def _earned_dir(ideas):
+    from pathlib import Path
+
+    return Path(ideas[1]).parent / "holdouts_dir"
+
+
 def _earned(ideas, idea_id):
     """Record a passed holdout for the idea (what `hermes holdout unlock` writes), and return
     the argv that points `ideas set` at it — `validated` is earned, not asserted (ADR-0012)."""
@@ -401,8 +407,13 @@ def _earned(ideas, idea_id):
 
 def _walk(ideas, idea_id, capsys, *statuses):
     """Move an idea along legal edges, the way a session would."""
+    from tests.artifact_helpers import ready_for_testing
+
+    holdouts = _earned_dir(ideas)
+    ready_for_testing(holdouts, idea_id)
     for status in statuses:
-        assert main(["ideas", "set", idea_id, "--status", status, *ideas, "--json"]) == EXIT_OK
+        assert main(["ideas", "set", idea_id, "--status", status, *ideas,
+                     "--holdout-dir", str(holdouts), "--json"]) == EXIT_OK
         capsys.readouterr()
 
 

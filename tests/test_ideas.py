@@ -12,6 +12,7 @@ import json
 import pytest
 
 from hermes.research.ideas import SOURCES, STATUSES, Idea, IdeaBook
+from tests.artifact_helpers import ready_for_testing
 
 
 @pytest.fixture
@@ -24,6 +25,7 @@ FAIL = {"kind": "no_edge", "assumption": "it drifts"}
 
 def _validate(book, idea_id):
     """Walk an idea to `validated` the only way there is: through a passed holdout."""
+    ready_for_testing(book.ideas_dir, idea_id)
     for status in ("quantified", "coded", "testing"):
         book.update(idea_id, status=status)
     d = book.holdout_dir / idea_id
@@ -65,11 +67,12 @@ def test_a_fresh_book_is_empty_not_an_error(tmp_path):
 
 def test_update_moves_an_idea_through_the_pipeline(book):
     i = book.add("ema cross", source="trader")
+    ready_for_testing(book.ideas_dir, i.id)
     book.update(i.id, status="quantified", hypothesis="fast over slow continues")
     book.update(i.id, status="coded")
     book.update(i.id, status="testing", strategy="ema_crossover")
     d = book.holdout_dir / i.id
-    d.mkdir(parents=True)
+    d.mkdir(parents=True, exist_ok=True)
     (d / "holdout.json").write_text('{"state": "done", "passed": true}')
     done = book.update(i.id, status="validated", verdict="survives costs and OOS")
 
@@ -131,6 +134,7 @@ def test_remove_deletes_only_the_target(book):
 def test_filters_narrow_the_backlog(book):
     book.add("a", source="book", tags=["fx"])
     q = book.add("b", source="trader", tags=["eq"])
+    ready_for_testing(book.ideas_dir, q.id)
     book.update(q.id, status="quantified")
 
     assert [i.title for i in book.list(status="raw")] == ["a"]

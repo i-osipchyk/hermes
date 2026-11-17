@@ -143,8 +143,13 @@ def _out(capsys):
 
 def _to_testing(lab, capsys, idea):
     """The unlock is only for an idea that is `testing`; walk the legal edges there."""
+    from tests.artifact_helpers import ready_for_testing
+
+    out = lab["tmp"] / "ideas_out"
+    ready_for_testing(out, idea)
     for status in ("quantified", "coded", "testing"):
-        assert main(["ideas", "set", idea, "--status", status, *lab["ideas"], "--json"]) == EXIT_OK
+        assert main(["ideas", "set", idea, "--status", status, *lab["ideas"],
+                     "--holdout-dir", str(out), "--json"]) == EXIT_OK
         capsys.readouterr()
 
 
@@ -338,7 +343,7 @@ def test_a_failed_holdout_does_not_license_validated(lab, capsys):
     idea = _new_idea(lab, capsys)
     _to_testing(lab, capsys, idea)
     d = lab["tmp"] / "ideas_out" / idea
-    d.mkdir(parents=True)
+    d.mkdir(parents=True, exist_ok=True)
     (d / "holdout.json").write_text(json.dumps({"state": "done", "passed": False}))
     assert _set(lab, capsys, idea, "--status", "validated")[0] == EXIT_ERR
 
@@ -347,7 +352,7 @@ def test_a_passed_holdout_licenses_validated(lab, capsys):
     idea = _new_idea(lab, capsys)
     _to_testing(lab, capsys, idea)
     d = lab["tmp"] / "ideas_out" / idea
-    d.mkdir(parents=True)
+    d.mkdir(parents=True, exist_ok=True)
     (d / "holdout.json").write_text(json.dumps({"state": "done", "passed": True}))
     assert _set(lab, capsys, idea, "--status", "validated")[0] == EXIT_OK
     assert _status(lab, capsys, idea)["status"] == "validated"

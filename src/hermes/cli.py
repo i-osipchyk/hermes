@@ -1178,8 +1178,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="an idea whose results this one drew on; its trial "
                                 "clusters count against this idea (repeatable)")
             q.add_argument("--tag", action="append", default=[])
-            q.add_argument("--holdout-dir", default="research/ideas",
-                           help="where <idea>/holdout.json lives (default: research/ideas)")
+            q.add_argument("--ideas-dir", "--holdout-dir", dest="holdout_dir",
+                           default="research/ideas",
+                           help="where <idea>/spec.json, plan.json, holdout.json … live "
+                                "(default: research/ideas)")
         elif name == "rm":
             q.add_argument("id", help="idea id, or a unique prefix")
         else:
