@@ -160,3 +160,25 @@ def test_equity_curve_non_empty():
     assert len(pr.result.equity_curve) > 0
     # Curve starts at or near starting_cash (no open positions yet at bar 0).
     assert pr.result.equity_curve[0][1] == pytest.approx(10_000.0, abs=1.0)
+
+
+# --- F15: a leg the source could not serve is reported, not silently dropped ---
+
+def test_a_leg_with_no_data_is_reported_as_skipped_with_coverage():
+    with pytest.warns(UserWarning, match="Skipping"):
+        pr = PortfolioBacktest(
+            legs=[_leg("AAA", _winning_bars()), _leg("GONE", [])], starting_cash=10_000,
+        ).run()
+    assert pr.skipped == ["binance:GONE"]
+    assert pr.legs_requested == 2
+    assert pr.coverage == 0.5
+    assert set(pr.per_symbol) == {"binance:AAA"}
+
+
+def test_full_coverage_when_every_leg_has_data():
+    pr = PortfolioBacktest(
+        legs=[_leg("AAA", _winning_bars()), _leg("BBB", _winning_bars())], starting_cash=10_000,
+    ).run()
+    assert pr.skipped == []
+    assert pr.legs_requested == 2
+    assert pr.coverage == 1.0

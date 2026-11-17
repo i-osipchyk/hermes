@@ -20,7 +20,7 @@ from ..core import Symbol, Timeframe
 from ..data import MultiTimeframeView
 from ..execution import Account, CostModel, SimulatedVenue
 from ..indicators import Indicator
-from .engine import Backtest, _as_utc
+from .engine import Backtest, _as_utc, _ref_lag, _seed_forming
 from .result import BacktestResult
 
 
@@ -53,6 +53,17 @@ class PortfolioResult:
 
     result: BacktestResult
     per_symbol: dict[str, list] = field(default_factory=dict)  # ticker str -> list[Trade]
+    # Legs the source returned no bars for. They are absent from ``per_symbol``; a universe
+    # that quietly loses its delisted names is survivorship bias coming back (audit F15).
+    skipped: list[str] = field(default_factory=list)
+    legs_requested: int = 0
+
+    @property
+    def coverage(self) -> float | None:
+        """Share of requested legs that actually ran (``None`` if unknown)."""
+        if not self.legs_requested:
+            return None
+        return (self.legs_requested - len(self.skipped)) / self.legs_requested
 
     def summary_rows(self) -> list[dict]:
         """One headline row per symbol: trade count, win-rate, net P&L."""
@@ -107,9 +118,11 @@ class PortfolioBacktest:
         all_states = [self._wire(leg, account, self.unconstrained) for leg in self.legs]
         kept_legs: list = []
         leg_states: list[_LegState] = []
+        skipped: list[str] = []
         for leg, ls in zip(self.legs, all_states):
             if not ls.bars:
                 import warnings
+                skipped.append(str(leg.symbol))
                 warnings.warn(f"Skipping {leg.symbol}: no data found in cache.", stacklevel=2)
             else:
                 kept_legs.append(leg)
@@ -155,8 +168,8 @@ class PortfolioBacktest:
             # Advance reference feeds for this leg up to now (no look-ahead).
             # Also update reference indicators for any newly closed bars.
             for i, feed in enumerate(ls.ref_feeds):
-                rv, rb, ptr = feed
-                while ptr < len(rb) and rb[ptr].timestamp <= ts:
+                rv, rb, ptr, lag = feed
+                while ptr < len(rb) and rb[ptr].timestamp <= ts - lag:
                     rv.push(rb[ptr])
                     ptr += 1
                 feed[2] = ptr
@@ -203,7 +216,7 @@ class PortfolioBacktest:
                     ls.closed_counts[tf] = len(closed)
                 # Precompute reference indicators, mirroring engine.py.
                 for i, feed in enumerate(ls.ref_feeds):
-                    rv, rb, ptr = feed
+                    rv, rb, ptr, _lag = feed
                     rtf = ls.ref_tf_indicators[i]
                     rc = ls.ref_closed_counts[i]
                     for tf, inds in rtf.items():
@@ -211,6 +224,10 @@ class PortfolioBacktest:
                         for ind in inds:
                             ind.precompute(closed)
                         rc[tf] = len(closed)
+                # ...then the Forming Bar, as every later step would (audit F18).
+                _seed_forming(ls.view, ls.tf_to_indicators)
+                for i, feed in enumerate(ls.ref_feeds):
+                    _seed_forming(feed[0], ls.ref_tf_indicators[i])
                 ls.strategy._current_bar = bar
                 ls.strategy.on_start()
             else:
@@ -273,7 +290,8 @@ class PortfolioBacktest:
             vetoed_signals=all_vetoed,
             periods_per_year=max(periods) if periods else None,
         )
-        return PortfolioResult(result=result, per_symbol=per_symbol)
+        return PortfolioResult(result=result, per_symbol=per_symbol, skipped=skipped,
+                               legs_requested=len(self.legs))
 
     # --- internal wiring -------------------------------------------------------
 
@@ -345,7 +363,7 @@ class PortfolioBacktest:
         ref_feeds = []
         for _ref, ref_view, ref_inst, ref_source, ref_base in ref_resolved:
             rb = [b for b in ref_source.history(ref_inst, ref_base, lead_start, end) if b.timestamp <= end]
-            ref_feeds.append([ref_view, rb, 0])
+            ref_feeds.append([ref_view, rb, 0, _ref_lag(base, ref_base)])
 
         return _LegState(
             strategy=strat, venue=venue, view=view,

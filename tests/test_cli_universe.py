@@ -207,12 +207,12 @@ def test_analyze_a_universe_run_reports_unmeasured_axes_as_such(project, capsys)
     common, runs = project
     main(["run", "buyhold", "--universe", "pair", *common, "--json"])
     key = _json(capsys)["run_key"]
-    assert main(["analyze", key, *common, "--axes", "trades,costs,oos", "--json"]) == EXIT_OK
+    assert main(["analyze", key, *common, "--axes", "trades,costs,oos,null", "--json"]) == EXIT_OK
     d = _json(capsys)
     by = {a["axis"]: a for a in d["axes"]}
-    assert [a["axis"] for a in d["axes"]] == ["trades", "costs", "oos"]
+    assert [a["axis"] for a in d["axes"]] == ["trades", "costs", "oos", "null"]
     assert by["trades"]["ran"] is True
-    for axis in ("costs", "oos"):
+    for axis in ("costs", "oos", "null"):
         assert by[axis]["ran"] is False
         assert "universe" in by[axis]["error"]
     assert json.loads((runs / key / "analysis.json").read_text()) == d
@@ -241,3 +241,112 @@ def test_discover_keeps_universe_only_files_out_of_the_single_symbol_list(projec
     assert [e.name for e in discover()] == ["buyhold"]
     working, _ = discover_all()
     assert {e.name for e in working} == {"buyhold", "buyhold_own"}
+
+
+# --- F2/F3: the key covers what the universe was made of --------------------
+
+def test_editing_the_ticker_list_is_a_different_run(project, capsys, tmp_path):
+    common, _ = project
+    main(["run", "buyhold", "--universe", "pair", *common, "--json"])
+    first = _json(capsys)["run_key"]
+    (tmp_path / "tickers" / "pair.json").write_text(json.dumps(["AAA", "CCC"]))
+    main(["run", "buyhold", "--universe", "pair", *common, "--json"])
+    second = _json(capsys)
+    assert second["run_key"] != first
+    assert second["from_cache"] is False
+
+
+def test_starting_cash_is_part_of_a_universe_run_identity(project, capsys):
+    common, _ = project
+    main(["run", "buyhold", "--universe", "pair", *common, "--cash", "10000", "--json"])
+    a = _json(capsys)["run_key"]
+    main(["run", "buyhold", "--universe", "pair", *common, "--cash", "20000", "--json"])
+    assert _json(capsys)["run_key"] != a
+
+
+def test_a_universe_whose_default_end_is_now_still_hits_the_cache(project, capsys, tmp_path):
+    common, _ = project
+    open_ended = SINGLE.replace("end=T0 + timedelta(hours=59),", "end=datetime.now(timezone.utc),")
+    (tmp_path / "strategies" / "buyhold.py").write_text(open_ended)
+    main(["run", "buyhold", "--universe", "pair", *common, "--json"])
+    first = _json(capsys)
+    main(["run", "buyhold", "--universe", "pair", *common, "--json"])
+    second = _json(capsys)
+    assert second["from_cache"] is True and second["run_key"] == first["run_key"]
+
+
+# --- F15: coverage ---------------------------------------------------------------
+
+GAPPY = SINGLE.replace('"CCC": 20.0}', '"CCC": 20.0, "ZZZ": 0.0}').replace(
+    "for i in range(60)]", "for i in range(60 if base else 0)]")
+
+
+@pytest.fixture
+def gappy(project, tmp_path):
+    (tmp_path / "strategies" / "buyhold_gappy.py").write_text(GAPPY)
+    (tmp_path / "tickers" / "gappy.json").write_text(json.dumps(["AAA", "BBB", "ZZZ"]))
+    return project
+
+
+def test_a_universe_run_reports_the_legs_it_could_not_run(gappy, capsys):
+    common, runs = gappy
+    with pytest.warns(UserWarning, match="Skipping"):
+        main(["run", "buyhold_gappy", "--universe", "gappy", *common, "--json"])
+    d = _json(capsys)
+    assert d["legs_requested"] == 3
+    assert d["skipped"] == ["memory:ZZZ"]
+    assert d["coverage"] == pytest.approx(2 / 3)
+    stored = json.loads((runs / d["run_key"] / "universe_meta.json").read_text())
+    assert stored["skipped"] == ["memory:ZZZ"] and stored["legs_requested"] == 3
+
+
+def test_coverage_survives_the_ledger_and_shows_in_human_output(gappy, capsys):
+    common, _ = gappy
+    with pytest.warns(UserWarning):
+        main(["run", "buyhold_gappy", "--universe", "gappy", *common, "--json"])
+    key = _json(capsys)["run_key"]
+    main(["show", key, *common])
+    out = capsys.readouterr().out
+    assert "coverage" in out and "67%" in out and "ZZZ" in out
+
+
+def test_full_coverage_is_stated_too(project, capsys):
+    common, _ = project
+    main(["run", "buyhold", "--universe", "pair", *common, "--json"])
+    d = _json(capsys)
+    assert d["coverage"] == 1.0 and d["skipped"] == []
+
+
+@pytest.mark.filterwarnings("ignore:Skipping")
+def test_analyze_caps_the_validation_tier_when_coverage_is_thin(gappy, capsys):
+    common, _ = gappy
+    with pytest.warns(UserWarning):
+        main(["run", "buyhold_gappy", "--universe", "gappy", *common, "--json"])
+    key = _json(capsys)["run_key"]
+    main(["analyze", key, *common, "--axes", "validation", "--json"])
+    axes = {a["axis"]: a for a in _json(capsys)["axes"]}
+    note = axes["validation"]["note"]
+    assert "coverage" in note and "67%" in note
+    assert axes["validation"]["data"]["universe_coverage"] == pytest.approx(2 / 3)
+
+
+def test_a_universe_run_key_follows_its_constituents_data_epoch(project, capsys, tmp_path):
+    common, _ = project
+    epoch = tmp_path / "epoch.txt"
+    epoch.write_text("e1")
+    with_epoch = SINGLE.replace("class BuyAndHold", (
+        "from pathlib import Path\n"
+        f"EPOCH = Path({str(epoch)!r})\n"
+        "class EpochSource(MultiSource):\n"
+        "    def data_epoch(self, ticker):\n"
+        "        return EPOCH.read_text() + ticker\n\n"
+        "class BuyAndHold")).replace("source=MultiSource()", "source=EpochSource()")
+    (tmp_path / "strategies" / "buyhold.py").write_text(with_epoch)
+    main(["run", "buyhold", "--universe", "pair", *common, "--json"])
+    a = _json(capsys)
+    main(["run", "buyhold", "--universe", "pair", *common, "--json"])
+    assert _json(capsys)["from_cache"] is True
+    epoch.write_text("e2")
+    main(["run", "buyhold", "--universe", "pair", *common, "--json"])
+    b = _json(capsys)
+    assert b["from_cache"] is False and b["run_key"] != a["run_key"]

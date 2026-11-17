@@ -185,3 +185,92 @@ def test_restored_result_exposes_no_trade_objects():
 def test_run_meta_label_is_human_readable():
     assert _meta().label == "ema_crossover · AAPL · 2021-01-01–2023-12-31"
     assert "sp500" in _meta(ticker=None, universe="sp500").label
+
+
+# --- F2: every input that changes a result is part of the key -----------------
+
+_BASE = dict(strategy="s", strategy_hash="h", source="yfinance", ticker="AAPL",
+             universe=None, start="2021-01-01", end="2023-12-31", params={},
+             sizer="None", unconstrained=False)
+
+
+def test_key_is_sensitive_to_starting_cash():
+    assert cache_key(starting_cash=10_000, **_BASE) != cache_key(starting_cash=50_000, **_BASE)
+
+
+def test_key_is_sensitive_to_the_advisor_and_the_constituent_universe():
+    k = cache_key(**_BASE)
+    assert cache_key(advisor="deepseek-chat", **_BASE) != k
+    assert cache_key(advisor="deepseek-chat", **_BASE) != cache_key(advisor="claude-x", **_BASE)
+    assert cache_key(universe_hash="aaaa", **_BASE) != cache_key(universe_hash="bbbb", **_BASE)
+
+
+def test_key_changes_when_the_engine_code_changes(monkeypatch):
+    from hermes.research import ledger
+
+    monkeypatch.setattr(ledger, "engine_fingerprint", lambda: "engine-v1")
+    k1 = cache_key(**_BASE)
+    monkeypatch.setattr(ledger, "engine_fingerprint", lambda: "engine-v2")
+    assert cache_key(**_BASE) != k1
+
+
+def test_engine_fingerprint_follows_the_package_source(tmp_path):
+    from hermes.research.ledger import engine_fingerprint
+
+    (tmp_path / "backtest").mkdir()
+    f = tmp_path / "backtest" / "engine.py"
+    f.write_text("a = 1\n")
+    (tmp_path / "ai").mkdir()          # not part of the simulation
+    ai = tmp_path / "ai" / "x.py"
+    ai.write_text("b = 1\n")
+    before = engine_fingerprint(tmp_path)
+    ai.write_text("b = 2\n")
+    assert engine_fingerprint(tmp_path) == before
+    f.write_text("a = 2\n")
+    assert engine_fingerprint(tmp_path) != before
+
+
+def test_the_real_engine_fingerprint_is_stable_within_a_process():
+    from hermes.research.ledger import engine_fingerprint
+
+    assert engine_fingerprint() == engine_fingerprint()
+
+
+def test_editing_a_sibling_module_a_variant_loads_invalidates_it(tmp_path):
+    base = tmp_path / "base.py"
+    base.write_text("x = 1\n")
+    variant = tmp_path / "variant.py"
+    variant.write_text(
+        "from pathlib import Path\n"
+        "BASE = Path(__file__).with_name('base.py')\n"
+    )
+    h1 = strategy_hash(variant)
+    base.write_text("x = 2\n")
+    assert strategy_hash(variant) != h1
+
+
+def test_a_missing_sibling_does_not_break_hashing(tmp_path):
+    v = tmp_path / "v.py"
+    v.write_text("p = Path(__file__).with_name('gone.py')\n")
+    assert strategy_hash(v)
+
+
+def test_circular_siblings_terminate(tmp_path):
+    (tmp_path / "a.py").write_text("Path(__file__).with_name('b.py')\n")
+    (tmp_path / "b.py").write_text("Path(__file__).with_name('a.py')\n")
+    assert strategy_hash(tmp_path / "a.py")
+
+
+def test_a_file_without_siblings_keeps_its_plain_content_hash(tmp_path):
+    import hashlib
+
+    f = tmp_path / "s.py"
+    f.write_text("x = 1\n")
+    assert strategy_hash(f) == hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+
+
+def test_key_is_sensitive_to_the_data_epoch():
+    """F16/G6: the same strategy over data adjusted differently is a different run."""
+    assert cache_key(data_epoch="total:aaaa", **_BASE) != cache_key(data_epoch="total:bbbb", **_BASE)
+    assert cache_key(data_epoch="total:aaaa", **_BASE) != cache_key(data_epoch="split:aaaa", **_BASE)
+    assert cache_key(data_epoch=None, **_BASE) == cache_key(**_BASE)

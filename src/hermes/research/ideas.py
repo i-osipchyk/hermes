@@ -62,6 +62,9 @@ class Idea:
     run_keys: list[str] = field(default_factory=list)
     verdict: str = ""              # why it was validated or rejected
     tags: list[str] = field(default_factory=list)
+    # Ideas whose results this one actually drew on — each one's trial clusters inherit
+    # into this idea's effective trials (ADR-0013). The agent's declaration.
+    informed_by: list[str] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
 
@@ -173,7 +176,7 @@ class IdeaBook:
         return idea
 
     def update(self, id_or_prefix: str, **changes: object) -> Idea:
-        """Change fields on an idea. ``run_keys`` and ``tags`` are appended, not replaced."""
+        """Change fields on an idea. ``run_keys``, ``tags`` and ``informed_by`` are appended, not replaced."""
         target = self.get(id_or_prefix)
         if "status" in changes and changes["status"] not in STATUSES:
             raise ValueError(
@@ -186,7 +189,7 @@ class IdeaBook:
             for k, v in changes.items():
                 if v is None:
                     continue
-                if k in ("run_keys", "tags"):
+                if k in ("run_keys", "tags", "informed_by"):
                     existing = getattr(idea, k)
                     for item in (v if isinstance(v, list) else [v]):
                         if item not in existing:

@@ -33,13 +33,20 @@ the trial count**, not in a small iteration budget.
 
 You run **unattended**, so you get a leash and you say what it is. It has three parts:
 
-- **Holdout, fixed up front.** Reserve the most recent ~30% of history (or a sibling
-  instrument, if the idea is meant to generalise) and do not look at it while exploring.
-  All diagnosis and tuning happen on the rest. Touch the holdout once per candidate you
-  intend to report, and count each touch.
-- **Trial counter.** Every distinct variant you *score* is a trial. Keep the count in the
-  notes and report it; judge the winner against it (deflated Sharpe, `analyze`'s
-  validation axis). Diagnosis (§4) is not a trial — it scores nothing, it explains.
+- **Holdout, enforced.** Hermes reserves the last 20% of each instrument's history (at
+  least 6 months), frozen in `research/holdouts.json`, and **research runs cannot read it**:
+  a request past it raises `HoldoutViolation`, and a run with no `--end` stops where the
+  holdout starts. You do not hold yourself to it — the data layer does. If the history is
+  too short to carve one, the idea is capped at `exploratory` and cannot be validated; say
+  so rather than working around it. The holdout is read **once per idea**, by
+  `hermes holdout unlock` (§5), and each look makes the next idea's bar higher.
+- **Trial counter.** Pass `--idea <id>` on every variant you *score*; that is a trial. A
+  run that explains without selecting (a sweep, a dissection re-run) takes `--diagnostic`
+  and is not counted. `hermes trials <id>` groups trials into **clusters** — a variant that
+  barely moves the return stream or the entry days is the same bet, not a new one — and
+  reports **effective trials**, including the clusters of any idea this one drew on
+  (`hermes ideas set <id> --informed-by <other>`: declare it honestly, undeclared reading is
+  how a search launders trials). The deflated Sharpe uses that number. Report it.
 - **Build budget: ~15 variants** (default; the user may set it), and **≤ 3 tunable
   Parameters** in any variant. Hard-coded economic constants (a session open, a
   round-number level, a 14-day lookback) are not knobs. Scale the budget to the idea: a
@@ -102,7 +109,7 @@ Climb it in order; each rung is cheap relative to the one above and kills most c
 before you pay for the next.
 
 ```bash
-.venv/bin/hermes run <name> --note "<what this variant tests>"     # --note is not optional
+.venv/bin/hermes run <name> --idea <id> --note "<what this variant tests>"   # --note is not optional
 .venv/bin/hermes analyze <run-key>                                 # the cheap seven
 .venv/bin/hermes analyze <run-key> --axes walkforward              # fitted params, out of sample
 ```
@@ -122,7 +129,16 @@ before you pay for the next.
    - the `costs` axis is the third: an edge that exists only at zero costs is an artifact.
 3. **Out of sample** — `oos` for the cheap split, `walkforward` when parameters were
    fitted. The stitched OOS number is the only one worth quoting.
-4. **Forward testing** — the rung Hermes **cannot** give you. A backtest, however clean,
+4. **Deflation and the null** — two opt-in axes that ask whether the winner is luck *given
+   the search*:
+   - `hermes analyze <key> --axes deflation` is the deflated Sharpe over the idea's
+     effective trials. It is `ran: false` for a run with no `--idea` or under 10 trades:
+     report that as not measured.
+   - `hermes analyze <key> --axes null` replays the same trades at a random time through
+     the engine and ranks the observed Sharpe against it. A p-value near 0.5 means the
+     *timing* carries no information. Single-symbol, rule-based runs only.
+5. **The holdout** — see §5. It is the last look, not a rung you climb repeatedly.
+6. **Forward testing** — the rung Hermes **cannot** give you. A backtest, however clean,
    has seen all its data; the honest next step is paper or minimum size and comparing
    realised fills to the backtest over the same window. Hermes has no live venue
    (ADR-0001: the seam exists, the adapter does not), so say this explicitly in the
@@ -177,9 +193,16 @@ information about the mechanism: ask why it failed before building the next one.
 
 Stop and report when **any** of these is true:
 
-1. **The rubric holds.** Survives 1x and 2x costs, holds on the holdout, adequate sample
-   size, not purely regime-dependent, and the gate (if any) was clean. → *the edge looks
-   real*, with the caveats the axes raised.
+1. **The rubric holds.** Survives 1x and 2x costs, adequate sample size, not purely
+   regime-dependent, and the gate (if any) was clean. Then earn the look:
+   `hermes holdout check <id> --run-key <key>` measures the in-sample gate (tier at least
+   `credible`, deflated Sharpe ≥ 0.9, null p < 0.05; an unmeasurable check fails) and burns
+   nothing. Only when it passes, `hermes holdout unlock <id> --run-key <key>` runs the
+   **frozen** strategy once on the holdout. It passes with the same Sharpe sign, at least 10
+   trades and a PSR that rises with every earlier look at that instrument. A pass makes the
+   idea `validated`; a fail makes it `rejected` as `holdout_failed`. **There is no second
+   look**, even if you change the strategy afterwards. → *the edge looks real*, with the
+   caveats the axes raised.
 2. **The rubric rules it out** — e.g. profitable only at zero costs, or the entire P&L is
    one trade — **and the dissection (§4b) found no mechanism-backed pocket** that a
    faithful variant could isolate. Rejecting without having dissected is not allowed:
@@ -224,7 +247,8 @@ Deliver, in this order:
 5. **What you'd do next**, and what you deliberately did not do (and why — budget,
    money, scope).
 6. **Where it sits in the pipeline** — update the backlog
-   (`hermes ideas set <id> --status validated|rejected --verdict "…" --run-key …`), and
+   (`hermes ideas set <id> --status rejected --verdict "…" --run-key …`; `validated` is
+   set by a passed `hermes holdout unlock` and refused by hand), and
    if it survived, say that **step 4 is next**: a validated strategy is a candidate for a
    portfolio, not a portfolio. Route to `hermes-portfolio` to check whether it actually
    adds anything to what already exists.

@@ -10,6 +10,11 @@ Hermes is a bar-based backtesting framework aimed at being driven by an AI resea
 | `docs/adr/` | The load-bearing decisions. Cite them when behaviour hinges on one. |
 | `src/hermes/__init__.py` | The complete public inventory (163 names). If it's in Hermes, it's importable from `hermes`. |
 
+**In progress: the agentic research pipeline.** Not implemented yet, so don't assume any of it
+exists in code. Start at `docs/pipeline-design.md`; the audit that precedes it is
+`docs/audit-2026-11.md` (fix-status table at the top; F13/F17 are accepted risks);
+phase 2 is `docs/phase-2-validation-plan.md`; decisions are ADR-0012 to 0014.
+
 ## Environment
 
 Use the project venv — `.venv/bin/python`, and `.venv/bin/hermes` for the CLI. Extras
@@ -54,7 +59,7 @@ Two rules about the review:
 Before calling anything done, both of these must pass:
 
 ```bash
-.venv/bin/python -m pytest          # ~435 tests, offline, ~3.5s
+.venv/bin/python -m pytest          # ~585 tests, offline, ~16s
 .venv/bin/python -m ruff check .     # clean across the whole repo
 ```
 
@@ -104,6 +109,13 @@ name missing there is a capability the agent will believe doesn't exist.
 **Parameter discipline.** `metrics.parameter_adjusted_sharpe` = Sharpe × √((n_trades − k)/n_trades)
 where k = declared `Parameter` count. Target ≤ 3 for a first version. Prefer a hard-coded
 economic constant over an extra tunable knob.
+
+**The holdout is enforced, not promised.** `hermes run`/`analyze` read through `HoldoutSource`
+(ADR-0012): a request past an instrument's holdout raises `HoldoutViolation`, and a run with
+no `--end` stops at the holdout start. Don't work around it — `hermes holdout unlock` is the
+one sanctioned look, once per idea, and `validated` is set only by a passed unlock. Pass
+`--idea <id>` on runs you score and `--diagnostic` on ones that only explain, so
+`hermes trials` can count them (ADR-0013).
 
 **Look-ahead is the cardinal sin.** Indicators see closed history plus the current Forming Bar
 and nothing else (ADR-0002); fills are next-open / OHLC-touch with Stop-first on a clash

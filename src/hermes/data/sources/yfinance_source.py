@@ -22,7 +22,9 @@ from zoneinfo import ZoneInfo
 
 from ...core import Bar, Instrument, SessionCalendar, Stock, Symbol, Timeframe
 from .._ssl import ensure_system_trust
+from ..adjustments import AdjustmentEvent, yfinance_rows_to_raw
 from ..cache import BarCache, checked_through, complete_bars
+from ..raw_daily import RawDailyMixin
 from ..source import DataSource
 
 _INTERVAL = {
@@ -34,7 +36,7 @@ _US_SESSION = SessionCalendar(
 )
 
 
-class YFinanceSource(DataSource):
+class YFinanceSource(RawDailyMixin, DataSource):
     name = "yfinance"
 
     def __init__(
@@ -43,7 +45,9 @@ class YFinanceSource(DataSource):
         session: SessionCalendar = _US_SESSION,
         shortable: bool = False,
         leverage: float = 1.0,
+        adjust: str = "total",
     ):
+        self._init_adjust(adjust)
         self.cache = cache or BarCache()
         self.session = session
         self.shortable = shortable
@@ -55,6 +59,15 @@ class YFinanceSource(DataSource):
     def history(
         self, instrument: Instrument, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[Bar]:
+        if self._uses_raw_path(timeframe):
+            raw = self._raw_cache
+            if raw.is_nodata(instrument, timeframe):
+                return []
+            existed = raw._path(instrument, timeframe).exists()
+            bars = self._history_raw_daily(instrument, timeframe, start, end)
+            if not bars and not existed:
+                raw.mark_nodata(instrument, timeframe)
+            return bars
         if self.cache.is_nodata(instrument, timeframe):
             return []
         file_existed = self.cache._path(instrument, timeframe).exists()
@@ -76,6 +89,34 @@ class YFinanceSource(DataSource):
         return {Timeframe.parse(t) for t in _INTERVAL}
 
     # --- internals -------------------------------------------------------------
+
+    def _fetch_raw_daily(
+        self, ticker: str, start: datetime, end: datetime
+    ) -> tuple[list[Bar], list[AdjustmentEvent]]:
+        """Daily bars as printed + corporate-action events (ADR-0016). yfinance's
+        unadjusted prices are still split-restated, so they are un-split here."""
+        ensure_system_trust()
+        try:
+            import yfinance as yf
+        except ImportError as e:  # pragma: no cover
+            raise ImportError("YFinanceSource needs 'yfinance'. pip install 'hermes[yfinance]'.") from e
+
+        t = yf.Ticker(ticker)
+        df = t.history(start=start, end=end + timedelta(days=1), interval="1d",
+                       auto_adjust=False, actions=True)
+        if df.empty:
+            return [], []
+        df = df.dropna(subset=["Open", "High", "Low", "Close"])
+        rows = []
+        for ts, row in df.iterrows():
+            when = ts.to_pydatetime()
+            when = (when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC))
+            rows.append({"ts": when, "open": row["Open"], "high": row["High"],
+                         "low": row["Low"], "close": row["Close"], "volume": row["Volume"],
+                         "dividend": row.get("Dividends", 0.0)})
+        splits = [(ts.date(), float(r)) for ts, r in t.splits.items() if r and r > 0]
+        bars, events = yfinance_rows_to_raw(rows, Timeframe.parse("1d"), splits)
+        return complete_bars(bars, Timeframe.parse("1d")), events
 
     def _fetch(self, ticker: str, timeframe: Timeframe, start: datetime, end: datetime) -> list[Bar]:
         ensure_system_trust()  # trust the OS store (corporate proxies) before any fetch

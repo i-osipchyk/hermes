@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import random
+import statistics
 from dataclasses import asdict, dataclass
 
 from .result import BacktestResult, _annualisation  # reuse existing helper
@@ -50,6 +51,11 @@ TIER_UNKNOWN = "unknown"              # no history span available to judge
 TIER_EXPLORATORY = "exploratory"      # a view, not a conclusion
 TIER_CREDIBLE = "credible"            # worth real work and out-of-sample testing
 TIER_DEPLOYABLE = "deployable"        # enough evidence to risk capital on
+
+# A universe run that lost legs (no data from the source) is a biased sample: delisted
+# names are the ones most likely to be missing. Below these coverages the tier is capped.
+COVERAGE_DEPLOYABLE = 0.95   # below: cannot be deployable
+COVERAGE_CREDIBLE = 0.80     # below: cannot exceed exploratory
 
 CREDIBLE_TRADES, CREDIBLE_YEARS = 100, 2.0
 DEPLOYABLE_TRADES, DEPLOYABLE_YEARS = 500, 5.0
@@ -75,10 +81,10 @@ class MetricsCI:
 
 @dataclass(slots=True)
 class MonteCarloStats:
-    """Distribution of equity-curve outcomes when trade order is randomised.
+    """Distribution of equity-curve outcomes when the trades are resampled.
 
-    Derived by permuting the sequence of per-trade fractional returns and
-    compounding from the original starting equity.
+    Derived by bootstrapping (drawing with replacement) the per-trade fractional
+    returns and compounding from the original starting equity.
     """
     n_simulations: int
     end_equity_p5: float    # 5th-percentile final equity
@@ -113,7 +119,8 @@ class StatValidation:
     probabilistic_sharpe: float | None  # P(SR > 0) corrected for non-normality
     sample_quality: SampleQuality
     deflated_sharpe: float | None = None   # DSR: P(true SR > SR*) correcting for n_trials
-    min_trl: int | None = None             # min observations for measured SR to be significant
+    # min observations (trades, else bars) for the measured SR to be significant
+    min_trl: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -149,6 +156,7 @@ def validate(
     level: float = 0.95,
     seed: int | None = 42,
     n_trials: int = 1,
+    trial_sharpes: list[float] | None = None,
 ) -> StatValidation:
     """Compute statistical validation for a completed BacktestResult.
 
@@ -159,7 +167,10 @@ def validate(
     n_mc:        Number of Monte Carlo trade-reorder simulations.
     level:       Confidence level (default 0.95 → 95 % CI).
     seed:        RNG seed for reproducibility (None = non-deterministic).
-    n_trials:    Number of independent strategy variants tested (for DSR correction).
+    n_trials:    Effective number of independent trials (for DSR correction; ADR-0013).
+    trial_sharpes: Per-observation (per-trade) Sharpes of the trial clusters'
+                 representatives. Their dispersion sets the DSR threshold; with fewer than two
+                 the dispersion falls back to this run's own Sharpe standard error.
     """
     rng = random.Random(seed)
     trades = result.trades
@@ -170,10 +181,14 @@ def validate(
         equity_curve, trades, n_bootstrap, level, rng, result.steps_per_year
     )
     mc = _monte_carlo(trades, equity_curve, n_mc, rng) if trades else None
-    psr = _probabilistic_sharpe(equity_curve)
+    rets = _inference_returns(trades, equity_curve)
+    psr = _probabilistic_sharpe(rets)
     sq = _sample_quality(metrics, result.equity_curve)
-    dsr = _deflated_sharpe(equity_curve, n_trials)
-    min_trl = _min_trl(equity_curve, level)
+    trial_std = (
+        statistics.stdev(trial_sharpes) if trial_sharpes and len(trial_sharpes) >= 2 else None
+    )
+    dsr = _deflated_sharpe(rets, n_trials, trial_std)
+    min_trl = _min_trl(rets, level)
 
     return StatValidation(
         ci=ci,
@@ -294,11 +309,19 @@ def _trade_bootstrap(trades, n: int, level: float, alpha: float, rng: random.Ran
 # ── Monte Carlo trade-reorder ─────────────────────────────────────────────────
 
 def _monte_carlo(trades, equity_curve, n: int, rng: random.Random) -> MonteCarloStats | None:
-    """Permute trade-return sequence N times and report the equity distribution.
+    """Resample the trade returns with replacement N times; report the equity distribution.
 
     Each trade's fractional return = net_pnl / equity_at_entry.  This is
     looked up from the equity curve (same as the batch combined_equity_curve
-    approach). Permuted returns are then compounded from the starting equity.
+    approach). Each simulation draws as many trades as the run had, *with
+    replacement*, and compounds them from the starting equity.
+
+    Shuffling the same trades (no replacement) was tried first and is useless for the
+    end-equity statistics: compounding is order-invariant, so every path ended at the
+    same equity and ``prob_profit`` was 1.0 for any profitable run (audit F4). Only the
+    drawdown varied with order. Resampling changes *which* trades occur, so the end
+    equity and ``prob_profit`` now reflect how much the result depends on the trades
+    that happened to be drawn.
     """
     if not equity_curve:
         return None
@@ -324,11 +347,10 @@ def _monte_carlo(trades, equity_curve, n: int, rng: random.Random) -> MonteCarlo
     max_dds: list[float] = []
 
     for _ in range(n):
-        perm = list(frac_returns)
-        rng.shuffle(perm)
+        draw = rng.choices(frac_returns, k=len(frac_returns))
         eq = start_eq
         path = [eq]
-        for r in perm:
+        for r in draw:
             eq *= 1.0 + r
             path.append(eq)
         end_equities.append(path[-1])
@@ -350,23 +372,57 @@ def _monte_carlo(trades, equity_curve, n: int, rng: random.Random) -> MonteCarlo
     )
 
 
+# Below this many trades the per-trade series is too short to estimate skew/kurtosis;
+# inference falls back to per-bar returns.
+MIN_TRADES_FOR_TRADE_LEVEL_INFERENCE = 10
+
+
+def _trade_returns(trades, equity_curve) -> list[float]:
+    """Each trade's fractional return: ``net_pnl / equity at entry``."""
+    if not equity_curve:
+        return []
+    times = [ts for ts, _ in equity_curve]
+    out: list[float] = []
+    for t in trades:
+        if t.entry_time is None or t.net_pnl is None:
+            continue
+        eq = _equity_at(equity_curve, t.entry_time, times)
+        if eq > 0:
+            out.append(t.net_pnl / eq)
+    return out
+
+
+def _inference_returns(trades, equity_curve) -> list[float]:
+    """The return series the Sharpe-significance statistics (PSR, DSR, MinTRL) run on.
+
+    Per-bar returns are not independent observations: a position held for many bars
+    accrues smoothly, so bars are strongly autocorrelated and flat stretches inflate the
+    count. Measured with zero edge and 20-100-bar holds, ``PSR > 0.95`` fired 34-47% of
+    the time on bar returns against ~5% (nominal) on trade returns (audit F5). Trades
+    are the independent unit, so use them once there are enough; otherwise fall back to
+    bars.
+    """
+    tr = _trade_returns(trades, equity_curve)
+    if len(tr) >= MIN_TRADES_FOR_TRADE_LEVEL_INFERENCE:
+        return tr
+    equities = [e for _, e in equity_curve]
+    return [equities[i] / equities[i - 1] - 1.0 for i in range(1, len(equities))
+            if equities[i - 1] > 0]
+
+
 # ── Probabilistic Sharpe Ratio ────────────────────────────────────────────────
 
-def _probabilistic_sharpe(equity_curve) -> float | None:
+def _probabilistic_sharpe(rets: list[float]) -> float | None:
     """P(SR > 0) corrected for non-normality of returns (Lopez de Prado 2012).
 
     PSR(0) = Φ[ (ŜR × √(n−1)) / √(1 − γ₃·ŜR + (γ₄−1)/4·ŜR²) ]
 
-    where ŜR is the per-step Sharpe (not annualised), γ₃ is skewness of
-    per-bar returns, γ₄ is excess kurtosis, and n is the number of return
-    observations.  A value near 1 means the Sharpe is unlikely to be a
-    sampling artefact; near 0.5 means indistinguishable from noise.
+    where ŜR is the per-observation Sharpe (not annualised), γ₃ is skewness of the
+    returns, γ₄ is excess kurtosis, and n is the number of return observations —
+    trades when there are enough, else bars (see :func:`_inference_returns`).
+    A value near 1 means the Sharpe is unlikely to be a sampling artefact; near 0.5
+    means indistinguishable from noise.
     """
-    if len(equity_curve) < 10:
-        return None
-
-    equities = [e for _, e in equity_curve]
-    rets = [equities[i] / equities[i - 1] - 1.0 for i in range(1, len(equities)) if equities[i - 1] > 0]
     if len(rets) < 10:
         return None
 
@@ -430,6 +486,34 @@ def _evidence_tier(n: int, years: float | None) -> tuple[str, str]:
     return (TIER_EXPLORATORY,
             f"{n} trades over {years:.1f}y is exploratory — too few {short} "
             f"to conclude anything (needs {need} to be credible).")
+
+
+def cap_tier_for_coverage(
+    tier: str, reason: str, coverage: float | None,
+) -> tuple[str, str]:
+    """Lower an evidence tier when a universe run lost legs. Never raises a tier, and
+    leaves ``unknown`` alone. ``coverage=None`` (not a universe run, or unrecorded)
+    changes nothing."""
+    if coverage is None or coverage >= COVERAGE_DEPLOYABLE or tier == TIER_UNKNOWN:
+        return tier, reason
+    order = [TIER_EXPLORATORY, TIER_CREDIBLE, TIER_DEPLOYABLE]
+    ceiling = TIER_EXPLORATORY if coverage < COVERAGE_CREDIBLE else TIER_CREDIBLE
+    if order.index(tier) <= order.index(ceiling):
+        return tier, reason
+    return ceiling, (f"{reason} Capped at {ceiling}: only {coverage:.0%} of the universe's "
+                     f"legs had data, so survivorship bias may be back.")
+
+
+def cap_tier_for_holdout(
+    tier: str, reason: str, holdout_carved: bool | None,
+) -> tuple[str, str]:
+    """Without a carved holdout nothing was ever held out of the search, so the evidence
+    cannot exceed ``exploratory`` (ADR-0012). ``None`` (unknown) changes nothing."""
+    if holdout_carved is not False or tier in (TIER_UNKNOWN, TIER_EXPLORATORY):
+        return tier, reason
+    return (TIER_EXPLORATORY,
+            f"no holdout could be carved (history too short): capped at exploratory "
+            f"(otherwise {tier}). {reason}")
 
 
 def _sample_quality(metrics, equity_curve=None) -> SampleQuality:
@@ -581,7 +665,7 @@ def _expected_max_sharpe(n_trials: int, sr_std: float = 1.0) -> float:
 
 
 def _deflated_sharpe(
-    equity_curve, n_trials: int = 1, trial_sharpe_std: float | None = None
+    rets: list[float], n_trials: int = 1, trial_sharpe_std: float | None = None
 ) -> float | None:
     """Deflated Sharpe Ratio: P(true SR > SR*) correcting for multiple trials.
 
@@ -590,11 +674,6 @@ def _deflated_sharpe(
     we only hold one run) it falls back to the standard error of this run's own
     Sharpe estimator, which is the conventional substitute.
     """
-    if len(equity_curve) < 10:
-        return None
-
-    equities = [e for _, e in equity_curve]
-    rets = [equities[i] / equities[i - 1] - 1.0 for i in range(1, len(equities)) if equities[i - 1] > 0]
     if len(rets) < 10:
         return None
 
@@ -626,13 +705,8 @@ def _deflated_sharpe(
     return _norm_cdf(z)
 
 
-def _min_trl(equity_curve, confidence: float = 0.95) -> int | None:
+def _min_trl(rets: list[float], confidence: float = 0.95) -> int | None:
     """Minimum Track Record Length: bars needed for measured SR to be significant."""
-    if len(equity_curve) < 10:
-        return None
-
-    equities = [e for _, e in equity_curve]
-    rets = [equities[i] / equities[i - 1] - 1.0 for i in range(1, len(equities)) if equities[i - 1] > 0]
     if len(rets) < 10:
         return None
 

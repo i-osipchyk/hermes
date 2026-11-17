@@ -371,3 +371,105 @@ def test_validate_differs_with_different_seeds():
     # on tiny datasets — check that at least CI bounds are present.
     assert sv1.ci.win_rate is not None
     assert sv2.ci.win_rate is not None
+
+
+# --- F15: thin universe coverage caps the evidence tier ---------------------------
+
+def test_low_coverage_caps_the_evidence_tier():
+    from hermes.backtest.validation import (
+        TIER_CREDIBLE,
+        TIER_DEPLOYABLE,
+        TIER_EXPLORATORY,
+        TIER_UNKNOWN,
+        cap_tier_for_coverage,
+    )
+
+    # complete or unmeasured coverage leaves the tier alone
+    assert cap_tier_for_coverage(TIER_DEPLOYABLE, "r", None) == (TIER_DEPLOYABLE, "r")
+    assert cap_tier_for_coverage(TIER_DEPLOYABLE, "r", 1.0) == (TIER_DEPLOYABLE, "r")
+    # a few missing legs: not deployable
+    tier, why = cap_tier_for_coverage(TIER_DEPLOYABLE, "r", 0.9)
+    assert tier == TIER_CREDIBLE and "90%" in why
+    # many missing legs: exploratory at best
+    tier, why = cap_tier_for_coverage(TIER_DEPLOYABLE, "r", 0.5)
+    assert tier == TIER_EXPLORATORY and "50%" in why
+    # a cap never raises a tier
+    assert cap_tier_for_coverage(TIER_EXPLORATORY, "r", 0.9)[0] == TIER_EXPLORATORY
+    # unknown stays unknown (it is not a finding either way)
+    assert cap_tier_for_coverage(TIER_UNKNOWN, "r", 0.5)[0] == TIER_UNKNOWN
+
+
+# ── F4: the Monte Carlo end-equity distribution must carry information ─────────
+
+def test_monte_carlo_end_equity_is_not_degenerate():
+    """Permuting trade order cannot change compounded end equity, so p5=p50=p95 and
+    prob_profit=1 for any profitable run. Resampling trades with replacement can."""
+    result = _make_result([30, -25, 20, -22, 28, -26, 24, -20] * 5)
+    mc = validate(result, n_mc=500, seed=11).monte_carlo
+    assert mc is not None
+    spread = (mc.end_equity_p95 - mc.end_equity_p5) / mc.end_equity_p50
+    assert spread > 0.01, f"end-equity percentiles span only {spread:.2e} of the median"
+
+
+def test_marginal_edge_is_not_reported_as_certain_profit():
+    result = _make_result([30, -25, 20, -22, 28, -26, 24, -20] * 5)
+    assert sum([30, -25, 20, -22, 28, -26, 24, -20] * 5) > 0   # profitable as realised …
+    mc = validate(result, n_mc=500, seed=12).monte_carlo
+    assert mc is not None
+    assert 0.0 < mc.prob_profit < 1.0         # … yet resamples sometimes lose
+
+
+def test_monte_carlo_drawdown_distribution_still_varies():
+    result = _make_result([30, -25, 20, -22, 28, -26, 24, -20] * 5)
+    mc = validate(result, n_mc=500, seed=13).monte_carlo
+    assert mc is not None
+    assert mc.max_drawdown_worst <= mc.max_drawdown_median < 0
+
+
+# ── F5: inference on observations that are actually independent ───────────────
+
+def _held_trades_result(seed: int, n_trades=120, hold=50) -> BacktestResult:
+    """Zero-edge trades, each held `hold` bars with its P&L accruing smoothly bar by bar.
+    The bars are heavily autocorrelated; the trades are independent."""
+    import random
+
+    from hermes.execution.trade import Trade
+
+    rng = random.Random(seed)
+    inst = _btc()
+    equity = 10_000.0
+    curve = [(T0, equity)]
+    trades = []
+    step = timedelta(hours=1)
+    for i in range(n_trades):
+        entry = T0 + step * (i * hold)
+        pnl = rng.gauss(0.0, 0.004) * equity
+        trades.append(Trade(
+            instrument=inst, side=Side.BUY, size=1.0, entry_price=100.0, entry_time=entry,
+            exit_price=100.0 + pnl, exit_time=entry + step * hold,
+            exit_reason="take_profit" if pnl > 0 else "stop_loss", gross_pnl=pnl, costs=0.0,
+        ))
+        for j in range(1, hold + 1):
+            curve.append((entry + step * j, equity + pnl * j / hold))
+        equity += pnl
+    return BacktestResult.compute(curve, trades, num_params=1)
+
+
+def test_psr_is_not_inflated_by_autocorrelated_bars():
+    """With no edge, P(PSR > 0.95) should be near 5%. Treating each of the thousands of
+    smoothly-accruing bars as an independent observation put it near 45%."""
+    runs = 60
+    false_positives = sum(
+        1 for seed in range(runs)
+        if (validate(_held_trades_result(seed), n_bootstrap=10, n_mc=10, seed=0)
+            .probabilistic_sharpe or 0.0) > 0.95
+    )
+    assert false_positives / runs <= 0.15, f"{false_positives}/{runs} zero-edge runs looked significant"
+
+
+def test_min_trl_and_deflated_sharpe_use_the_same_observations():
+    sv = validate(_held_trades_result(1), n_bootstrap=10, n_mc=10, seed=0)
+    # Observations are trades (≤ 120), not the ~6,000 bars.
+    assert sv.min_trl is None or sv.min_trl < 1_000_000
+    assert sv.deflated_sharpe is not None and sv.probabilistic_sharpe is not None
+    assert sv.deflated_sharpe <= sv.probabilistic_sharpe + 1e-9

@@ -494,6 +494,57 @@ print([w.best_params for w in res.windows])         # differ between windows? un
 If the best parameters change window to window, the optimum isn't stable — that's a finding,
 not a nuisance.
 
+### The holdout, trials and the deflated Sharpe
+
+Out of sample is only honest if the data was never looked at while ideas were being chosen.
+An agent that generates many ideas will find a number that looks good if it can look, so
+Hermes takes the choice away (ADR-0012, ADR-0013).
+
+**The holdout is enforced in the data layer.** For each (source, symbol, timeframe) the last
+20% of history, never less than 6 months, is reserved. Its start is frozen at first research
+touch in the committed `research/holdouts.json` and never slides — new data extends the
+holdout. `hermes run` and `hermes analyze` read through a guard: a request past the holdout
+raises `HoldoutViolation` (no clipping, no bypass flag), and a run with no `--end` stops at
+`holdout_start`. With less than 12 months left in-sample no holdout is carved, and the idea
+is capped at `exploratory`.
+
+> **Honest limit.** An agent with a shell can still call a source directly. The guard stops
+> the CLI and the library; it cannot stop a determined reader of the bar cache. Universe
+> runs and reference feeds are not guarded yet.
+
+**Trials and clusters.** Pass `--idea <id>` and each run is a *trial* of that idea;
+`--diagnostic` marks a run that explains rather than selects. `hermes trials <id>` groups an
+idea's trials into **clusters**: a trial joins a cluster when its daily-return correlation is
+≥ 0.9 or its shared (entry day, side) overlap is ≥ 0.8 with the cluster's first trial. Nine
+near-identical variants are one trial. **Effective trials** add the clusters of every idea in
+`informed_by` (`hermes ideas set <id> --informed-by <other>`).
+
+```bash
+hermes run my_strategy --idea 5cf5 --note "baseline"
+hermes trials 5cf5                                    # clusters, effective trials
+hermes analyze <key> --axes deflation                 # DSR over those trials
+hermes analyze <key> --axes null --null-n 200         # same trades, random time
+```
+
+**Spending the look.**
+
+```bash
+hermes holdout check  5cf5 --run-key <key>            # dry run of the in-sample gate
+hermes holdout unlock 5cf5 --run-key <key>            # one look, then it is burned
+```
+
+The gate requires tier ≥ `credible`, deflated Sharpe ≥ 0.9 and null p < 0.05; an unmeasurable
+check fails. `unlock` refuses unless the run belongs to the idea, the strategy file is
+unchanged, a holdout exists and the idea has not looked before — a second unlock is refused
+even if the file changed. It then runs the frozen strategy once. Pass bar: same Sharpe sign as
+in-sample, ≥ 10 trades, and PSR ≥ 1 − 0.2 / (1 + earlier looks at that instrument), i.e. 0.80,
+0.90, 0.93 …: several ideas looking at one holdout is itself multiple testing. A pass sets the
+idea `validated`; a fail sets it `rejected` (`holdout_failed`). `hermes ideas set --status
+validated` is refused without a passed `holdout.json`.
+
+The thresholds are untuned defaults checked only against planted-answer tests (a real effect
+passes; a random signal and an effect that fades before the holdout do not).
+
 ## 3.4 Forward test — ⚠️ not in Hermes
 
 The last rung, and the only one that sees data no backtest could have seen: run the
@@ -657,7 +708,7 @@ to be **investigated** — `hermes-research` owns stages 2 and 3:
 
 > "I think the first pullback after the open holds on index futures. Go find out."
 
-It declares a budget (**6 iterations, ≤ 3 parameters**), checks the ledger for work already
+It declares a budget (a trial count, ≤ 3 parameters), checks the ledger for work already
 done, writes variants, runs and judges each against the rubric, iterates only on what the
 analysis *pointed at*, and stops on an explicit rule:
 
@@ -686,6 +737,10 @@ and **what went unmeasured**.
 | `hermes strategies` | 2 | What's runnable; broken files with their error |
 | `hermes run <name>` | 3 | Run + record. `--note` is effectively mandatory |
 | `hermes run <name> --universe <u>` | 3 | The same over a `tickers/*.json` list or `sp500`, one shared capital pool |
+| `hermes run <name> --idea <id> [--diagnostic]` | 3 | Attribute the run to an idea as a **trial**, or as a diagnostic that is not counted |
+| `hermes trials <idea>` | 3 | Trial clusters and effective trials → `research/ideas/<id>/trials.json` |
+| `hermes holdout check <idea> --run-key <k>` | 3 | Measure the in-sample gate; burns nothing |
+| `hermes holdout unlock <idea> --run-key <k>` | 3 | Spend the idea's single look at the holdout |
 | `hermes runs` | 3 | The research log. **Check before re-running** |
 | `hermes show <key>` | 3 | A stored run; `--trades` for the blotter |
 | `hermes analyze <key\|name>` | 3 | The rubric, computed → `analysis.json` |
@@ -695,7 +750,7 @@ and **what went unmeasured**.
 
 ## Analysis axes
 
-Default seven, cheapest first; two opt-in.
+Default seven, cheapest first; four opt-in.
 
 | Axis | Question | Cost |
 |---|---|---|
@@ -706,6 +761,8 @@ Default seven, cheapest first; two opt-in.
 | `validation` | Distinguishable from luck? Evidence tier? | free |
 | `regime` | Strategy, or bull market? | free |
 | `gate` | Was the AI Advisor actually in effect? | free |
+| `deflation` | Still significant after counting the search? | free (needs `--idea`) |
+| `null` | Does the *timing* of the trades carry information? | **`--null-n` backtests** (default 200) |
 | `walkforward` | Do *fitted* parameters hold out of sample? | **grid × windows** |
 | `baseline` | Does the Advisor beat a weighted coin? | **N backtests** |
 
@@ -750,6 +807,10 @@ than taking the picker down.
 | `REDUNDANT_ABOVE` | 0.7 | `backtest/correlation.py` |
 | `DIVERSIFYING_BELOW` | 0.3 | `backtest/correlation.py` |
 | `MIN_OVERLAP` | 20 | `backtest/correlation.py` |
+| `HOLDOUT_FRACTION` / `MIN_HOLDOUT` / `MIN_IN_SAMPLE` | 20% / 183 d / 365 d | `research/holdout.py` |
+| `CLUSTER_CORR` / `CLUSTER_OVERLAP` | 0.9 / 0.8 | `research/trials.py` |
+| `MIN_DSR` / `MAX_NULL_P` | 0.9 / 0.05 | `research/unlock.py` |
+| `MIN_HOLDOUT_PSR` / `MIN_HOLDOUT_TRADES` | 0.8 / 10 | `research/unlock.py` |
 
 They're defaults, not laws — but change them deliberately and say so in the run's `--note`.
 

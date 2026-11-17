@@ -25,11 +25,14 @@ import argparse
 import json
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
+from .research.holdout import HoldoutSource, HoldoutViolation, base_timeframe
+from .research.jsonsafe import decode_nonfinite, encode_nonfinite
 
 if TYPE_CHECKING:
     from .research.ledger import RunLedger, RunRecord
@@ -45,11 +48,15 @@ EXIT_OK, EXIT_ERR, EXIT_EMPTY = 0, 1, 2
 def _emit(payload: dict, as_json: bool, lines: list[str]) -> None:
     """One JSON document on stdout, or the human lines. Never both."""
     if as_json:
-        json.dump(payload, sys.stdout, indent=2, default=str)
+        json.dump(encode_nonfinite(payload), sys.stdout, indent=2, default=str, allow_nan=False)
         sys.stdout.write("\n")
     else:
         for ln in lines:
             print(ln)
+
+
+def _analysis_json(analysis: Any) -> str:
+    return json.dumps(encode_nonfinite(analysis.to_dict()), indent=2, default=str, allow_nan=False)
 
 
 def _warn(msg: str) -> None:
@@ -154,8 +161,8 @@ def _entry(name: str, directory: str):
 
 def _build(args: argparse.Namespace):
     """A configured Backtest plus the ledger inputs that identify it."""
-    from .research.discovery import configured_backtest, default_config
-    from .research.ledger import cache_key, strategy_hash
+    from .research.discovery import configured_backtest, default_config, stable_end
+    from .research.ledger import advisor_fingerprint, cache_key, source_epoch, strategy_hash
 
     entry = _entry(args.strategy, args.dir)
     defaults = default_config(entry)
@@ -163,14 +170,22 @@ def _build(args: argparse.Namespace):
     ticker = args.symbol or defaults.symbol.ticker
     source_name = args.source or defaults.source.name
     start = _parse_date(args.start) if args.start else defaults.start
-    end = _parse_date(args.end) if args.end else defaults.end
     cash = args.cash if args.cash is not None else defaults.starting_cash
     params = _parse_params(args.param)
 
+    # Research reads go through the holdout guard (ADR-0012); a run that names no end
+    # stops where the holdout starts (this also keeps a default "now" out of the key).
     bt = configured_backtest(
-        entry, ticker=ticker, source_name=source_name, start=start, end=end,
+        entry, ticker=ticker, source_name=source_name, start=start,
+        end=_parse_date(args.end) if args.end else stable_end(defaults.end),
         starting_cash=cash, params=params, unconstrained=args.unconstrained,
     )
+    bt = replace(bt, source=HoldoutSource(bt.source))
+    if not args.end:
+        held = bt.source.holdout_start(bt.symbol, base_timeframe(bt))
+        if held is not None and bt.end > held:
+            bt = replace(bt, end=held)
+    end = bt.end
     key = cache_key(
         strategy=entry.name,
         strategy_hash=strategy_hash(entry.path),
@@ -182,6 +197,9 @@ def _build(args: argparse.Namespace):
         params=params,
         sizer=repr(bt.sizer),
         unconstrained=args.unconstrained,
+        starting_cash=cash,
+        advisor=advisor_fingerprint(bt.advisor),
+        data_epoch=source_epoch(bt.source, ticker),
     )
     return entry, bt, key
 
@@ -202,6 +220,8 @@ def _meta_for(entry, bt, args, params: dict):
         unconstrained=args.unconstrained,
         created_at=datetime.now(UTC).isoformat(),
         note=getattr(args, "note", "") or "",
+        idea=getattr(args, "idea", None),
+        kind="diagnostic" if getattr(args, "diagnostic", False) else "trial",
     )
 
 
@@ -250,6 +270,18 @@ def _universe_lines(uni: dict[str, Any] | None, top: int = 10) -> list[str]:
     traded = [r for r in rows if r.get("trades")]
     out = ["", f"  universe    {uni.get('universe_size', len(rows))} symbols, "
                f"{len(traded)} traded"]
+    coverage = uni.get("coverage")
+    if coverage is None:
+        out.append("  coverage    not recorded (run predates coverage tracking)")
+    else:
+        skipped = uni.get("skipped", [])
+        line = (f"  coverage    {coverage:.0%} "
+                f"({uni['legs_requested'] - len(skipped)}/{uni['legs_requested']} legs had data)")
+        if skipped:
+            shown = ", ".join(skipped[:10]) + (f" … +{len(skipped) - 10}" if len(skipped) > 10
+                                              else "")
+            line += f" — skipped: {shown}"
+        out.append(line)
     if traded:
         out.append(f"  {'symbol':<16} {'trades':>6} {'win %':>7} {'net P&L':>12}")
         shown = traded if len(traded) <= 2 * top else traded[:top] + [None] + traded[-top:]
@@ -285,12 +317,17 @@ def cmd_run_universe(args: argparse.Namespace) -> int:
         _warn(f"running {label} ({ur.size_hint or '?'} symbols) · "
               f"{ur.start.date()}→{ur.end.date()} …")
         universe_result = ur.run(progress_callback=_progress(label))
+        ur = _build_universe(args)      # re-key on the data epoch the run left behind
+        key = ur.key
         pr = universe_result.portfolio_result
         from_cache = False
         uni = {
             "universe_size": universe_result.universe_size,
             "summary_rows": pr.summary_rows(),
             "per_symbol_counts": {k: len(v) for k, v in pr.per_symbol.items()},
+            "legs_requested": pr.legs_requested,
+            "skipped": list(pr.skipped),
+            "coverage": pr.coverage,
         }
         if args.no_save:
             result_dict = pr.result.to_dict()
@@ -304,6 +341,9 @@ def cmd_run_universe(args: argparse.Namespace) -> int:
         "source": ur.source, "start": ur.start.isoformat(), "end": ur.end.isoformat(),
         "from_cache": from_cache, "metrics": m, "note": note,
         "universe_size": uni.get("universe_size"),
+        "legs_requested": uni.get("legs_requested"),
+        "skipped": uni.get("skipped", []),
+        "coverage": uni.get("coverage"),
         "per_symbol": uni.get("summary_rows", []),
     }
     lines = [
@@ -326,6 +366,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
 
     if _is_universe_request(args):
+        if args.idea or args.diagnostic:
+            raise SystemExit("hermes: --idea/--diagnostic are not supported on universe runs yet")
         return cmd_run_universe(args)
     entry, bt, key = _build(args)
     ledger = RunLedger(args.runs_dir)
@@ -333,11 +375,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     cached = None if args.no_cache else ledger.load(key)
     if cached is not None:
         result_dict, from_cache = cached.result, True
+        # One configuration is one ledger row. If it was first run as a diagnostic (or for
+        # no idea) and is now claimed as a trial, count it: undercounting trials flatters
+        # the deflated Sharpe, overcounting only makes it stricter.
+        wants_trial = bool(args.idea) and not args.diagnostic
+        if wants_trial and (cached.meta.kind == "diagnostic" or cached.meta.idea is None):
+            ledger.attribute(key, args.idea, "trial")
     else:
         _warn(f"running {entry.name} · {bt.symbol.ticker} · "
               f"{bt.start.date()}→{bt.end.date()} …")
         result = bt.run()
         result_dict, from_cache = result.to_dict(), False
+        # Fetching may have taught the source a split/dividend: key the run on the data
+        # it actually read, or the next identical request would miss the ledger once.
+        key = _build(args)[2]
         if not args.no_save:
             ledger.save(key, result_dict, _meta_for(entry, bt, args, _parse_params(args.param)),
                         llm_log=getattr(result, "llm_log", None))
@@ -428,6 +479,8 @@ def cmd_show(args: argparse.Namespace) -> int:
     uni = ledger.load_universe_meta(rec.key)
     if uni is not None:
         payload["universe_size"] = uni.get("universe_size")
+        payload["coverage"] = uni.get("coverage")
+        payload["skipped"] = uni.get("skipped", [])
         payload["per_symbol"] = uni.get("summary_rows", [])
         lines.extend(_universe_lines(uni))
     if args.trades:
@@ -472,7 +525,6 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         if _is_universe_request(args):
             return _analyze_universe(args, ledger, axes, None)
 
-    from .research.discovery import configured_backtest, default_config
 
     # `analyze` accepts either a stored run key or a strategy name. A key is richer:
     # it pins the exact window and parameters the run used, so the re-run axes
@@ -486,18 +538,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if run_key:
         rec = ledger.load(run_key)
         strategy_name = rec.meta.strategy
-        entry = _entry(strategy_name, args.dir)
-        defaults = default_config(entry)
-        bt = configured_backtest(
-            entry,
-            ticker=rec.meta.ticker or defaults.symbol.ticker,
-            source_name=rec.meta.source,
-            start=_parse_date(rec.meta.start),
-            end=_parse_date(rec.meta.end),
-            starting_cash=defaults.starting_cash,
-            params=rec.meta.params,
-            unconstrained=rec.meta.unconstrained,
-        )
+        entry, bt = _rebuild(args, rec)
     else:
         args.strategy = args.target
         entry, bt, run_key = _build(args)
@@ -521,12 +562,15 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         bt, result, axes=axes, run_key=run_key, strategy=strategy_name,
         is_frac=args.is_frac, seed=args.seed, baseline_n=args.baseline_n,
         build_backtest=(lambda **kw: bt) if "baseline" in axes else None,
+        deflation=_deflation_inputs(args, ledger, rec) if "deflation" in axes else None,
+        null_n=args.null_n,
+        holdout_carved=_holdout_carved(bt),
     )
 
     if run_key and not args.no_save:
         out = ledger.path / run_key
         if out.exists():
-            (out / "analysis.json").write_text(json.dumps(analysis.to_dict(), indent=2, default=str))
+            (out / "analysis.json").write_text(_analysis_json(analysis))
             _warn(f"wrote {out / 'analysis.json'}")
 
     lines = [f"{strategy_name} · run {run_key}", ""]
@@ -536,9 +580,52 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return EXIT_OK if analysis.ran else EXIT_EMPTY
 
 
+def _rebuild(args: argparse.Namespace, rec: RunRecord, *, guarded: bool = True):
+    """The strategy entry and a fresh Backtest reproducing a stored run's window and
+    parameters. Guarded by default: a stored row may predate the holdout guard."""
+    from .research.discovery import configured_backtest, default_config
+
+    entry = _entry(rec.meta.strategy, args.dir)
+    defaults = default_config(entry)
+    bt = configured_backtest(
+        entry,
+        ticker=rec.meta.ticker or defaults.symbol.ticker,
+        source_name=rec.meta.source,
+        start=_parse_date(rec.meta.start),
+        end=_parse_date(rec.meta.end),
+        starting_cash=defaults.starting_cash,
+        params=rec.meta.params,
+        unconstrained=rec.meta.unconstrained,
+    )
+    return entry, (replace(bt, source=HoldoutSource(bt.source)) if guarded else bt)
+
+
+def _holdout_carved(bt) -> bool | None:
+    """Whether the instrument's history yields a holdout (None when the source is unguarded)."""
+    if bt is None or not isinstance(bt.source, HoldoutSource):
+        return None
+    return bt.source.holdout_start(bt.symbol, base_timeframe(bt)) is not None
+
+
+def _deflation_inputs(args: argparse.Namespace, ledger: RunLedger, rec: RunRecord | None):
+    """The trial count and trial Sharpes behind a run, or None when it belongs to no idea."""
+    from .research.analysis import DeflationInputs
+    from .research.ideas import IdeaBook
+    from .research.trials import TrialRegistry
+
+    if rec is None or not rec.meta.idea:
+        return None
+    registry = TrialRegistry(ledger, IdeaBook(args.ideas_file))
+    try:
+        return DeflationInputs(registry.effective_trials(rec.meta.idea),
+                               registry.representative_sharpes(rec.meta.idea))
+    except LookupError as e:
+        raise SystemExit(f"hermes: run is attributed to idea {rec.meta.idea!r}: {e}") from e
+
+
 # Axes that perturb and re-run one Backtest. A universe run is a PortfolioBacktest over
 # many legs, and nothing re-runs that with perturbed inputs yet.
-_UNIVERSE_UNMEASURED = ("costs", "params", "oos", "walkforward", "baseline")
+_UNIVERSE_UNMEASURED = ("costs", "params", "oos", "null", "walkforward", "baseline")
 
 
 def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[str, ...],
@@ -578,8 +665,10 @@ def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[s
               f"re-running the universe …")
         result = ur.run(progress_callback=_progress(ur.entry.name)).portfolio_result.result
 
+    uni_meta = ledger.load_universe_meta(run_key) or {}
     analysis = analyze(None, result, axes=measurable, run_key=run_key,
-                       strategy=ur.entry.name, seed=args.seed)
+                       strategy=ur.entry.name, seed=args.seed,
+                       coverage=uni_meta.get("coverage"))
     for axis in axes:
         if axis in _UNIVERSE_UNMEASURED:
             why = (f"not measured — {axis} re-runs a perturbed backtest, which is single-symbol "
@@ -590,7 +679,7 @@ def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[s
 
     if not args.no_save and (ledger.path / run_key).exists():
         out = ledger.path / run_key / "analysis.json"
-        out.write_text(json.dumps(analysis.to_dict(), indent=2, default=str))
+        out.write_text(_analysis_json(analysis))
         _warn(f"wrote {out}")
 
     lines = [f"{ur.entry.name} · universe {ur.universe} · run {run_key}", ""]
@@ -603,6 +692,21 @@ def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[s
 # ---------------------------------------------------------------------------
 # ideas — step 1 of the framework
 # ---------------------------------------------------------------------------
+
+def _require_passed_holdout(book, args: argparse.Namespace) -> None:
+    """`validated` is earned on the holdout (ADR-0012), not asserted. `hermes holdout unlock`
+    is what sets it; this stops a hand edit from skipping the look."""
+    try:
+        idea = book.get(args.id)
+    except LookupError as e:
+        raise SystemExit(f"hermes: {e}") from e
+    path = Path(args.holdout_dir) / idea.id / "holdout.json"
+    passed = path.exists() and json.loads(path.read_text()).get("passed") is True
+    if not passed:
+        raise SystemExit(
+            f"hermes: idea {idea.id} cannot be marked validated: no passed holdout on record "
+            f"({path}). Earn it with `hermes holdout check` then `hermes holdout unlock`")
+
 
 def cmd_ideas(args: argparse.Namespace) -> int:
     from .research.ideas import SOURCES, IdeaBook
@@ -628,10 +732,13 @@ def cmd_ideas(args: argparse.Namespace) -> int:
             "status": args.status, "hypothesis": args.hypothesis,
             "strategy": args.strategy, "verdict": args.verdict,
             "run_keys": args.run_key or None, "tags": args.tag or None,
+            "informed_by": args.informed_by or None,
         }.items() if v}
         if not changes:
             raise SystemExit("hermes: nothing to change — pass --status/--hypothesis/"
                              "--strategy/--verdict/--run-key/--tag")
+        if changes.get("status") == "validated":
+            _require_passed_holdout(book, args)
         try:
             idea = book.update(args.id, **changes)
         except ValueError as e:
@@ -675,6 +782,163 @@ def cmd_ideas(args: argparse.Namespace) -> int:
                 lines.append(f"  {src:<14} {r['decided']:>7}  {r['validated']:>9}  {rate:>4}")
     _emit(payload, args.json, lines)
     return EXIT_OK if ideas or any(pipeline.values()) else EXIT_EMPTY
+
+
+# ---------------------------------------------------------------------------
+# trials — how many independent things were tried for an idea (ADR-0013)
+# ---------------------------------------------------------------------------
+
+def cmd_trials(args: argparse.Namespace) -> int:
+    from .research.ideas import IdeaBook
+    from .research.ledger import RunLedger
+    from .research.trials import TrialRegistry
+
+    book = IdeaBook(args.ideas_file)
+    try:
+        idea = book.get(args.idea)
+    except LookupError as e:                      # KeyError is a LookupError
+        raise SystemExit(f"hermes: {e}") from e
+    registry = TrialRegistry(RunLedger(args.runs_dir), book)
+    eff = registry.effective_trials(idea.id)
+    payload = {
+        "idea": idea.id, "own": eff.own, "inherited": eff.inherited,
+        "batch_floor": eff.batch_floor, "n_eff": eff.n_eff,
+        "clusters": [{"representative": c.representative, "keys": c.keys}
+                     for c in registry.clusters(idea.id)],
+    }
+    out = Path(args.out_dir) / idea.id / "trials.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2) + "\n")
+    lines = [f"{idea.id}  {idea.title}",
+             f"  effective trials  {eff.n_eff}  "
+             f"(own {eff.own}"
+             + "".join(f" + {n} from {i}" for i, n in eff.inherited.items())
+             + (f" + floor {eff.batch_floor}" if eff.batch_floor else "") + ")"]
+    for i, c in enumerate(payload["clusters"], 1):
+        lines.append(f"  cluster {i}: {len(c['keys'])} run(s), representative "
+                     f"{c['representative']}")
+    _emit(payload, args.json, lines)
+    return EXIT_OK if eff.n_eff else EXIT_EMPTY
+
+
+# ---------------------------------------------------------------------------
+# holdout — earning and spending the single look (ADR-0012)
+# ---------------------------------------------------------------------------
+
+def _candidate(args: argparse.Namespace):
+    """The idea and the stored trial run named on the command line, validated as a pair."""
+    from .research.ideas import IdeaBook
+    from .research.ledger import RunLedger
+
+    ledger = RunLedger(args.runs_dir)
+    try:
+        rec = ledger.load(ledger.resolve(args.run_key))
+    except LookupError as e:
+        raise SystemExit(f"hermes: {e}") from e
+    if rec is None:
+        raise SystemExit(f"hermes: no run {args.run_key!r} in the ledger")
+    book = IdeaBook(args.ideas_file)
+    try:
+        idea = book.get(args.idea)
+    except LookupError as e:
+        raise SystemExit(f"hermes: {e}") from e
+    if rec.meta.idea != idea.id:
+        raise SystemExit(f"hermes: run {rec.key} is not a trial of idea {idea.id} "
+                         f"(it belongs to {rec.meta.idea!r})")
+    return ledger, book, idea, rec
+
+
+def _measure_gate(args: argparse.Namespace, ledger, book, idea, bt):
+    """Re-run the candidate (guarded) and measure the in-sample gate on it."""
+    from .research.analysis import DeflationInputs
+    from .research.trials import TrialRegistry
+    from .research.unlock import evaluate_gate
+
+    _warn(f"measuring the gate for {idea.id} …")
+    result = bt.run()
+    registry = TrialRegistry(ledger, book)
+    deflation = DeflationInputs(registry.effective_trials(idea.id),
+                                registry.representative_sharpes(idea.id))
+    return result, evaluate_gate(bt, result, deflation, null_n=args.null_n, seed=args.seed)
+
+
+def cmd_holdout_check(args: argparse.Namespace) -> int:
+    ledger, book, idea, rec = _candidate(args)
+    _entry_, bt = _rebuild(args, rec)
+    _result, gate = _measure_gate(args, ledger, book, idea, bt)
+    payload = {"idea": idea.id, "run_key": rec.key, **gate.to_dict()}
+    lines = [f"{idea.id}  {idea.title}", f"  in-sample gate: {'PASS' if gate.passed else 'FAIL'}"]
+    for name, c in gate.checks.items():
+        lines.append(f"  {'✓' if c['ok'] else '✗'} {name:<5} {c['value']}  (need {c['need']})")
+    _emit(payload, args.json, lines)
+    return EXIT_OK if gate.passed else EXIT_EMPTY
+
+
+def cmd_holdout_unlock(args: argparse.Namespace) -> int:
+    from .research.ledger import strategy_hash
+
+    ledger, book, idea, rec = _candidate(args)
+    if (Path(args.out_dir) / idea.id / "holdout.json").exists():
+        raise SystemExit(f"hermes: idea {idea.id} has already looked at the holdout — one look "
+                         f"per idea, even if the strategy has changed since")
+    entry, bt = _rebuild(args, rec)
+    if strategy_hash(entry.path) != rec.meta.strategy_hash:
+        raise SystemExit(f"hermes: {entry.name} has changed since run {rec.key}; the holdout "
+                         f"is only spent on the frozen strategy that was measured. Re-run it "
+                         f"(and re-check) first")
+    if bt.source.holdout_start(bt.symbol, base_timeframe(bt)) is None:
+        raise SystemExit(f"hermes: no holdout was carved for {bt.symbol.ticker} (history too "
+                         f"short), so there is nothing to unlock; the idea stays exploratory")
+    _result, gate = _measure_gate(args, ledger, book, idea, bt)
+    if not gate.passed:
+        failed = "; ".join(f"{n}: {c['value']} (need {c['need']})"
+                           for n, c in gate.checks.items() if not c["ok"])
+        raise SystemExit(f"hermes: the in-sample gate failed — {failed}. The holdout is not "
+                         f"spent on an idea that is unconvincing in-sample")
+
+    # --- spend the look. Mark it burned BEFORE reading: a crash mid-run still counts. ---
+    from .research.unlock import holdout_verdict
+
+    tf = base_timeframe(bt)
+    held = bt.source.holdout_start(bt.symbol, tf)
+    prior = len(bt.source.looks(bt.symbol, tf))
+    out = Path(args.out_dir) / idea.id / "holdout.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(UTC)
+    record = {
+        "idea": idea.id, "run_key": rec.key, "strategy": entry.name,
+        "strategy_hash": rec.meta.strategy_hash, "params": rec.meta.params,
+        "symbol": bt.symbol.ticker, "source": bt.source.name, "timeframe": str(tf),
+        "window": {"start": held.isoformat(),
+                   "end": now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()},
+        "unlocked_at": now.isoformat(), "state": "started", "passed": None,
+        "in_sample_sharpe": rec.result.get("metrics", {}).get("sharpe"),
+    }
+    out.write_text(json.dumps(encode_nonfinite(record), indent=2, allow_nan=False) + "\n")
+    bt.source.record_look(bt.symbol, tf, {"idea": idea.id, "run_key": rec.key,
+                                          "at": now.isoformat()})
+
+    _warn(f"reading the holdout {record['window']['start'][:10]} → "
+          f"{record['window']['end'][:10]} (one look) …")
+    unguarded = replace(bt, source=bt.source.inner, start=held,
+                        end=datetime.fromisoformat(record["window"]["end"]))
+    verdict = holdout_verdict(record["in_sample_sharpe"], unguarded.run(), prior)
+    record.update(state="done", passed=verdict["passed"], **{
+        k: verdict[k] for k in ("checks", "holdout", "required_psr", "prior_looks")})
+    out.write_text(json.dumps(encode_nonfinite(record), indent=2, allow_nan=False) + "\n")
+
+    if verdict["passed"]:
+        book.update(idea.id, status="validated",
+                    verdict=f"passed the holdout ({record['window']['start'][:10]} → "
+                            f"{record['window']['end'][:10]}): PSR {verdict['holdout']['psr']:.2f}")
+    else:
+        failed = ", ".join(n for n, c in verdict["checks"].items() if not c["ok"])
+        book.update(idea.id, status="rejected", verdict=f"holdout_failed: {failed}")
+    lines = [f"{idea.id}  holdout {'PASSED' if verdict['passed'] else 'FAILED'}"]
+    for name, c in verdict["checks"].items():
+        lines.append(f"  {'✓' if c['ok'] else '✗'} {name:<6} {c['value']}  (need {c['need']})")
+    _emit(record, args.json, lines)
+    return EXIT_OK if verdict["passed"] else EXIT_EMPTY
 
 
 # ---------------------------------------------------------------------------
@@ -756,7 +1020,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     rv.write_result(rec.result, rid)
     analysis_path = ledger.path / key / "analysis.json"
     if analysis_path.exists():
-        rv.attach_analysis(rid, json.loads(analysis_path.read_text()))
+        rv.attach_analysis(rid, decode_nonfinite(json.loads(analysis_path.read_text())))
     else:
         _warn("no analysis.json for this run — the review will have no computed evidence. "
               f"Run `hermes analyze {key}` first.")
@@ -823,6 +1087,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="let a universe run make billed AI Advisor calls on every leg")
     p.add_argument("--note", help="why this run — the hypothesis it tests, or what "
                                    "changed since the last variant. Recorded in the ledger.")
+    p.add_argument("--idea", help="the idea this run is evidence for (counted by `hermes trials`)")
+    p.add_argument("--diagnostic", action="store_true",
+                   help="this run explains, it does not select: not counted as a trial")
     p.add_argument("--no-cache", action="store_true", help="re-run even if the ledger has it")
     p.add_argument("--no-save", action="store_true", help="do not write to the ledger")
     _add_common(p)
@@ -850,6 +1117,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--axes", help="comma-separated subset (default: the cheap seven)")
     p.add_argument("--is-frac", type=float, default=0.7, help="in-sample fraction (default 0.7)")
     p.add_argument("--seed", type=int, default=42, help="RNG seed for the statistical axes")
+    p.add_argument("--ideas-file", default="research/ideas.json",
+                   help="backlog file, for the deflation axis (default: research/ideas.json)")
+    p.add_argument("--null-n", type=int, default=200,
+                   help="time-shifted replays for the null axis (default 200)")
     p.add_argument("--baseline-n", type=int, default=50,
                    help="simulations for the `baseline` axis (default 50)")
     p.add_argument("--no-save", action="store_true", help="do not write analysis.json")
@@ -889,7 +1160,12 @@ def build_parser() -> argparse.ArgumentParser:
             q.add_argument("--verdict", help="why it was validated or rejected")
             q.add_argument("--run-key", action="append", default=[],
                            help="link a ledger run (repeatable)")
+            q.add_argument("--informed-by", action="append", default=[], metavar="IDEA_ID",
+                           help="an idea whose results this one drew on; its trial "
+                                "clusters count against this idea (repeatable)")
             q.add_argument("--tag", action="append", default=[])
+            q.add_argument("--holdout-dir", default="research/ideas",
+                           help="where <idea>/holdout.json lives (default: research/ideas)")
         elif name == "rm":
             q.add_argument("id", help="idea id, or a unique prefix")
         else:
@@ -912,6 +1188,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hit-rate", action="store_true",
                    help="validated-vs-rejected per provenance")
     p.set_defaults(func=cmd_ideas, ideas_action="list")
+
+    p = sub.add_parser("trials", help="an idea's trial clusters and effective trials "
+                                      "(the count a Sharpe is deflated by)")
+    p.add_argument("idea", help="idea id (the one passed to `hermes run --idea`)")
+    p.add_argument("--ideas-file", default="research/ideas.json",
+                   help="backlog file (default: research/ideas.json)")
+    p.add_argument("--out-dir", default="research/ideas",
+                   help="where <idea>/trials.json is written (default: research/ideas)")
+    _add_common(p)
+    p.set_defaults(func=cmd_trials)
+
+    p = sub.add_parser("holdout", help="the holdout: check the in-sample gate, then spend the "
+                                       "single look")
+    hsub = p.add_subparsers(dest="holdout_action", required=True)
+    for name, helptext, func in [
+        ("check", "measure the in-sample gate (burns nothing)", cmd_holdout_check),
+        ("unlock", "spend the single look at the holdout", cmd_holdout_unlock),
+    ]:
+        q = hsub.add_parser(name, help=helptext)
+        q.add_argument("idea", help="idea id")
+        q.add_argument("--run-key", required=True, help="the trial run that is the candidate")
+        q.add_argument("--ideas-file", default="research/ideas.json")
+        q.add_argument("--null-n", type=int, default=200,
+                       help="time-shifted replays for the null check (default 200)")
+        q.add_argument("--seed", type=int, default=42)
+        q.add_argument("--out-dir", default="research/ideas",
+                       help="where <idea>/holdout.json is written (default: research/ideas)")
+        _add_common(q)
+        q.set_defaults(func=func)
 
     p = sub.add_parser("correlate",
                        help="return correlation between runs — step 4, portfolio building")
@@ -970,6 +1275,9 @@ def main(argv: list[str] | None = None) -> int:
         return int(e.code or EXIT_OK)
     except KeyboardInterrupt:
         _warn("interrupted")
+        return EXIT_ERR
+    except HoldoutViolation as e:
+        _warn(f"hermes: {e}")
         return EXIT_ERR
 
 

@@ -27,14 +27,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from .discovery import StrategyEntry, run_universe
-from .ledger import RunLedger, RunMeta, cache_key, strategy_hash
+from .discovery import StrategyEntry, run_universe, stable_end
+from .ledger import RunLedger, RunMeta, advisor_fingerprint, cache_key, source_epoch, strategy_hash
 from .universes import (
     TICKERS_DIR,
     calendar_universe_names,
     is_calendar_universe,
     load_calendar,
     load_universe,
+    universe_hash,
     universe_names,
 )
 
@@ -56,6 +57,9 @@ class UniverseRun:
     unconstrained: bool
     sizer: str                     # repr(sizer), as the ledger records it
     has_advisor: bool              # an AI Advisor makes one billed call per signal per leg
+    advisor_id: str | None         # advisor model + prompt, part of the run's identity
+    constituents: str | None       # hash of the universe's ticker list / calendar file
+    data_epoch: str | None         # adjusted-data identity across the legs (audit F16)
     size_hint: int | None          # number of symbols, when known before running
     _execute: Callable[[Any], Any] = field(repr=False)
 
@@ -72,6 +76,10 @@ class UniverseRun:
             params=self.params,
             sizer=self.sizer,
             unconstrained=self.unconstrained,
+            starting_cash=self.starting_cash,
+            advisor=self.advisor_id,
+            universe_hash=self.constituents,
+            data_epoch=self.data_epoch,
         )
 
     def run(self, progress_callback: Any = None) -> Any:
@@ -105,8 +113,34 @@ class UniverseRun:
             universe_size=universe_result.universe_size,
             summary_rows=pr.summary_rows(),
             per_symbol_counts={k: len(v) for k, v in pr.per_symbol.items()},
+            skipped=list(pr.skipped),
+            legs_requested=pr.legs_requested,
         )
         return result_dict
+
+
+def combined_epoch(source: Any, tickers: Any) -> str | None:
+    """One identity for the data a source would serve across ``tickers`` (``None`` when the
+    source's data does not drift)."""
+    import hashlib
+
+    parts = [f"{t}={e}" for t in sorted(tickers) if (e := source_epoch(source, t)) is not None]
+    if not parts:
+        return None
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
+
+
+def _static_epoch(template_source: Any, name: str, tickers: Any) -> str | None:
+    """Epoch for a static universe: reuse the strategy's source when it is the one being
+    run, otherwise build it by name; an unbuildable source surfaces at run time, not here."""
+    from .sources import build_source
+
+    if getattr(template_source, "name", None) == name:
+        return combined_epoch(template_source, tickers)
+    try:
+        return combined_epoch(build_source(name), tickers)
+    except ValueError:
+        return None
 
 
 def known_universes(tickers_dir: Path = TICKERS_DIR) -> list[str]:
@@ -151,6 +185,9 @@ def universe_run(
         if params:
             overrides["params"] = params
         ub = factory(**overrides)
+        if end is None and stable_end(ub.end) != ub.end:
+            overrides["end"] = stable_end(ub.end)
+            ub = factory(**overrides)
 
         def _own(cb: Any) -> Any:
             fresh = factory(**overrides)
@@ -162,6 +199,8 @@ def universe_run(
             end=ub.end, starting_cash=ub.starting_cash, params=dict(ub.params),
             unconstrained=ub.unconstrained, sizer=repr(ub.sizer),
             has_advisor=ub.advisor is not None,
+            advisor_id=advisor_fingerprint(ub.advisor), constituents=None,
+            data_epoch=combined_epoch(ub.source, ub.calendar.ever_member(ub.start, ub.end)),
             size_hint=len(ub.calendar.ever_member(ub.start, ub.end)), _execute=_own,
         )
 
@@ -173,7 +212,7 @@ def universe_run(
     build = cast(Callable[..., Any], entry.build_backtest)
     template = build()
     start = start or template.start
-    end = end or template.end
+    end = end or stable_end(template.end)
     cash = starting_cash if starting_cash is not None else template.starting_cash
 
     if is_calendar_universe(universe):
@@ -199,6 +238,9 @@ def universe_run(
             entry=entry, universe=universe, source=source.name, start=start, end=end,
             starting_cash=cash, params=params, unconstrained=unconstrained,
             sizer=repr(template.sizer), has_advisor=template.advisor is not None,
+            advisor_id=advisor_fingerprint(template.advisor),
+            constituents=universe_hash(universe, tickers_dir),
+            data_epoch=combined_epoch(source, calendar.ever_member(start, end)),
             size_hint=len(calendar.ever_member(start, end)), _execute=_calendar,
         )
 
@@ -217,6 +259,9 @@ def universe_run(
             entry=entry, universe=universe, source=effective, start=start, end=end,
             starting_cash=cash, params=params, unconstrained=unconstrained,
             sizer=repr(template.sizer), has_advisor=template.advisor is not None,
+            advisor_id=advisor_fingerprint(template.advisor),
+            constituents=universe_hash(universe, tickers_dir),
+            data_epoch=_static_epoch(template.source, effective, tickers),
             size_hint=len(tickers), _execute=_static,
         )
 

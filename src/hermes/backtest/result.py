@@ -83,6 +83,10 @@ class BacktestResult:
     # Supplied by the engine from the Instrument's session (exact); ``None`` means
     # it was estimated from the curve itself.
     steps_per_year: float | None = None
+    # Where trading actually began, and how many in-window bars a too-short lead-in cost
+    # (audit F11). ``effective_start`` is ``None`` if the strategy never warmed up.
+    effective_start: datetime | None = None
+    warmup_bars_skipped: int = 0
 
     @classmethod
     def compute(
@@ -121,6 +125,8 @@ class BacktestResult:
             "equity_curve": [(ts.isoformat(), eq) for ts, eq in self.equity_curve],
             "trades": [_trade_dict(t) for t in self.trades],
             "vetoed_signals": [_vetoed_dict(o) for o in self.vetoed_signals],
+            "effective_start": self.effective_start.isoformat() if self.effective_start else None,
+            "warmup_bars_skipped": self.warmup_bars_skipped,
         }
         if self.benchmark is not None:
             d["benchmark"] = asdict(self.benchmark)
