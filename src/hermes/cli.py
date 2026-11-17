@@ -223,6 +223,7 @@ def _meta_for(entry, bt, args, params: dict):
         note=getattr(args, "note", "") or "",
         idea=getattr(args, "idea", None),
         kind="diagnostic" if getattr(args, "diagnostic", False) else "trial",
+        variant=getattr(args, "variant", None),
     )
 
 
@@ -363,6 +364,23 @@ def cmd_run_universe(args: argparse.Namespace) -> int:
     return EXIT_OK if m.get("num_trades") else EXIT_EMPTY
 
 
+def _check_variant(args: argparse.Namespace) -> None:
+    """``--variant`` names a variant of the idea's plan.json; nothing runs unplanned."""
+    if not getattr(args, "variant", None):
+        return
+    if not args.idea:
+        raise SystemExit("hermes: --variant needs --idea (the plan belongs to an idea)")
+    from .research.artifacts import ArtifactStore
+    from .research.reads import default_ideas_dir
+
+    plan = ArtifactStore(default_ideas_dir()).read(args.idea, "plan")
+    ids = [v.get("id") for v in plan.variants] if plan else []
+    if args.variant not in ids:
+        raise SystemExit(f"hermes: {args.variant!r} is not a variant of idea {args.idea}'s plan "
+                         f"(planned: {', '.join(ids) or 'no plan.json'}). A new variant is a plan "
+                         f"amendment and needs review")
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
 
@@ -370,6 +388,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if args.idea or args.diagnostic:
             raise SystemExit("hermes: --idea/--diagnostic are not supported on universe runs yet")
         return cmd_run_universe(args)
+    _check_variant(args)
     entry, bt, key = _build(args)
     ledger = RunLedger(args.runs_dir)
 
@@ -380,8 +399,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         # no idea) and is now claimed as a trial, count it: undercounting trials flatters
         # the deflated Sharpe, overcounting only makes it stricter.
         wants_trial = bool(args.idea) and not args.diagnostic
-        if wants_trial and (cached.meta.kind == "diagnostic" or cached.meta.idea is None):
-            ledger.attribute(key, args.idea, "trial")
+        if wants_trial and (cached.meta.kind == "diagnostic" or cached.meta.idea is None
+                            or (args.variant and cached.meta.variant != args.variant)):
+            ledger.attribute(key, args.idea, "trial", args.variant)
     else:
         _warn(f"running {entry.name} · {bt.symbol.ticker} · "
               f"{bt.start.date()}→{bt.end.date()} …")
@@ -827,6 +847,22 @@ def cmd_trials(args: argparse.Namespace) -> int:
         "clusters": [{"representative": c.representative, "keys": c.keys}
                      for c in registry.clusters(idea.id)],
     }
+    plan_lines: list[str] = []
+    if args.plan:
+        from .research.artifacts import ArtifactStore
+
+        plan = ArtifactStore(args.out_dir).read(idea.id, "plan")
+        planned = [v["id"] for v in plan.variants] if plan else []
+        ran = [e.meta.variant for e in registry.ledger.entries()
+               if e.meta.idea == idea.id and e.meta.variant]
+        payload["plan"] = {
+            "planned": planned, "unrun": [v for v in planned if v not in ran],
+            "unplanned_runs": [e.key for e in registry.ledger.entries()
+                               if e.meta.idea == idea.id and e.meta.kind == "trial"
+                               and (e.meta.variant or "") not in planned],
+        }
+        plan_lines = [f"  plan: unrun {payload['plan']['unrun'] or 'none'}; "
+                      f"trials outside the plan {payload['plan']['unplanned_runs'] or 'none'}"]
     out = Path(args.out_dir) / idea.id / "trials.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2) + "\n")
@@ -838,7 +874,7 @@ def cmd_trials(args: argparse.Namespace) -> int:
     for i, c in enumerate(payload["clusters"], 1):
         lines.append(f"  cluster {i}: {len(c['keys'])} run(s), representative "
                      f"{c['representative']}")
-    _emit(payload, args.json, lines)
+    _emit(payload, args.json, lines + plan_lines)
     return EXIT_OK if eff.n_eff else EXIT_EMPTY
 
 
@@ -1120,6 +1156,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note", help="why this run — the hypothesis it tests, or what "
                                    "changed since the last variant. Recorded in the ledger.")
     p.add_argument("--idea", help="the idea this run is evidence for (counted by `hermes trials`)")
+    p.add_argument("--variant", help="the plan.json variant this run executes (needs --idea; "
+                                     "must be one the plan lists)")
     p.add_argument("--diagnostic", action="store_true",
                    help="this run explains, it does not select: not counted as a trial")
     p.add_argument("--no-cache", action="store_true", help="re-run even if the ledger has it")
@@ -1242,6 +1280,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="backlog file (default: research/ideas.json)")
     p.add_argument("--out-dir", default="research/ideas",
                    help="where <idea>/trials.json is written (default: research/ideas)")
+    p.add_argument("--plan", action="store_true",
+                   help="compare the trials with plan.json: planned-but-unrun variants and "
+                        "trials that ran outside the plan")
     _add_common(p)
     p.set_defaults(func=cmd_trials)
 
