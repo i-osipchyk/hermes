@@ -17,3 +17,9 @@ def _no_ctrader_ssm(monkeypatch):
 def _isolated_holdouts(monkeypatch, tmp_path):
     """Tests never read or write the committed research/holdouts.json."""
     monkeypatch.setenv("HERMES_HOLDOUTS_PATH", str(tmp_path / "holdouts.json"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ideas_dir(monkeypatch, tmp_path):
+    """Tests never write reads logs into the committed research/ideas/."""
+    monkeypatch.setenv("HERMES_IDEAS_DIR", str(tmp_path / "ideas_default"))

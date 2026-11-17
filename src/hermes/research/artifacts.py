@@ -108,6 +108,7 @@ class Validation:
     axes: dict = field(default_factory=dict)             # axis -> pointer into analysis.json
     not_measured: list[dict] = field(default_factory=list)   # {axis, command}
     objections: list[str] = field(default_factory=list)
+    read_not_declared: list[str] = field(default_factory=list)   # ideas read but not declared
     schema_version: int = SCHEMA_VERSION
 
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import replace
@@ -433,6 +434,22 @@ def cmd_run(args: argparse.Namespace) -> int:
 # runs / show
 # ---------------------------------------------------------------------------
 
+def _log_read(command: str, target: str, *, target_idea: str | None = None,
+              kind: str = "targeted") -> None:
+    """When ``HERMES_IDEA`` names the idea doing the reading, record what it looked at
+    (research/reads.py). Never fails a command: the log is an audit, not a gate."""
+    reader = os.environ.get("HERMES_IDEA")
+    if not reader:
+        return
+    from .research.reads import ReadsLog
+
+    try:
+        ReadsLog().record(reader, command=command, target=target, target_idea=target_idea,
+                          kind=kind)
+    except OSError as e:
+        _warn(f"could not write the reads log: {e}")
+
+
 def cmd_runs(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
 
@@ -440,6 +457,7 @@ def cmd_runs(args: argparse.Namespace) -> int:
         strategy=args.strategy, ticker=args.symbol, limit=args.limit,
         note_contains=args.note_contains,
     )
+    _log_read("runs", "*", kind="listing")
     payload = {"runs": [{"key": e.key, **e.meta.to_dict()} for e in entries]}
     lines = [f"{len(entries)} run(s) in the ledger"] if entries else ["ledger is empty"]
     for e in entries:
@@ -469,6 +487,7 @@ def cmd_show(args: argparse.Namespace) -> int:
     if rec is None:
         raise SystemExit(f"hermes: run {args.key!r} has no stored result")
 
+    _log_read("show", rec.key, target_idea=rec.meta.idea)
     payload: dict = {"run_key": rec.key, "meta": rec.meta.to_dict(), "metrics": rec.metrics}
     lines = [rec.meta.label, f"run  {rec.key}"]
     if rec.meta.note:
@@ -518,6 +537,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         stored = ledger.load(ledger.resolve(args.target))
     except Exception:  # noqa: BLE001 — not a key; maybe a strategy name
         stored = None
+    _log_read("analyze", args.target, target_idea=stored.meta.idea if stored else None)
     if stored is not None and stored.meta.universe:
         return _analyze_universe(args, ledger, axes, stored)
     if stored is None:
@@ -611,14 +631,18 @@ def _deflation_inputs(args: argparse.Namespace, ledger: RunLedger, rec: RunRecor
     """The trial count and trial Sharpes behind a run, or None when it belongs to no idea."""
     from .research.analysis import DeflationInputs
     from .research.ideas import IdeaBook
+    from .research.reads import ReadsLog, audit_informed_by
     from .research.trials import TrialRegistry
 
     if rec is None or not rec.meta.idea:
         return None
-    registry = TrialRegistry(ledger, IdeaBook(args.ideas_file))
+    book, reads = IdeaBook(args.ideas_file), ReadsLog()
+    registry = TrialRegistry(ledger, book, reads)
     try:
-        return DeflationInputs(registry.effective_trials(rec.meta.idea),
-                               registry.representative_sharpes(rec.meta.idea))
+        return DeflationInputs(
+            registry.effective_trials(rec.meta.idea),
+            registry.representative_sharpes(rec.meta.idea),
+            tuple(audit_informed_by(book, reads, rec.meta.idea)["read_not_declared"]))
     except LookupError as e:
         raise SystemExit(f"hermes: run is attributed to idea {rec.meta.idea!r}: {e}") from e
 
@@ -751,6 +775,7 @@ def cmd_ideas(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     # default: list
+    _log_read("ideas", "*", kind="listing")
     ideas = book.list(status=args.status, source=args.source_filter,
                       tag=args.tag_filter, open_only=args.open)
     pipeline = book.pipeline()
@@ -785,6 +810,7 @@ def cmd_ideas(args: argparse.Namespace) -> int:
 def cmd_trials(args: argparse.Namespace) -> int:
     from .research.ideas import IdeaBook
     from .research.ledger import RunLedger
+    from .research.reads import ReadsLog
     from .research.trials import TrialRegistry
 
     book = IdeaBook(args.ideas_file, holdout_dir=args.out_dir)
@@ -792,7 +818,8 @@ def cmd_trials(args: argparse.Namespace) -> int:
         idea = book.get(args.idea)
     except LookupError as e:                      # KeyError is a LookupError
         raise SystemExit(f"hermes: {e}") from e
-    registry = TrialRegistry(RunLedger(args.runs_dir), book)
+    _log_read("trials", idea.id, target_idea=idea.id)
+    registry = TrialRegistry(RunLedger(args.runs_dir), book, ReadsLog())
     eff = registry.effective_trials(idea.id)
     payload = {
         "idea": idea.id, "own": eff.own, "inherited": eff.inherited,
@@ -845,14 +872,17 @@ def _candidate(args: argparse.Namespace):
 def _measure_gate(args: argparse.Namespace, ledger, book, idea, bt):
     """Re-run the candidate (guarded) and measure the in-sample gate on it."""
     from .research.analysis import DeflationInputs
+    from .research.reads import ReadsLog, audit_informed_by
     from .research.trials import TrialRegistry
     from .research.unlock import evaluate_gate
 
     _warn(f"measuring the gate for {idea.id} …")
     result = bt.run()
-    registry = TrialRegistry(ledger, book)
+    registry = TrialRegistry(ledger, book, ReadsLog())
     deflation = DeflationInputs(registry.effective_trials(idea.id),
-                                registry.representative_sharpes(idea.id))
+                                registry.representative_sharpes(idea.id),
+                                tuple(audit_informed_by(book, ReadsLog(), idea.id)
+                                      ["read_not_declared"]))
     return result, evaluate_gate(bt, result, deflation, null_n=args.null_n, seed=args.seed)
 
 
