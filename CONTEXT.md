@@ -211,6 +211,26 @@ _Avoid_: Optimization, tuning, grid search (all of those look for the peak; this
 How much a result rests on, and therefore what it may be used for: `exploratory` (a view, not a conclusion), `credible` (worth real work and out-of-sample testing), `deployable` (years of history **and** hundreds of trades), or `unknown` (no measurable span — which is not the same as inadequate). Both the trade count and the span must clear a tier, since many trades in one year has not seen a second regime and a long history with few trades has not seen enough events. The tier describes the **evidence**, never a decision to trade.
 _Avoid_: Significance, confidence (those are specific statistics; this is the weight of the sample)
 
+**Holdout**:
+The last slice of an instrument's history (20%, at least 6 months) that research may not read. Per (source, symbol, timeframe); its start is **frozen at first research touch** in `research/holdouts.json` and never slides, so new data extends it. It is enforced in the data layer — a research read past it raises `HoldoutViolation` — rather than promised in a skill. Read **once per idea** by `hermes holdout unlock`, and each such **look** is recorded and raises the next idea's pass bar. With under 12 months left in-sample none is carved and the idea cannot exceed `exploratory`.
+_Avoid_: Test set (the in-sample/out-of-sample split in `oos` is not held out of the search), validation set
+
+**Trial**:
+A [[run-ledger]] run that is a candidate for selection for an idea (`hermes run --idea`). A run that explains without selecting — a sweep, a dissection re-run — is a **diagnostic** (`--diagnostic`) and is not counted. Intent, not an input, so it is not part of the cache key.
+_Avoid_: Run (every trial is a run; not every run is a trial), experiment
+
+**Trial Cluster**:
+Trials of one idea that are the same bet: a trial joins a cluster when its daily-return correlation is ≥ 0.9, or its shared (entry day, side) overlap is ≥ 0.8, with the cluster's first trial. Nine near-identical variants are one cluster, so the search is not flattered by volume and not punished for thorough diagnosis.
+_Avoid_: Family (a strategy folder is for navigation only), group
+
+**Effective Trials**:
+The number a Sharpe is deflated by: an idea's own trial clusters, plus the clusters of every idea it was `informed_by`, plus a batch floor (currently 0). Counted from the ledger, so it cannot be under-reported; the declaration of what informed an idea is the one input the agent controls. With one effective trial there is nothing to deflate and the deflated Sharpe equals the probabilistic Sharpe.
+_Avoid_: Number of variants, trial count (the raw count includes near-duplicates)
+
+**Null Test**:
+The control a rule-based strategy lacked: the observed trades replayed through the real engine at a random circular time offset — same sides, sizes, holding periods and spacing — and the observed Sharpe ranked against the result (`hermes analyze --axes null`). It asks whether the *timing* of the trades carries information. Distinct from the [[random-baseline]], which randomises an AI veto.
+_Avoid_: Monte Carlo (that reorders the realised trades; this moves them in time)
+
 **Forward Test**:
 Running a finished strategy on paper or minimum size and comparing realised results to the backtest over the same window — the last rung of testing and the only one that sees data no backtest could have seen. **Hermes cannot do this**: there is no live [[executionvenue]] (ADR-0001 — the seam exists, the adapter does not). So a strategy that survives the whole rubric is *ready to forward test*, never "deployed".
 _Avoid_: Paper trading (that is the mechanism), live testing, deployment

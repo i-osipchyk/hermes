@@ -110,6 +110,13 @@ name missing there is a capability the agent will believe doesn't exist.
 where k = declared `Parameter` count. Target ≤ 3 for a first version. Prefer a hard-coded
 economic constant over an extra tunable knob.
 
+**The holdout is enforced, not promised.** `hermes run`/`analyze` read through `HoldoutSource`
+(ADR-0012): a request past an instrument's holdout raises `HoldoutViolation`, and a run with
+no `--end` stops at the holdout start. Don't work around it — `hermes holdout unlock` is the
+one sanctioned look, once per idea, and `validated` is set only by a passed unlock. Pass
+`--idea <id>` on runs you score and `--diagnostic` on ones that only explain, so
+`hermes trials` can count them (ADR-0013).
+
 **Look-ahead is the cardinal sin.** Indicators see closed history plus the current Forming Bar
 and nothing else (ADR-0002); fills are next-open / OHLC-touch with Stop-first on a clash
 (ADR-0004); `ContextEnricher`s are keyed on `(ticker, as_of)`. If a change could let

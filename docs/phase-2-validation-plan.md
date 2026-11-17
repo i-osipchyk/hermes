@@ -1,6 +1,6 @@
 # Phase 2 — validation hardening: implementation plan
 
-Status: plan only. Read [pipeline-design.md](pipeline-design.md) and
+Status: **steps 1–6 implemented** (see "As built" at the end). Read [pipeline-design.md](pipeline-design.md) and
 [audit-2026-11.md](audit-2026-11.md) first. Decisions: [ADR-0012](adr/0012-holdout-enforced-in-the-data-layer.md),
 [ADR-0013](adr/0013-trial-clusters-and-deflation.md).
 
@@ -116,3 +116,32 @@ seeded run must be deterministic.
 5. `hermes holdout unlock` and the evidence-tier rules.
 6. Update `hermes-research` and `docs/MANUAL.md`; add terms to `CONTEXT.md`
    (**Holdout**, **Trial**, **Trial Cluster**, **Effective Trials**).
+
+## As built (2026-11)
+
+All six steps are in. Where the code differs from the plan above:
+
+- **Holdout boundary.** `holdout_start` is the first held-out instant: a request with
+  `end > holdout_start` raises, and a request ending exactly on it is allowed but never
+  receives a bar stamped at or after it (bars are keyed by open time). Probing a history's
+  extent goes up to the start of today, never a far-future date — a caching source would
+  otherwise mark the empty future as checked.
+- **Frozen "no holdout".** A history too short to carve is frozen as `null` too, so more data
+  later does not retroactively give an idea a holdout it already saw all of.
+- **Guard coverage.** `hermes run` and `hermes analyze` (name or stored key) are guarded.
+  **Not yet:** universe runs, `WalkForward` templates built outside the CLI, reference feeds,
+  the `BarCache.read` env guard (`HERMES_RESEARCH=1`) and the Claude Code hook.
+- **PSR basis.** Trade-level (audit F5), not daily-resampled with an autocorrelation
+  correction; the deflation and null axes refuse to run under 10 trades rather than fall back
+  to bars.
+- **Clusters.** Overlap is measured against the larger trade set (stricter). `informed_by` is
+  the agent's declaration only; the audited read log (`reads.jsonl`) and `--plan` are not built.
+  `informed_by` is not transitive; the batch floor is 0.
+- **Null test.** Engine replay (not re-pricing from bars): one random circular offset per
+  sample, stops/targets not replayed, a trade running past the end is closed there.
+- **Gate and pass bar.** Gate: tier ≥ `credible`, DSR ≥ 0.9, null p < 0.05 (all must be
+  measured). Holdout: same sign, ≥ 10 trades, PSR ≥ 1 − 0.2 / (1 + earlier looks). The
+  "validated" tier in the plan is the idea *status*; evidence tiers are unchanged.
+- **Unmeasured / open.** Universe runs cannot carry an idea, so cannot be deflated or
+  unlocked. The two ideas validated before this existed are not yet labelled "validated
+  without holdout". All thresholds are untuned.

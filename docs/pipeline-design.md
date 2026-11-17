@@ -1,6 +1,6 @@
 # Agentic research pipeline — design
 
-Status: **agreed design, nothing implemented yet** (as of 2026-11-16). Phase 1 (audit) is done:
+Status: **agreed design; phases 1 (audit) and 2 (validation hardening) are implemented, the pipeline driver and agents are not** (as of 2026-11-17). Phase 1 is done:
 see [audit-2026-11.md](audit-2026-11.md). This is the document a new session reads first.
 Decisions that are load-bearing have their own ADR: [0012](adr/0012-holdout-enforced-in-the-data-layer.md),
 [0013](adr/0013-trial-clusters-and-deflation.md), [0014](adr/0014-research-pipeline-roles-state-and-approvals.md).
