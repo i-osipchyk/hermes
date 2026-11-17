@@ -29,7 +29,7 @@ import hashlib
 import json
 import re
 import shutil
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -63,6 +63,12 @@ class RunMeta:
     # intent, not an input, so two runs that differ only by note are one run.
     # Defaulted so rows written before this field still load.
     note: str = ""
+
+    # Which idea this run is evidence for, and whether it is a candidate for selection
+    # ("trial") or only explains ("diagnostic") — ADR-0013. Like ``note``, not part of the
+    # cache key; defaulted so older rows still load.
+    idea: str | None = None
+    kind: str = "trial"
 
     @property
     def label(self) -> str:
@@ -278,6 +284,12 @@ class RunLedger:
         if llm_log is not None and getattr(llm_log, "total_calls", 0) > 0:
             llm_log.save(d / "llm_log.jsonl")
         return key
+
+    def attribute(self, key: str, idea: str | None, kind: str) -> None:
+        """Re-label a stored run's idea/kind (intent, not an input, so the key is unchanged)."""
+        path = self._dir(key) / "meta.json"
+        meta = replace(RunMeta.from_dict(json.loads(path.read_text())), idea=idea, kind=kind)
+        path.write_text(json.dumps(meta.to_dict(), indent=2))
 
     def delete(self, key: str) -> None:
         d = self._dir(key)

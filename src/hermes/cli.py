@@ -221,6 +221,8 @@ def _meta_for(entry, bt, args, params: dict):
         unconstrained=args.unconstrained,
         created_at=datetime.now(UTC).isoformat(),
         note=getattr(args, "note", "") or "",
+        idea=getattr(args, "idea", None),
+        kind="diagnostic" if getattr(args, "diagnostic", False) else "trial",
     )
 
 
@@ -365,6 +367,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
 
     if _is_universe_request(args):
+        if args.idea or args.diagnostic:
+            raise SystemExit("hermes: --idea/--diagnostic are not supported on universe runs yet")
         return cmd_run_universe(args)
     entry, bt, key = _build(args)
     ledger = RunLedger(args.runs_dir)
@@ -372,6 +376,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     cached = None if args.no_cache else ledger.load(key)
     if cached is not None:
         result_dict, from_cache = cached.result, True
+        # One configuration is one ledger row. If it was first run as a diagnostic (or for
+        # no idea) and is now claimed as a trial, count it: undercounting trials flatters
+        # the deflated Sharpe, overcounting only makes it stricter.
+        wants_trial = bool(args.idea) and not args.diagnostic
+        if wants_trial and (cached.meta.kind == "diagnostic" or cached.meta.idea is None):
+            ledger.attribute(key, args.idea, "trial")
     else:
         _warn(f"running {entry.name} · {bt.symbol.ticker} · "
               f"{bt.start.date()}→{bt.end.date()} …")
@@ -674,6 +684,7 @@ def cmd_ideas(args: argparse.Namespace) -> int:
             "status": args.status, "hypothesis": args.hypothesis,
             "strategy": args.strategy, "verdict": args.verdict,
             "run_keys": args.run_key or None, "tags": args.tag or None,
+            "informed_by": args.informed_by or None,
         }.items() if v}
         if not changes:
             raise SystemExit("hermes: nothing to change — pass --status/--hypothesis/"
@@ -721,6 +732,43 @@ def cmd_ideas(args: argparse.Namespace) -> int:
                 lines.append(f"  {src:<14} {r['decided']:>7}  {r['validated']:>9}  {rate:>4}")
     _emit(payload, args.json, lines)
     return EXIT_OK if ideas or any(pipeline.values()) else EXIT_EMPTY
+
+
+# ---------------------------------------------------------------------------
+# trials — how many independent things were tried for an idea (ADR-0013)
+# ---------------------------------------------------------------------------
+
+def cmd_trials(args: argparse.Namespace) -> int:
+    from .research.ideas import IdeaBook
+    from .research.ledger import RunLedger
+    from .research.trials import TrialRegistry
+
+    book = IdeaBook(args.ideas_file)
+    try:
+        idea = book.get(args.idea)
+    except LookupError as e:                      # KeyError is a LookupError
+        raise SystemExit(f"hermes: {e}") from e
+    registry = TrialRegistry(RunLedger(args.runs_dir), book)
+    eff = registry.effective_trials(idea.id)
+    payload = {
+        "idea": idea.id, "own": eff.own, "inherited": eff.inherited,
+        "batch_floor": eff.batch_floor, "n_eff": eff.n_eff,
+        "clusters": [{"representative": c.representative, "keys": c.keys}
+                     for c in registry.clusters(idea.id)],
+    }
+    out = Path(args.out_dir) / idea.id / "trials.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2) + "\n")
+    lines = [f"{idea.id}  {idea.title}",
+             f"  effective trials  {eff.n_eff}  "
+             f"(own {eff.own}"
+             + "".join(f" + {n} from {i}" for i, n in eff.inherited.items())
+             + (f" + floor {eff.batch_floor}" if eff.batch_floor else "") + ")"]
+    for i, c in enumerate(payload["clusters"], 1):
+        lines.append(f"  cluster {i}: {len(c['keys'])} run(s), representative "
+                     f"{c['representative']}")
+    _emit(payload, args.json, lines)
+    return EXIT_OK if eff.n_eff else EXIT_EMPTY
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +917,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="let a universe run make billed AI Advisor calls on every leg")
     p.add_argument("--note", help="why this run — the hypothesis it tests, or what "
                                    "changed since the last variant. Recorded in the ledger.")
+    p.add_argument("--idea", help="the idea this run is evidence for (counted by `hermes trials`)")
+    p.add_argument("--diagnostic", action="store_true",
+                   help="this run explains, it does not select: not counted as a trial")
     p.add_argument("--no-cache", action="store_true", help="re-run even if the ledger has it")
     p.add_argument("--no-save", action="store_true", help="do not write to the ledger")
     _add_common(p)
@@ -935,6 +986,9 @@ def build_parser() -> argparse.ArgumentParser:
             q.add_argument("--verdict", help="why it was validated or rejected")
             q.add_argument("--run-key", action="append", default=[],
                            help="link a ledger run (repeatable)")
+            q.add_argument("--informed-by", action="append", default=[], metavar="IDEA_ID",
+                           help="an idea whose results this one drew on; its trial "
+                                "clusters count against this idea (repeatable)")
             q.add_argument("--tag", action="append", default=[])
         elif name == "rm":
             q.add_argument("id", help="idea id, or a unique prefix")
@@ -958,6 +1012,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hit-rate", action="store_true",
                    help="validated-vs-rejected per provenance")
     p.set_defaults(func=cmd_ideas, ideas_action="list")
+
+    p = sub.add_parser("trials", help="an idea's trial clusters and effective trials "
+                                      "(the count a Sharpe is deflated by)")
+    p.add_argument("idea", help="idea id (the one passed to `hermes run --idea`)")
+    p.add_argument("--ideas-file", default="research/ideas.json",
+                   help="backlog file (default: research/ideas.json)")
+    p.add_argument("--out-dir", default="research/ideas",
+                   help="where <idea>/trials.json is written (default: research/ideas)")
+    _add_common(p)
+    p.set_defaults(func=cmd_trials)
 
     p = sub.add_parser("correlate",
                        help="return correlation between runs — step 4, portfolio building")
