@@ -12,12 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import validate_spec, variants_hash
+from .dev_flow import read_extensions
 from .thesis import DEFAULT_THESIS_PATH, due
 
 
 @dataclass(frozen=True)
 class Action:
-    role: str                      # researcher | quant | validator | developer | owner
+    role: str                      # researcher | quant | validator | developer | driver | owner
     step: str
     requires: tuple[str, ...] = ()
     produces: tuple[str, ...] = ()
@@ -30,6 +31,11 @@ class Action:
 def _locked(plan: Any) -> bool:
     return bool(plan and plan.review.get("approved") is True
                 and plan.locked_hash == variants_hash(plan.variants))
+
+
+def _sent_back(plan: Any) -> bool:
+    """The Validator wrote objections instead of approving: the Quant revises."""
+    return bool(plan and not _locked(plan) and plan.review.get("objections"))
 
 
 def next_action(idea: Any, store: Any, *, ran_variants: set[str] | None = None) -> Action | None:
@@ -45,7 +51,7 @@ def next_action(idea: Any, store: Any, *, ran_variants: set[str] | None = None) 
             return Action("researcher", "write_spec", (), ("spec.json",))
         return Action("researcher", "mark_quantified", ("spec.json",), ())
     if s in ("quantified", "coded"):
-        if plan is None:
+        if plan is None or _sent_back(plan):
             return Action("quant", "write_plan", ("spec.json",), ("plan.json",))
         if not _locked(plan):
             return Action("validator", "review_plan", ("plan.json",), ("plan.json",))
@@ -55,15 +61,22 @@ def next_action(idea: Any, store: Any, *, ran_variants: set[str] | None = None) 
             return Action("quant", "mark_coded", (), ())
         return Action("quant", "mark_testing", ("plan.json",), ())
     if s == "needs_infra":
-        return Action("developer", "build_infra", (), ())
+        exts = read_extensions(store.root, idea.id)
+        if exts and exts[-1]["status"] == "merged":
+            return Action("driver", "resume_from_infra", ("extension.json",), ())
+        return Action("developer", "build_infra", (), ("extension.json",))
     if s == "testing":
+        if plan is not None and _sent_back(plan):
+            return Action("quant", "write_plan", ("spec.json",), ("plan.json",))
+        if plan is not None and not _locked(plan):      # amended: reviewed again before any run
+            return Action("validator", "review_plan", ("plan.json",), ("plan.json",))
         planned = [v.get("id") for v in plan.variants] if plan else []
         unrun = [v for v in planned if v not in (ran_variants or set())]
         verdict = validation.verdict if validation else ""
         if verdict == "reject":
-            return Action("validator", "reject_idea", ("validation.json",), ())
+            return Action("driver", "reject_idea", ("validation.json",), ())
         if verdict == "ready_for_unlock":
-            return Action("owner", "unlock_holdout", ("validation.json",), ("holdout.json",))
+            return Action("driver", "unlock_holdout", ("validation.json",), ("holdout.json",))
         if unrun:
             return Action("quant", "run_variants", ("plan.json",), ("trials.json",))
         if verdict == "continue":

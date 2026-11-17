@@ -71,6 +71,9 @@ def test_the_plan_is_approved_by_the_validator_and_then_locked(lab, capsys, monk
     assert code == EXIT_OK and d["locked_hash"]
 
 
+_EST = {"model": "m", "low": 0.5, "high": 1.0, "blocked": ""}
+
+
 def _parked(lab, capsys, kind="advisor"):
     from hermes.research.approvals import ApprovalBook
     from hermes.research.ideas import IdeaBook
@@ -80,7 +83,7 @@ def _parked(lab, capsys, kind="advisor"):
     ideas = book._load()
     ideas[0].status = "coded"
     book._save(ideas)
-    return idea, ApprovalBook(lab["argv"][7], book).park(idea, kind, "Run it?", "yes")
+    return idea, ApprovalBook(lab["argv"][7], book).park(idea, kind, "Run it?", "yes", estimate=_EST)
 
 
 def test_approvals_lists_the_decision_and_answer_resumes_the_idea(lab, capsys):

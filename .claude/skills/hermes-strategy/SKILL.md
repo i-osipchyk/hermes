@@ -155,3 +155,10 @@ Suggest **`hermes-backtest`** next; don't run it yourself.
 
 **If you are inside `hermes-research`:** report the file path, the parameter count, and
 the choices you defaulted, then return to the loop. It runs the backtest.
+
+## Called by the pipeline
+
+The **Quant** role runs this skill for the `write_strategy` step: the hypothesis is already pinned
+in `spec.json`, so skip the interview, keep every number in the spec's `invented_numbers`, then
+register the file with `hermes ideas set <id> --strategy <name>`. The driver verifies the file
+exists before it moves the idea on.

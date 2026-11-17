@@ -85,9 +85,9 @@ def test_testing_runs_the_unrun_variants_then_asks_the_validator(book, store):
 
 
 @pytest.mark.parametrize("verdict,expected", [
-    ("reject", ("validator", "reject_idea")),
+    ("reject", ("driver", "reject_idea")),
     ("continue", ("quant", "amend_plan")),
-    ("ready_for_unlock", ("owner", "unlock_holdout")),
+    ("ready_for_unlock", ("driver", "unlock_holdout")),
 ])
 def test_the_validators_verdict_decides_what_follows(book, store, verdict, expected):
     idea = _at(book, "testing")

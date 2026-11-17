@@ -155,6 +155,27 @@ illegal edge raises, and there is no `--force`.
 - `hermes ideas add` prints near matches and refuses a near-duplicate of a *rejected* idea unless
   you pass `--parent <id>` (Jaccard ≥ 0.6; ≥ 0.25 is shown).
 
+### Run an idea through the pipeline (phase 4)
+
+`hermes pipeline run <id>` takes one idea from where it is to a verdict by asking
+`next_action` and running the role it names (a fresh `claude -p` per step, with the context pack in
+its prompt). `--dry-run` shows the steps without running any role; `--until STEP` and
+`--max-steps N` stop early; `pipeline step <id>` runs exactly one. Every role step is **verified
+against the files it should have written** — a bad spec is retried twice with the problems listed,
+then the idea parks on an `other` approval and the run exits `2`. A subscription limit pauses
+the run (exit `3`) and a later `run` resumes it; nothing finished is repeated. An owner decision
+parks the idea and the run exits `0` naming the approval.
+
+The Validator's numbers are computed: `hermes pipeline validate <id>` fills `validation.json`
+(axes, N_eff, DSR, null p, what was **not measured** and the command that would measure it, and a
+`recommendation`); the Validator's verdict can only be as cautious as that or more. After a
+passed review the plan and verdict are read-only on disk. `unlock_holdout` is the driver's, once
+the verdict is `ready_for_unlock`; `ready_to_forward_test` stays yours. For an advisor run, `hermes
+pipeline estimate-advisor <idea> <variant> --model M --park` parks an approval carrying the cost
+range, and the run takes `--advisor-approval <id>`. A missing capability becomes a Developer branch
+in a worktree; approving the parked `dev_merge`/`engine_semantics` merges it **locally** after both
+gates re-run (`HERMES_DEV_BASE` sets the base branch, default `master`). Nothing pushes.
+
 ### The pipeline CLI
 
 `hermes pipeline status` is the queue: the backlog by status, pending approvals, ideas waiting
@@ -762,6 +783,7 @@ and **what went unmeasured**.
 |---|---|---|
 | `hermes ideas [add\|set\|rm]` | 1 | The idea backlog; moves are guarded (ADR-0017) |
 | `hermes pipeline status\|context\|approvals\|answer\|reopen\|write\|approve-plan` | all | State, the context pack, owner approvals, artifacts |
+| `hermes pipeline run\|step\|validate\|amend-plan\|extension\|estimate-advisor` | all | The driver, the Validator's computed half, plan amendment, the Developer record, the advisor cost |
 | `hermes strategies` | 2 | What's runnable; broken files with their error |
 | `hermes run <name>` | 3 | Run + record. `--note` is effectively mandatory |
 | `hermes run <name> --universe <u>` | 3 | The same over a `tickers/*.json` list or `sp500`, one shared capital pool |

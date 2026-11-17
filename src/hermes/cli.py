@@ -365,13 +365,17 @@ def cmd_run_universe(args: argparse.Namespace) -> int:
 
 
 def _check_variant(args: argparse.Namespace) -> None:
-    """``--variant`` names a variant of the idea's plan.json; nothing runs unplanned."""
+    """``--variant`` names a variant of a *locked* plan.json; nothing runs unplanned, and no new
+    trial cluster starts once the plan's budget is spent (a diagnostic stays free)."""
     if not getattr(args, "variant", None):
         return
     if not args.idea:
         raise SystemExit("hermes: --variant needs --idea (the plan belongs to an idea)")
     from .research.artifacts import ArtifactStore
+    from .research.ledger import RunLedger
+    from .research.pipeline import _locked
     from .research.reads import default_ideas_dir
+    from .research.trials import TrialRegistry
 
     plan = ArtifactStore(default_ideas_dir()).read(args.idea, "plan")
     ids = [v.get("id") for v in plan.variants] if plan else []
@@ -379,6 +383,55 @@ def _check_variant(args: argparse.Namespace) -> None:
         raise SystemExit(f"hermes: {args.variant!r} is not a variant of idea {args.idea}'s plan "
                          f"(planned: {', '.join(ids) or 'no plan.json'}). A new variant is a plan "
                          f"amendment and needs review")
+    if not _locked(plan):
+        raise SystemExit(f"hermes: idea {args.idea}'s plan is not reviewed and locked; the "
+                         f"Validator approves it before any variant runs")
+    if args.diagnostic:
+        return
+    ledger = RunLedger(args.runs_dir)
+    already = any(e.meta.idea == args.idea and e.meta.variant == args.variant
+                  for e in ledger.entries())
+    budget = plan.budget.get("max_clusters", 5)
+    if not already and len(TrialRegistry(ledger).clusters(args.idea)) >= budget:
+        raise SystemExit(
+            f"hermes: idea {args.idea} already has {budget} trial clusters (the plan's "
+            f"max_clusters). Another variant is a plan amendment — `hermes pipeline amend-plan` "
+            f"— and is reviewed again. Use --diagnostic to explain without counting")
+
+
+def _check_advisor_gate(args: argparse.Namespace, bt, ledger) -> None:
+    """A billed advisor run for an idea (or by a pipeline role) needs an approved advisor
+    approval for this model whose estimated ``high`` is not spent (phase 4 §5). A human running
+    a strategy by hand, with no idea, is unchanged."""
+    if bt.advisor is None or not (args.idea or os.environ.get("HERMES_ROLE")):
+        return
+    from .research.advisor_estimate import (
+        AdvisorRefused,
+        check_advisor_run,
+        reestimate,
+        spent_for_idea,
+    )
+    from .research.approvals import ApprovalBook
+    from .research.ideas import IdeaBook
+    from .research.reads import default_ideas_dir
+
+    model = getattr(getattr(bt.advisor, "provider", None), "model_id", None) \
+        or type(bt.advisor).__name__
+    book = ApprovalBook(args.approvals_file, IdeaBook(args.ideas_file,
+                                                      holdout_dir=default_ideas_dir()))
+    approval = book.get(args.advisor_approval) if args.advisor_approval else None
+    try:
+        check_advisor_run(approval, idea=args.idea or "", model=model,
+                          spent=spent_for_idea(ledger, args.idea or "", model))
+    except AdvisorRefused as e:
+        if approval is not None and "budget is used" in str(e):
+            new = book.park(approval.idea, "advisor",
+                            f"the advisor budget of approval {approval.id} is spent; continue?",
+                            "approve only if the runs so far justify more spend",
+                            estimate=reestimate(approval, spent_for_idea(
+                                ledger, approval.idea, model)))
+            raise SystemExit(f"hermes: {e}. Parked a new approval {new.id}") from e
+        raise SystemExit(f"hermes: {e}") from e
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -403,6 +456,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                             or (args.variant and cached.meta.variant != args.variant)):
             ledger.attribute(key, args.idea, "trial", args.variant)
     else:
+        _check_advisor_gate(args, bt, ledger)
         _warn(f"running {entry.name} · {bt.symbol.ticker} · "
               f"{bt.start.date()}→{bt.end.date()} …")
         result = bt.run()
@@ -1024,6 +1078,111 @@ def _pipeline_parts(args: argparse.Namespace):
             ApprovalBook(args.approvals_file, book))
 
 
+def _devflow(args: argparse.Namespace):
+    from .research.dev_flow import DevFlow
+
+    return DevFlow(Path.cwd(), args.ideas_dir, base=os.environ.get("HERMES_DEV_BASE", "master"))
+
+
+def _merge_branch(args: argparse.Namespace, approval) -> str:
+    from .research.dev_flow import GateFailed
+
+    if not approval.branch:
+        raise SystemExit(f"hermes: approval {approval.id} names no branch to merge")
+    try:
+        return _devflow(args).merge(approval.idea, approval.branch)
+    except GateFailed as e:
+        raise SystemExit(f"hermes: not merged — a gate failed on {approval.branch}:\n"
+                         f"{e.output}") from e
+    except (RuntimeError, ValueError) as e:
+        raise SystemExit(f"hermes: not merged — {e}") from e
+
+
+def _make_runner():
+    """The agent boundary for ``hermes pipeline run`` (tests replace this with a scripted one)."""
+    from .research.roles import ClaudeCodeRunner
+
+    return ClaudeCodeRunner(repo=Path.cwd())
+
+
+def _pipeline_run(args: argparse.Namespace, action: str) -> int:
+    from .research.driver import Driver, DriverConfig
+
+    cfg = DriverConfig(
+        ideas_file=Path(args.ideas_file), ideas_dir=Path(args.ideas_dir),
+        approvals_file=Path(args.approvals_file), thesis_file=Path(args.thesis_file),
+        runs_dir=Path(args.runs_dir) if args.runs_dir else None,
+        strategies_dir=Path(args.dir), repo=Path.cwd(),
+        max_steps=1 if action == "step" else args.max_steps)
+    driver = Driver(cfg, _make_runner(), devflow=_devflow(args))
+    summary = driver.run(args.idea, until=getattr(args, "until", None),
+                         dry_run=getattr(args, "dry_run", False))
+    lines = [f"{s['step']:<18} {s['role']:<10} {s['outcome']}" + (
+        f"  — {s['detail']}" if s.get("detail") else "") for s in summary.steps]
+    lines.append(f"{summary.idea}  {summary.stopped}" + (f": {summary.detail}" if summary.detail
+                                                         else ""))
+    _emit(summary.to_dict(), args.json, lines)
+    return summary.exit_code
+
+
+def _pipeline_validate(args: argparse.Namespace, book, store, ledger) -> int:
+    from dataclasses import asdict
+
+    from .research.reads import ReadsLog
+    from .research.trials import TrialRegistry
+    from .research.validation_fill import fill_validation
+
+    idea = book.get(args.idea)
+    reads = ReadsLog(Path(args.ideas_dir))
+    v = fill_validation(idea.id, book=book, store=store, ledger=ledger,
+                        registry=TrialRegistry(ledger, book, reads), reads=reads)
+    store.write_mechanical(idea.id, v)
+    lines = [f"{idea.id}  recommendation: {v.recommendation}  ({v.recommendation_reason})",
+             f"  candidate {v.candidate_run or '—'}  tier {v.tier or '—'}  N_eff {v.n_eff}  "
+             f"DSR {v.dsr}  null p {v.null_p}  holdout {v.holdout_state}"]
+    lines += [f"  not measured: {m['axis']}  →  {m['command']}" for m in v.not_measured]
+    _emit({"idea": idea.id, "validation": asdict(v)}, args.json, lines)
+    return EXIT_OK
+
+
+def _pipeline_estimate(args: argparse.Namespace, book, store, ledger, approvals) -> int:
+    from .research.advisor_estimate import estimate_advisor, history_tokens
+
+    idea = book.get(args.idea)
+    key = args.run_key
+    if not key:
+        runs = [e for e in ledger.entries()
+                if e.meta.idea == idea.id and e.meta.variant == args.variant]
+        key = runs[0].key if runs else None
+    signals = args.signals
+    if signals is None:
+        rec = ledger.load(ledger.resolve(key)) if key else None
+        if rec is None:
+            raise SystemExit(f"hermes: no advisor-off run of {idea.id}/{args.variant} to count "
+                             f"signals from — run it (--diagnostic) or pass --signals")
+        signals = len(rec.trades)
+    given = (args.tokens_in, args.tokens_out) if args.tokens_in and args.tokens_out else None
+    est = estimate_advisor(model=args.model, signals=signals, cached=args.cached,
+                           variants=args.variants, history=history_tokens(ledger, args.model),
+                           given_tokens=given)
+    approval = None
+    if args.park:
+        approval = approvals.park(
+            idea.id, "advisor",
+            f"run {args.variant} with the {args.model} advisor? ~{est['calls']} billed call(s)",
+            args.recommendation, estimate=est)
+    lines = [f"{idea.id}/{args.variant}  {args.model}  {est['calls']} calls "
+             f"({est['signals']} signals, {est['cached']} cached) × {est['variants']} variant(s)",
+             f"  source {est['source']}  tokens/call {est['tokens_in']}→{est['tokens_out']}"]
+    lines.append(f"  ${est['low']} – ${est['high']}" if est["low"] is not None
+                 else f"  BLOCKED: {est['blocked']}")
+    if approval:
+        lines.append(f"  parked approval {approval.id}")
+    _emit({"idea": idea.id, "estimate": est, "approval": approval.id if approval else None},
+          args.json, lines)
+    return EXIT_OK if est["low"] is not None else EXIT_EMPTY
+
+
 def cmd_pipeline(args: argparse.Namespace) -> int:
     from dataclasses import asdict
 
@@ -1072,12 +1231,16 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
             return EXIT_OK if items else EXIT_EMPTY
 
         if action == "answer":
+            pending = approvals.get(args.id)
+            merged = ""
+            if args.decision == "approve" and pending.kind in ("dev_merge", "engine_semantics"):
+                merged = _merge_branch(args, pending)
             done = approvals.answer(
                 args.id, "approved" if args.decision == "approve" else "denied",
                 args.note or "", deny_to="rejected" if args.reject else None)
             idea = book.get(done.idea)
-            _emit({"approval": asdict(done), "idea": idea.to_dict()}, args.json,
-                  [f"{done.id}  {done.status}  → idea {idea.id} is {idea.status}"])
+            _emit({"approval": asdict(done), "idea": idea.to_dict(), "merge_output": merged},
+                  args.json, [f"{done.id}  {done.status}  → idea {idea.id} is {idea.status}"])
             return EXIT_OK
 
         if action == "reopen":
@@ -1101,6 +1264,30 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
             _emit({"idea": idea.id, "locked_hash": plan.locked_hash}, args.json,
                   [f"{idea.id}  plan approved and locked ({plan.locked_hash})"])
             return EXIT_OK
+
+        if action == "amend-plan":
+            idea = book.get(args.idea)
+            data = json.loads(Path(args.file).read_text())
+            plan = store.amend_plan(idea.id, artifact_from_dict("plan", data))
+            _emit({"idea": idea.id, "amendments": len(plan.amendments)}, args.json,
+                  [f"{idea.id}  plan amended ({len(plan.amendments)} amendment(s)); the old "
+                   f"verdict is archived; the Validator reviews it again"])
+            return EXIT_OK
+
+        if action in ("run", "step"):
+            return _pipeline_run(args, action)
+
+        if action == "validate":
+            return _pipeline_validate(args, book, store, ledger)
+
+        if action == "extension":
+            idea = book.get(args.idea)
+            _devflow(args).record(idea.id, adds=args.adds, tests_added=args.tests)
+            _emit({"idea": idea.id}, args.json, [f"{idea.id}  extension recorded"])
+            return EXIT_OK
+
+        if action == "estimate-advisor":
+            return _pipeline_estimate(args, book, store, ledger, approvals)
     except (ValueError, LookupError, PermissionError, OSError) as e:
         raise SystemExit(f"hermes: {e}") from e
     raise SystemExit(f"hermes: unknown pipeline action {action!r}")
@@ -1256,6 +1443,11 @@ def build_parser() -> argparse.ArgumentParser:
                                      "must be one the plan lists)")
     p.add_argument("--diagnostic", action="store_true",
                    help="this run explains, it does not select: not counted as a trial")
+    p.add_argument("--advisor-approval", metavar="ID",
+                   help="the approved advisor approval that covers this run's billed advisor "
+                        "calls (required when the run is for an idea and uses an advisor)")
+    p.add_argument("--approvals-file", default="research/approvals.json")
+    p.add_argument("--ideas-file", default="research/ideas.json")
     p.add_argument("--no-cache", action="store_true", help="re-run even if the ledger has it")
     p.add_argument("--no-save", action="store_true", help="do not write to the ledger")
     _add_common(p)
@@ -1392,10 +1584,40 @@ def build_parser() -> argparse.ArgumentParser:
         ("reopen", "reopen a rejected idea, with a recorded reason"),
         ("write", "write an artifact (spec|plan|validation|lessons) from a JSON file"),
         ("approve-plan", "the Validator's approval: lock the plan's variants"),
+        ("amend-plan", "the Quant's amendment of a locked plan (reviewed again)"),
+        ("run", "drive one idea to a verdict: next action, role, verify, repeat"),
+        ("step", "drive exactly one step"),
+        ("validate", "fill validation.json's computed fields and recommendation"),
+        ("extension", "the Developer's record of what its branch adds"),
+        ("estimate-advisor", "the cost of an advisor variant, computed (and optionally parked)"),
     ]:
         q = psub.add_parser(name, help=helptext)
-        if name in ("context", "reopen", "write", "approve-plan"):
+        if name in ("context", "reopen", "write", "approve-plan", "amend-plan", "run", "step",
+                    "validate", "extension", "estimate-advisor"):
             q.add_argument("idea", help="idea id or unique prefix")
+        if name == "run":
+            q.add_argument("--until", metavar="STEP", help="stop before this step")
+            q.add_argument("--max-steps", type=int, default=40)
+            q.add_argument("--dry-run", action="store_true",
+                           help="show what would happen; run no role, change nothing")
+        if name == "amend-plan":
+            q.add_argument("--file", required=True, help="JSON file with the new plan")
+        if name == "extension":
+            q.add_argument("--adds", required=True, help="what the branch adds")
+            q.add_argument("--tests", type=int, default=0, help="tests added")
+        if name == "estimate-advisor":
+            q.add_argument("variant")
+            q.add_argument("--model", required=True)
+            q.add_argument("--run-key", help="an advisor-off run of this variant (default: the "
+                                             "idea's latest run of it)")
+            q.add_argument("--signals", type=int, help="signal count, instead of a run's trades")
+            q.add_argument("--cached", type=int, default=0, help="signals the decision cache has")
+            q.add_argument("--variants", type=int, default=1, help="advisor variants planned")
+            q.add_argument("--tokens-in", type=int)
+            q.add_argument("--tokens-out", type=int)
+            q.add_argument("--park", action="store_true",
+                           help="park an advisor approval carrying the estimate")
+            q.add_argument("--recommendation", default="approve if the estimate is acceptable")
         if name == "context":
             q.add_argument("--max-chars", type=int, default=12000)
         if name == "approvals":

@@ -20,6 +20,10 @@ they survive, and so the *source* of your wins is measurable.
 .venv/bin/hermes pipeline status                        # the queue and each idea's next step
 ```
 
+In the pipeline the **Researcher** writes `spec.json` and, after a verdict, `lessons.json`
+(`hermes pipeline write <id> spec|lessons --file f.json`); `hermes pipeline run <id>` drives the
+rest (see `hermes-pipeline`). Declare `--informed-by` for any idea whose results you used.
+
 `hermes ideas add` prints the nearest existing ideas. A near-duplicate of a **rejected** idea
 is refused unless you add `--parent <id>` and say what is different.
 

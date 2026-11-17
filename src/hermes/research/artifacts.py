@@ -44,6 +44,9 @@ MAX_EXTENSIONS = 3
 MAX_PARAMETERS = 3
 
 ROLES = ("researcher", "quant", "validator", "developer", "strategist")
+# How cautious a verdict is: the Validator may move down this list from the recommendation,
+# never up it. ("" is a validation.json that has been filled but not yet judged.)
+VERDICT_ORDER = {"reject": 0, "continue": 1, "ready_for_unlock": 2}
 _NO_ROLE = (None, "", "owner")           # the human: not restricted
 
 
@@ -53,6 +56,10 @@ class ArtifactPermission(PermissionError):
 
 class PlanLocked(ValueError):
     """The variants of a reviewed plan changed without an amendment."""
+
+
+class VerdictLoosened(ValueError):
+    """A verdict was more permissive than the computed recommendation."""
 
 
 # --- the artifacts ---------------------------------------------------------------
@@ -99,7 +106,14 @@ class Plan:
 class Validation:
     """``validation.json`` — the Validator's verdict. Nobody else writes it."""
 
-    verdict: str = ""        # reject | continue | ready_for_unlock | validated
+    verdict: str = ""        # reject | continue | ready_for_unlock — the Validator's, never looser
+                             # than ``recommendation``
+    recommendation: str = ""             # computed by hermes (validation_fill); immutable to the agent
+    recommendation_reason: str = ""
+    candidate_run: str = ""              # the cluster representative the holdout would be spent on
+    rationale: str = ""                  # the Validator's reading (judgement)
+    override_reason: str = ""            # why the verdict is more cautious than the recommendation
+    failure: dict | None = None          # {kind, assumption, detail}; required for ``reject``
     tier: str = ""
     n_eff: float | None = None
     dsr: float | None = None
@@ -109,6 +123,7 @@ class Validation:
     not_measured: list[dict] = field(default_factory=list)   # {axis, command}
     objections: list[str] = field(default_factory=list)
     read_not_declared: list[str] = field(default_factory=list)   # ideas read but not declared
+    plan_check: dict = field(default_factory=dict)       # planned_not_run, run_not_planned, shared
     schema_version: int = SCHEMA_VERSION
 
 
@@ -181,10 +196,74 @@ class ArtifactStore:
         self._allow(name, role)
         if name == "plan":
             artifact = self._guard_plan(idea_id, artifact, _role(role))
+        if name == "validation":
+            artifact = self._guard_validation(idea_id, artifact)
         if name == "lessons":
             artifact.written_at = datetime.now(UTC).isoformat()
         self._dump(idea_id, name, artifact)
         return artifact
+
+    def write_mechanical(self, idea_id: str, validation: Validation, *,
+                         role: str | None = None) -> Validation:
+        """Hermes's own fill of ``validation.json`` (``validation_fill``): the computed fields
+        and the recommendation, with the verdict left for the Validator. Replaces any earlier
+        round, so it unseals first. Only the validator role (or the owner) may call it."""
+        self._allow("validation", role)
+        self.unseal(idea_id, "validation")
+        self._dump(idea_id, "validation", validation)
+        return validation
+
+    # --- sealing: a Validator's finished files are read-only on disk -------------------
+
+    def seal(self, idea_id: str, name: str) -> None:
+        path = self.path(idea_id, name)
+        if path.exists():
+            path.chmod(0o444)
+
+    def unseal(self, idea_id: str, name: str) -> None:
+        path = self.path(idea_id, name)
+        if path.exists():
+            path.chmod(0o644)
+
+    def is_sealed(self, idea_id: str, name: str) -> bool:
+        path = self.path(idea_id, name)
+        return path.exists() and not os.access(path, os.W_OK)
+
+    def archive(self, idea_id: str, name: str) -> Path | None:
+        """Move an artifact aside as ``<name>.round<N>.json`` (the history of a rebuilt one)."""
+        path = self.path(idea_id, name)
+        if not path.exists():
+            return None
+        n = 1
+        while (dest := path.with_name(f"{name}.round{n}.json")).exists():
+            n += 1
+        self.unseal(idea_id, name)
+        os.replace(path, dest)
+        return dest
+
+    def _guard_validation(self, idea_id: str, new: Validation) -> Validation:
+        """The computed fields are not the agent's to change, and the verdict may only be
+        as cautious as the recommendation or more."""
+        if new.verdict and new.verdict not in VERDICT_ORDER:
+            raise ValueError(f"{idea_id}: verdict {new.verdict!r} is not one of "
+                             f"{', '.join(VERDICT_ORDER)}")
+        old = self.read(idea_id, "validation")
+        if old is None or not old.recommendation:
+            return new
+        keep = ("recommendation", "recommendation_reason", "candidate_run", "tier", "n_eff",
+                "dsr", "null_p", "holdout_state", "axes", "not_measured", "read_not_declared", "plan_check")
+        for k in keep:
+            setattr(new, k, getattr(old, k))
+        if new.verdict and VERDICT_ORDER[new.verdict] > VERDICT_ORDER[old.recommendation]:
+            raise VerdictLoosened(
+                f"{idea_id}: verdict {new.verdict!r} is more permissive than the computed "
+                f"recommendation {old.recommendation!r} ({old.recommendation_reason}); "
+                "a verdict can only be as cautious or more")
+        if new.verdict and new.verdict != old.recommendation and not new.override_reason.strip():
+            raise VerdictLoosened(
+                f"{idea_id}: a verdict different from the recommendation {old.recommendation!r} "
+                "needs an override_reason")
+        return new
 
     # --- the plan: review, lock, amendment -----------------------------------------
 
@@ -208,6 +287,7 @@ class ArtifactStore:
     def amend_plan(self, idea_id: str, new: Plan, *, role: str | None = None) -> Plan:
         """Replace the variants of a (possibly locked) plan. The approval is withdrawn."""
         self._allow("plan", role)
+        self.unseal(idea_id, "plan")
         old = self.read(idea_id, "plan")
         new.amendments = list(old.amendments if old else []) + [{
             "at": datetime.now(UTC).isoformat(),
@@ -216,6 +296,7 @@ class ArtifactStore:
         new.locked_hash = None
         new.review = {"approved": False, "objections": [], "reviewer": ""}
         self._dump(idea_id, "plan", new)
+        self.archive(idea_id, "validation")        # the verdict was about the old plan
         return new
 
     def _guard_plan(self, idea_id: str, plan: Plan, role: str | None) -> Plan:
@@ -250,6 +331,9 @@ class ArtifactStore:
 
     def _dump(self, idea_id: str, name: str, artifact: Any) -> None:
         path = self.path(idea_id, name)
+        if self.is_sealed(idea_id, name):
+            raise ArtifactPermission(f"{path} is sealed (read-only): the Validator has finished "
+                                     "with it")
         path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(encode_nonfinite(asdict(artifact)), indent=2, allow_nan=False) + "\n"
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{name}.", suffix=".tmp")
@@ -316,7 +400,30 @@ def validate_plan(plan: Plan) -> list[str]:
             out.append(f"variant {vid}: axis {axis!r} is not one of {', '.join(PLAN_AXES)}")
         if not str(v.get("decision_rule", "")).strip():
             out.append(f"variant {vid}: decision_rule is missing")
+    axes = [v.get("axis") for v in plan.variants]
+    if len(axes) >= 2:
+        top = max(set(axes), key=axes.count)
+        if axes.count(top) * 2 > len(axes):
+            out.append(f"{axes.count(top)} of {len(axes)} variants vary the same axis ({top!r}): "
+                       "a plan that explores one axis is a parameter search in disguise — spread "
+                       "the variants across axes")
     if plan.budget.get("max_extensions", 0) > MAX_EXTENSIONS:
         out.append(f"budget: max_extensions {plan.budget['max_extensions']} exceeds "
                    f"{MAX_EXTENSIONS}")
+    return out
+
+
+def validate_validation(v: Validation) -> list[str]:
+    """Problems with a *finished* verdict's shape (empty = valid)."""
+    out = []
+    if v.verdict not in VERDICT_ORDER:
+        out.append(f"verdict must be one of {', '.join(VERDICT_ORDER)}")
+    if not v.rationale.strip():
+        out.append("rationale is missing")
+    if v.verdict == "reject":
+        f = v.failure or {}
+        if not f.get("kind") or not f.get("assumption"):
+            out.append("a reject needs failure {kind, assumption}")
+    if v.verdict == "ready_for_unlock" and not v.candidate_run:
+        out.append("ready_for_unlock needs a candidate_run")
     return out

@@ -43,3 +43,14 @@ memory.
 
 Completion criterion: the new subclass implements every abstract method, has a passing
 test, and lint is clean.
+
+## Called by the pipeline (the Developer role)
+
+An idea in `needs_infra` names its missing capability in `failure.detail`. The **Developer** builds
+it here, in a **git worktree** on `dev/<idea>-<n>` the driver created — never in the working tree
+the other roles read — test-first (`tdd`), both gates green in the worktree. Commit on the branch,
+then record it: `hermes pipeline extension <idea> --adds "<what it adds>" --tests <n>`.
+
+Do not push or merge. The diff, not your description, decides whether the owner gets a `dev_merge`
+or the stricter `engine_semantics` approval (fills, costs, bars, the forming bar, indicators, the
+holdout/idea/artifact guards). Prefer additive changes; at most 3 extensions per idea.

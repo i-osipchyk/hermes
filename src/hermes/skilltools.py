@@ -19,6 +19,7 @@ PORTABLE_SKILLS = [
     "ask-hermes",
     "hermes-research",
     "hermes-ideas",
+    "hermes-pipeline",
     "hermes-portfolio",
     "hermes-strategy",
     "hermes-explore-data",
