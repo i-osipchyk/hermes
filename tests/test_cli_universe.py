@@ -207,12 +207,12 @@ def test_analyze_a_universe_run_reports_unmeasured_axes_as_such(project, capsys)
     common, runs = project
     main(["run", "buyhold", "--universe", "pair", *common, "--json"])
     key = _json(capsys)["run_key"]
-    assert main(["analyze", key, *common, "--axes", "trades,costs,oos", "--json"]) == EXIT_OK
+    assert main(["analyze", key, *common, "--axes", "trades,costs,oos,null", "--json"]) == EXIT_OK
     d = _json(capsys)
     by = {a["axis"]: a for a in d["axes"]}
-    assert [a["axis"] for a in d["axes"]] == ["trades", "costs", "oos"]
+    assert [a["axis"] for a in d["axes"]] == ["trades", "costs", "oos", "null"]
     assert by["trades"]["ran"] is True
-    for axis in ("costs", "oos"):
+    for axis in ("costs", "oos", "null"):
         assert by[axis]["ran"] is False
         assert "universe" in by[axis]["error"]
     assert json.loads((runs / key / "analysis.json").read_text()) == d

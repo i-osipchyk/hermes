@@ -29,7 +29,7 @@ from typing import Any
 DEFAULT_AXES: tuple[str, ...] = (
     "trades", "costs", "params", "oos", "validation", "regime", "gate",
 )
-ALL_AXES: tuple[str, ...] = (*DEFAULT_AXES, "deflation", "walkforward", "baseline")
+ALL_AXES: tuple[str, ...] = (*DEFAULT_AXES, "deflation", "null", "walkforward", "baseline")
 
 # Axes that can be computed from a *stored* run (a RestoredResult), because they only
 # read its serialised dict. Everything else needs the live BacktestResult — `validate`
@@ -455,6 +455,44 @@ def axis_deflation(result: Any, inputs: DeflationInputs | None, *, seed: int = 4
     return AxisResult("deflation", True, note, data)
 
 
+def axis_null(backtest: Any, result: Any, *, n: int = 200, seed: int = 42) -> AxisResult:
+    """Would the same trades, taken at an unrelated time, have done as well?
+
+    The control a rule-based strategy lacked (audit G1): the observed Sharpe ranked against
+    ``n`` replays of its own trades shifted by a random circular offset, through the real
+    engine. Opt-in, because it costs ``n`` backtests.
+    """
+    from ..backtest.null_baseline import run_null_test
+    from ..backtest.validation import MIN_TRADES_FOR_TRADE_LEVEL_INFERENCE
+
+    n_trades = len(result.trades)
+    if n_trades < MIN_TRADES_FOR_TRADE_LEVEL_INFERENCE:
+        why = (f"only {n_trades} trades (under {MIN_TRADES_FOR_TRADE_LEVEL_INFERENCE} trades a "
+               f"shifted replay says nothing about the strategy's timing)")
+        return AxisResult("null", False, f"not measured — {why}", error=why)
+    null = run_null_test(backtest, result, n=n, seed=seed)
+    sharpes = sorted(null.null_sharpes)
+
+    def pct(q: float) -> float | None:
+        return _r(sharpes[min(len(sharpes) - 1, max(0, round(q * (len(sharpes) - 1))))]) \
+            if sharpes else None
+
+    data = {
+        "observed_sharpe": _r(null.observed_sharpe) if null.observed_sharpe is not None else None,
+        "p_value": null.p_value, "n": null.n, "n_trades": null.n_trades, "seed": seed,
+        "null_sharpe": {"p5": pct(0.05), "p50": pct(0.5), "p95": pct(0.95)},
+    }
+    if null.p_value is None:
+        why = "the observed run has no Sharpe to rank"
+        return AxisResult("null", False, f"not measured — {why}", data, error=why)
+    verdict = ("the timing carries information the shifted trades lack"
+               if null.p_value < 0.05 else "indistinguishable from the same trades at a random time")
+    note = (f"observed Sharpe {data['observed_sharpe']} vs null p5/p50/p95 "
+            f"{data['null_sharpe']['p5']}/{data['null_sharpe']['p50']}/{data['null_sharpe']['p95']} "
+            f"over {null.n} shifts, p={null.p_value:.3f} — {verdict}")
+    return AxisResult("null", True, note, data)
+
+
 def axis_regime(result: Any, *, external_benchmark: list | None = None) -> AxisResult:
     """Rubric 6 — was it the strategy, or being long in a bull market?"""
     from ..backtest import regime_analysis
@@ -574,6 +612,7 @@ def analyze(
     build_backtest: Any | None = None,
     coverage: float | None = None,
     deflation: DeflationInputs | None = None,
+    null_n: int = 200,
 ) -> Analysis:
     """Run the requested rubric axes and collect the evidence.
 
@@ -614,6 +653,8 @@ def analyze(
     add("validation", lambda: axis_validation(result, seed=seed, coverage=coverage), result, "needs a result")
     add("deflation", lambda: axis_deflation(result, deflation, seed=seed), result,
         "needs a result")
+    add("null", lambda: axis_null(backtest, result, n=null_n, seed=seed), backtest,
+        "needs a Backtest to re-run")
     add("regime", lambda: axis_regime(result), result, "needs a result")
     add("gate", lambda: axis_gate(result), result, "needs a result")
 

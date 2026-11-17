@@ -576,6 +576,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         is_frac=args.is_frac, seed=args.seed, baseline_n=args.baseline_n,
         build_backtest=(lambda **kw: bt) if "baseline" in axes else None,
         deflation=_deflation_inputs(args, ledger, rec) if "deflation" in axes else None,
+        null_n=args.null_n,
     )
 
     if run_key and not args.no_save:
@@ -609,7 +610,7 @@ def _deflation_inputs(args: argparse.Namespace, ledger: RunLedger, rec: RunRecor
 
 # Axes that perturb and re-run one Backtest. A universe run is a PortfolioBacktest over
 # many legs, and nothing re-runs that with perturbed inputs yet.
-_UNIVERSE_UNMEASURED = ("costs", "params", "oos", "walkforward", "baseline")
+_UNIVERSE_UNMEASURED = ("costs", "params", "oos", "null", "walkforward", "baseline")
 
 
 def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[str, ...],
@@ -966,6 +967,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=42, help="RNG seed for the statistical axes")
     p.add_argument("--ideas-file", default="research/ideas.json",
                    help="backlog file, for the deflation axis (default: research/ideas.json)")
+    p.add_argument("--null-n", type=int, default=200,
+                   help="time-shifted replays for the null axis (default 200)")
     p.add_argument("--baseline-n", type=int, default=50,
                    help="simulations for the `baseline` axis (default 50)")
     p.add_argument("--no-save", action="store_true", help="do not write analysis.json")
