@@ -395,8 +395,15 @@ def _earned(ideas, idea_id):
 
     holdouts = Path(ideas[1]).parent / "holdouts_dir"
     (holdouts / idea_id).mkdir(parents=True, exist_ok=True)
-    (holdouts / idea_id / "holdout.json").write_text('{"passed": true}')
+    (holdouts / idea_id / "holdout.json").write_text('{"state": "done", "passed": true}')
     return ["--holdout-dir", str(holdouts)]
+
+
+def _walk(ideas, idea_id, capsys, *statuses):
+    """Move an idea along legal edges, the way a session would."""
+    for status in statuses:
+        assert main(["ideas", "set", idea_id, "--status", status, *ideas, "--json"]) == EXIT_OK
+        capsys.readouterr()
 
 
 def test_ideas_add_then_list(ideas, capsys):
@@ -424,6 +431,7 @@ def test_ideas_rejects_an_unknown_source(ideas, capsys):
 def test_ideas_set_walks_the_pipeline_and_links_runs(ideas, capsys):
     main(["ideas", "add", "ema cross", "--source", "trader", *ideas, "--json"])
     idea_id = _json(capsys)["idea"]["id"]
+    _walk(ideas, idea_id, capsys, "quantified", "coded", "testing")
 
     main(["ideas", "set", idea_id[:4], "--status", "validated",
           "--strategy", "ema_crossover", "--run-key", "abc123",
@@ -453,7 +461,8 @@ def test_ideas_open_filter_hides_decided_work(ideas, capsys):
     _json(capsys)
     main(["ideas", "add", "closed one", *ideas, "--json"])
     closed = _json(capsys)["idea"]["id"]
-    main(["ideas", "set", closed, "--status", "rejected", "--verdict", "no", *ideas, "--json"])
+    main(["ideas", "set", closed, "--status", "rejected", "--verdict", "no",
+          "--failure-kind", "no_edge", "--failure-assumption", "it drifts", *ideas, "--json"])
     _json(capsys)
 
     main(["ideas", *ideas, "--open", "--json"])
@@ -463,6 +472,7 @@ def test_ideas_open_filter_hides_decided_work(ideas, capsys):
 def test_ideas_hit_rate_scores_provenance(ideas, capsys):
     main(["ideas", "add", "a", "--source", "trader", *ideas, "--json"])
     good = _json(capsys)["idea"]["id"]
+    _walk(ideas, good, capsys, "quantified", "coded", "testing")
     main(["ideas", "set", good, "--status", "validated", *ideas, *_earned(ideas, good), "--json"])
     _json(capsys)
     main(["ideas", "add", "b", "--source", "book", *ideas, "--json"])

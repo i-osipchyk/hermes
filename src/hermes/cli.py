@@ -693,25 +693,11 @@ def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[s
 # ideas — step 1 of the framework
 # ---------------------------------------------------------------------------
 
-def _require_passed_holdout(book, args: argparse.Namespace) -> None:
-    """`validated` is earned on the holdout (ADR-0012), not asserted. `hermes holdout unlock`
-    is what sets it; this stops a hand edit from skipping the look."""
-    try:
-        idea = book.get(args.id)
-    except LookupError as e:
-        raise SystemExit(f"hermes: {e}") from e
-    path = Path(args.holdout_dir) / idea.id / "holdout.json"
-    passed = path.exists() and json.loads(path.read_text()).get("passed") is True
-    if not passed:
-        raise SystemExit(
-            f"hermes: idea {idea.id} cannot be marked validated: no passed holdout on record "
-            f"({path}). Earn it with `hermes holdout check` then `hermes holdout unlock`")
-
-
 def cmd_ideas(args: argparse.Namespace) -> int:
     from .research.ideas import SOURCES, IdeaBook
 
-    book = IdeaBook(args.ideas_file)
+    book = IdeaBook(args.ideas_file, holdout_dir=getattr(args, "holdout_dir", None)
+                    or "research/ideas")
     action = args.ideas_action
 
     if action == "add":
@@ -732,15 +718,15 @@ def cmd_ideas(args: argparse.Namespace) -> int:
             "status": args.status, "hypothesis": args.hypothesis,
             "strategy": args.strategy, "verdict": args.verdict,
             "run_keys": args.run_key or None, "tags": args.tag or None,
-            "informed_by": args.informed_by or None,
+            "informed_by": args.informed_by or None, "links": args.link or None,
+            "failure": ({"kind": args.failure_kind, "assumption": args.failure_assumption or "",
+                         "detail": args.failure_detail or ""} if args.failure_kind else None),
         }.items() if v}
         if not changes:
             raise SystemExit("hermes: nothing to change — pass --status/--hypothesis/"
-                             "--strategy/--verdict/--run-key/--tag")
-        if changes.get("status") == "validated":
-            _require_passed_holdout(book, args)
+                             "--strategy/--verdict/--run-key/--tag/--link")
         try:
-            idea = book.update(args.id, **changes)
+            idea = book.update(args.id, reason=args.reason or "", **changes)
         except ValueError as e:
             raise SystemExit(f"hermes: {e}") from e
         except LookupError as e:
@@ -793,7 +779,7 @@ def cmd_trials(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
     from .research.trials import TrialRegistry
 
-    book = IdeaBook(args.ideas_file)
+    book = IdeaBook(args.ideas_file, holdout_dir=args.out_dir)
     try:
         idea = book.get(args.idea)
     except LookupError as e:                      # KeyError is a LookupError
@@ -837,7 +823,7 @@ def _candidate(args: argparse.Namespace):
         raise SystemExit(f"hermes: {e}") from e
     if rec is None:
         raise SystemExit(f"hermes: no run {args.run_key!r} in the ledger")
-    book = IdeaBook(args.ideas_file)
+    book = IdeaBook(args.ideas_file, holdout_dir=args.out_dir)
     try:
         idea = book.get(args.idea)
     except LookupError as e:
@@ -881,6 +867,10 @@ def cmd_holdout_unlock(args: argparse.Namespace) -> int:
     if (Path(args.out_dir) / idea.id / "holdout.json").exists():
         raise SystemExit(f"hermes: idea {idea.id} has already looked at the holdout — one look "
                          f"per idea, even if the strategy has changed since")
+    if "validated" not in book.legal_targets(idea):
+        raise SystemExit(f"hermes: idea {idea.id} is {idea.status}; the holdout is only "
+                         f"unlocked for an idea that is `testing`. Move it there first "
+                         f"(`hermes ideas set {idea.id} --status testing`)")
     entry, bt = _rebuild(args, rec)
     if strategy_hash(entry.path) != rec.meta.strategy_hash:
         raise SystemExit(f"hermes: {entry.name} has changed since run {rec.key}; the holdout "
@@ -930,10 +920,14 @@ def cmd_holdout_unlock(args: argparse.Namespace) -> int:
     if verdict["passed"]:
         book.update(idea.id, status="validated",
                     verdict=f"passed the holdout ({record['window']['start'][:10]} → "
-                            f"{record['window']['end'][:10]}): PSR {verdict['holdout']['psr']:.2f}")
+                            f"{record['window']['end'][:10]}): PSR {verdict['holdout']['psr']:.2f}",
+                    reason="holdout unlock")
     else:
         failed = ", ".join(n for n, c in verdict["checks"].items() if not c["ok"])
-        book.update(idea.id, status="rejected", verdict=f"holdout_failed: {failed}")
+        book.update(idea.id, status="rejected", verdict=f"holdout_failed: {failed}",
+                    reason="holdout unlock",
+                    failure={"kind": "holdout_failed", "detail": failed,
+                             "assumption": "the in-sample edge persists out of sample"})
     lines = [f"{idea.id}  holdout {'PASSED' if verdict['passed'] else 'FAILED'}"]
     for name, c in verdict["checks"].items():
         lines.append(f"  {'✓' if c['ok'] else '✗'} {name:<6} {c['value']}  (need {c['need']})")
@@ -1154,7 +1148,16 @@ def build_parser() -> argparse.ArgumentParser:
         elif name == "set":
             q.add_argument("id", help="idea id, or a unique prefix")
             q.add_argument("--status",
-                           help="raw | quantified | testing | validated | rejected | parked")
+                           help="one of the idea statuses; only the edges the pipeline allows "
+                                "(validated needs a passed `hermes holdout unlock`)")
+            q.add_argument("--reason", help="why (recorded in the idea's history)")
+            q.add_argument("--link", action="append", default=[], metavar="URL",
+                           help="a source link (repeatable); literature_done needs one")
+            q.add_argument("--failure-kind", help="why it failed (rejected/needs_infra): "
+                           "no_edge | cost_killed | regime_dependent | overfit | data_limit | "
+                           "holdout_failed | duplicate | infra | other")
+            q.add_argument("--failure-assumption", help="the assumption that did not hold")
+            q.add_argument("--failure-detail", help="detail; for needs_infra, the missing capability")
             q.add_argument("--hypothesis")
             q.add_argument("--strategy", help="strategies/<name>.py this became")
             q.add_argument("--verdict", help="why it was validated or rejected")

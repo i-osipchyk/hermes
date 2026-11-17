@@ -24,28 +24,65 @@ Hermes artifact that should be committed.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 
 DEFAULT_IDEAS_PATH = Path("research/ideas.json")
+DEFAULT_IDEAS_DIR = Path("research/ideas")      # per-idea artifacts: <id>/holdout.json, …
 
 # Where an idea came from. Kept close to the framework's own list so the hit rate per
 # source is measurable: books, your own discretionary screen time, other traders and
 # courses, or something you noticed in the data.
 SOURCES = ("book", "discretionary", "trader", "course", "data", "other")
 
-# The pipeline. An idea moves forward only on evidence; `parked` is for ideas that are
-# blocked (missing data, needs an instrument Hermes can't reach) rather than judged.
+# The pipeline. An idea moves forward only on evidence, and only along `TRANSITIONS`;
+# `parked` is for ideas that are blocked (missing data, needs an instrument Hermes can't
+# reach) rather than judged. "Reflected" is deliberately not a status: it is the presence of
+# lessons.json, so `validated`/`rejected` stay what `hit_rate` and `is_open` read.
 STATUSES = (
-    "raw",            # captured, not yet quantified
-    "quantified",     # unambiguous rules exist — testable
-    "testing",        # runs exist, verdict not reached
-    "validated",      # survived the rubric; candidate for a portfolio
-    "rejected",       # tested and did not survive — keep it, it is a real result
-    "parked",         # blocked on something external, not on evidence
+    "raw",                    # captured, not yet quantified
+    "literature_done",        # sources and a falsifiable claim exist
+    "quantified",             # unambiguous rules exist — testable
+    "coded",                  # a strategy file exists and runs
+    "testing",                # runs exist, verdict not reached
+    "needs_infra",            # blocked on a Developer extension
+    "awaiting_approval",      # parked on an owner decision (resume_status, approval_id)
+    "validated",              # survived the rubric — only via a passed holdout (ADR-0012)
+    "ready_to_forward_test",  # validated and the owner approved the suggestion
+    "rejected",               # tested and did not survive — keep it, it is a real result
+    "parked",                 # blocked on something external, not on evidence
 )
+
+# Why an idea failed: a closed vocabulary so the Strategist can group failures.
+FAILURE_KINDS = ("no_edge", "cost_killed", "regime_dependent", "overfit", "data_limit",
+                 "holdout_failed", "duplicate", "infra", "other")
+
+_ANYWHERE = frozenset({"awaiting_approval", "parked"})
+TRANSITIONS: dict[str, frozenset[str]] = {
+    "raw": frozenset({"literature_done", "quantified", "rejected"}) | _ANYWHERE,
+    "literature_done": frozenset({"quantified", "rejected"}) | _ANYWHERE,
+    "quantified": frozenset({"coded", "needs_infra", "rejected"}) | _ANYWHERE,
+    "needs_infra": frozenset({"quantified", "coded", "rejected"}) | _ANYWHERE,
+    "coded": frozenset({"testing", "needs_infra", "rejected"}) | _ANYWHERE,
+    "testing": frozenset({"validated", "rejected", "needs_infra"}) | _ANYWHERE,
+    # → resume_status is added per idea
+    "awaiting_approval": frozenset({"rejected", "parked"}),
+    "validated": frozenset({"ready_to_forward_test"}) | _ANYWHERE,
+    "ready_to_forward_test": frozenset(),
+    "rejected": frozenset(),                      # terminal; `reopen` is the one way out
+    # → statuses the idea had before; this is only the fallback for a legacy record
+    "parked": frozenset({"raw", "quantified", "testing"}),
+}
+
+# Statuses whose entry is guarded by evidence outside this module.
+LINK_FREE_SOURCES = ("discretionary", "data")
+
+
+class IllegalTransition(ValueError):
+    """A status change the pipeline does not allow."""
 
 
 @dataclass
@@ -67,6 +104,16 @@ class Idea:
     informed_by: list[str] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
+    # --- phase 3: state the pipeline reads (all additive; old records load unchanged) ---
+    schema_version: int = 2
+    parent: str | None = None              # the idea this one was spun out of
+    failure: dict | None = None            # {kind, assumption, detail}; kind in FAILURE_KINDS
+    links: list[str] = field(default_factory=list)       # source URLs
+    resume_status: str | None = None       # where an awaiting_approval idea goes back to
+    approval_id: str | None = None
+    priority: int | None = None            # manual order; lower runs first
+    validation_basis: str | None = None    # "holdout" or "none (pre-holdout)"
+    history: list[dict] = field(default_factory=list)    # {at, from, to, by, reason}
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -82,7 +129,20 @@ class Idea:
 
     @property
     def is_open(self) -> bool:
-        return self.status not in ("validated", "rejected")
+        return self.status not in ("validated", "ready_to_forward_test", "rejected")
+
+
+def _targets(idea: Idea) -> frozenset[str]:
+    """Edges out of ``idea.status``: the static graph plus the dynamic ones (resume, un-park)."""
+    out = set(TRANSITIONS[idea.status]) - {idea.status}
+    if idea.status == "awaiting_approval" and idea.resume_status:
+        out.add(idea.resume_status)
+    if idea.status == "parked":
+        earlier = {h["from"] for h in idea.history} - {"parked", "awaiting_approval"}
+        out = earlier if earlier else out
+    if idea.status in ("parked", "ready_to_forward_test"):
+        out -= {"awaiting_approval"}
+    return frozenset(out)
 
 
 @dataclass
@@ -90,9 +150,12 @@ class IdeaBook:
     """The backlog, persisted as one JSON file."""
 
     path: Path = DEFAULT_IDEAS_PATH
+    # Where each idea's artifacts live; `validated` is checked against <id>/holdout.json here.
+    holdout_dir: Path = DEFAULT_IDEAS_DIR
 
     def __post_init__(self) -> None:
         self.path = Path(self.path)
+        self.holdout_dir = Path(self.holdout_dir)
 
     # --- storage -----------------------------------------------------------
 
@@ -175,31 +238,94 @@ class IdeaBook:
         self._save(ideas)
         return idea
 
-    def update(self, id_or_prefix: str, **changes: object) -> Idea:
-        """Change fields on an idea. ``run_keys``, ``tags`` and ``informed_by`` are appended, not replaced."""
+    def update(self, id_or_prefix: str, *, reason: str = "", **changes: object) -> Idea:
+        """Change fields on an idea; ``run_keys``, ``tags``, ``informed_by`` and ``links`` are
+        appended, not replaced.
+
+        A status change must be an edge of ``TRANSITIONS`` and satisfy the rules attached to it,
+        or ``IllegalTransition`` is raised and nothing is written. There is no force: an agent
+        with a shell would use it. Every change is appended to ``history``.
+        """
         target = self.get(id_or_prefix)
-        if "status" in changes and changes["status"] not in STATUSES:
-            raise ValueError(
-                f"unknown status {changes['status']!r}. Known: {', '.join(STATUSES)}"
-            )
+        new = changes.get("status")
+        if new is not None and new not in STATUSES:
+            raise ValueError(f"unknown status {new!r}. Known: {', '.join(STATUSES)}")
+        failure = changes.get("failure")
+        if failure is not None and failure.get("kind") not in FAILURE_KINDS:  # type: ignore[attr-defined]
+            raise ValueError(f"unknown failure kind {failure.get('kind')!r}. "  # type: ignore[attr-defined]
+                             f"Known: {', '.join(FAILURE_KINDS)}")
         ideas = self._load()
         for idea in ideas:
             if idea.id != target.id:
                 continue
+            before = idea.status
             for k, v in changes.items():
                 if v is None:
                     continue
-                if k in ("run_keys", "tags", "informed_by"):
+                if k in ("run_keys", "tags", "informed_by", "links"):
                     existing = getattr(idea, k)
                     for item in (v if isinstance(v, list) else [v]):
                         if item not in existing:
                             existing.append(item)
-                elif hasattr(idea, k):
+                elif hasattr(idea, k) and k != "history":
                     setattr(idea, k, v)
-            idea.updated_at = datetime.now(UTC).isoformat()
+            now = datetime.now(UTC).isoformat()
+            if idea.status != before:
+                self._check(idea, before)
+                idea.history.append({"at": now, "from": before, "to": idea.status,
+                                     "by": os.environ.get("HERMES_ROLE") or "owner",
+                                     "reason": reason})
+                if idea.status == "validated":
+                    idea.validation_basis = "holdout"
+                if idea.status == "awaiting_approval":
+                    idea.resume_status = before
+            idea.updated_at = now
             self._save(ideas)
             return idea
         raise KeyError(target.id)
+
+    def legal_targets(self, idea: Idea) -> frozenset[str]:
+        """The statuses an idea may move to from where it is (edges only, not the rules)."""
+        return _targets(idea)
+
+    def _check(self, idea: Idea, before: str) -> None:
+        """Raise if ``before → idea.status`` is not allowed. ``idea`` already carries the changes."""
+        to = idea.status
+        was = Idea(id=idea.id, title=idea.title, status=before, resume_status=idea.resume_status,
+                   history=idea.history)
+        if to == "ready_to_forward_test":
+            raise IllegalTransition(
+                f"{idea.id}: ready_to_forward_test is set only by an owner approval "
+                "(`hermes pipeline answer`), never by a status update")
+        if to not in _targets(was):
+            raise IllegalTransition(f"{idea.id}: {before} → {to} is not a legal transition "
+                                    f"(from {before}: {', '.join(sorted(_targets(was))) or 'none'})")
+        if to == "validated" and not self._holdout_passed(idea.id):
+            raise IllegalTransition(
+                f"{idea.id}: validated is earned, not asserted — no passed holdout on record "
+                f"({self.holdout_dir / idea.id / 'holdout.json'}). "
+                "Earn it with `hermes holdout check` then `hermes holdout unlock`")
+        if to == "literature_done" and not idea.links and idea.source not in LINK_FREE_SOURCES:
+            raise IllegalTransition(
+                f"{idea.id}: literature_done needs at least one source link (--link), "
+                f"unless the source is {' or '.join(LINK_FREE_SOURCES)}")
+        if to == "rejected":
+            f = idea.failure or {}
+            if not f.get("kind") or not f.get("assumption"):
+                raise IllegalTransition(
+                    f"{idea.id}: rejected needs a failure (kind and the assumption that failed)")
+            if not idea.verdict:
+                raise IllegalTransition(f"{idea.id}: rejected needs a verdict")
+        if to == "needs_infra" and not (idea.failure or {}).get("detail"):
+            raise IllegalTransition(
+                f"{idea.id}: needs_infra must name the missing capability (failure.detail)")
+
+    def _holdout_passed(self, idea_id: str) -> bool:
+        path = self.holdout_dir / idea_id / "holdout.json"
+        if not path.exists():
+            return False
+        rec = json.loads(path.read_text())
+        return rec.get("state") == "done" and rec.get("passed") is True
 
     def remove(self, id_or_prefix: str) -> Idea:
         target = self.get(id_or_prefix)
@@ -222,8 +348,9 @@ class IdeaBook:
         out: dict[str, dict] = {}
         for src in SOURCES:
             group = [i for i in self._load() if i.source == src]
-            decided = [i for i in group if i.status in ("validated", "rejected")]
-            validated = [i for i in decided if i.status == "validated"]
+            decided = [i for i in group
+                       if i.status in ("validated", "ready_to_forward_test", "rejected")]
+            validated = [i for i in decided if i.status != "rejected"]
             out[src] = {
                 "total": len(group),
                 "decided": len(decided),
