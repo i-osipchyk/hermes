@@ -504,6 +504,18 @@ def cap_tier_for_coverage(
                      f"legs had data, so survivorship bias may be back.")
 
 
+def cap_tier_for_holdout(
+    tier: str, reason: str, holdout_carved: bool | None,
+) -> tuple[str, str]:
+    """Without a carved holdout nothing was ever held out of the search, so the evidence
+    cannot exceed ``exploratory`` (ADR-0012). ``None`` (unknown) changes nothing."""
+    if holdout_carved is not False or tier in (TIER_UNKNOWN, TIER_EXPLORATORY):
+        return tier, reason
+    return (TIER_EXPLORATORY,
+            f"no holdout could be carved (history too short): capped at exploratory "
+            f"(otherwise {tier}). {reason}")
+
+
 def _sample_quality(metrics, equity_curve=None) -> SampleQuality:
     n = metrics.num_trades
     k = metrics.num_params

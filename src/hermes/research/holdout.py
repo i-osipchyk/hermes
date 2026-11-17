@@ -23,6 +23,10 @@ def default_path() -> Path:
     return Path(os.environ.get("HERMES_HOLDOUTS_PATH") or "research/holdouts.json")
 
 
+def _key(source: DataSource, symbol: Symbol, timeframe: Timeframe) -> str:
+    return f"{source.name}/{symbol.ticker}/{timeframe}"
+
+
 class HoldoutPolicy:
     def __init__(self, path: Path | str | None = None, *, now: datetime | None = None):
         self._path = Path(path) if path else None
@@ -35,8 +39,8 @@ class HoldoutPolicy:
     def holdout_start(
         self, source: DataSource, symbol: Symbol, timeframe: Timeframe
     ) -> datetime | None:
-        key = f"{source.name}/{symbol.ticker}/{timeframe}"
-        store = json.loads(self.path.read_text()) if self.path.exists() else {}
+        key = _key(source, symbol, timeframe)
+        store = self._read()
         if key in store:                              # frozen at first touch: never slides
             frozen = store[key]["holdout_start"]
             return datetime.fromisoformat(frozen) if frozen else None
@@ -46,9 +50,26 @@ class HoldoutPolicy:
             "frozen_at": datetime.now(UTC).isoformat(),
             "looks": [],
         }
+        self._write(store)
+        return start
+
+    def looks(self, source: DataSource, symbol: Symbol, timeframe: Timeframe) -> list[dict]:
+        """Every look any idea has taken at this instrument's holdout, oldest first."""
+        return list(self._read().get(_key(source, symbol, timeframe), {}).get("looks", []))
+
+    def record_look(
+        self, source: DataSource, symbol: Symbol, timeframe: Timeframe, look: dict
+    ) -> None:
+        store = self._read()
+        store[_key(source, symbol, timeframe)]["looks"].append(look)
+        self._write(store)
+
+    def _read(self) -> dict:
+        return json.loads(self.path.read_text()) if self.path.exists() else {}
+
+    def _write(self, store: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(store, indent=2, sort_keys=True) + "\n")
-        return start
 
     @staticmethod
     def _carve(
@@ -99,8 +120,19 @@ class HoldoutSource(DataSource):
     def supported_timeframes(self) -> set[Timeframe]:
         return self._inner.supported_timeframes()
 
+    @property
+    def inner(self) -> DataSource:
+        """The unguarded source. Only the holdout unlock may read through it."""
+        return self._inner
+
     def holdout_start(self, symbol: Symbol, timeframe: Timeframe) -> datetime | None:
         return self._policy.holdout_start(self._inner, symbol, timeframe)
+
+    def looks(self, symbol: Symbol, timeframe: Timeframe) -> list[dict]:
+        return self._policy.looks(self._inner, symbol, timeframe)
+
+    def record_look(self, symbol: Symbol, timeframe: Timeframe, look: dict) -> None:
+        self._policy.record_look(self._inner, symbol, timeframe, look)
 
     def history(
         self, instrument: Instrument, timeframe: Timeframe, start: datetime, end: datetime
@@ -115,3 +147,17 @@ class HoldoutSource(DataSource):
             )
         return [b for b in self._inner.history(instrument, timeframe, start, end)
                 if b.timestamp < held]
+
+
+def base_timeframe(backtest) -> Timeframe:
+    """The Base Timeframe a backtest will run on: its finest declared timeframe, else the
+    finest an Indicator subscribes to (as ``Backtest.run`` derives it)."""
+    frames = set(backtest.timeframes)
+    if not frames:
+        strategy = backtest.strategy
+        strategy._params = dict(backtest.params)
+        strategy.run_setup()
+        frames = {ind.timeframe for ind in strategy.registered_indicators}
+    if not frames:
+        raise ValueError("No timeframes: set Backtest.timeframes or declare an Indicator.")
+    return min(frames)

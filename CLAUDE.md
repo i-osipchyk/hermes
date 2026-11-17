@@ -59,7 +59,7 @@ Two rules about the review:
 Before calling anything done, both of these must pass:
 
 ```bash
-.venv/bin/python -m pytest          # ~517 tests, offline, ~8s
+.venv/bin/python -m pytest          # ~585 tests, offline, ~16s
 .venv/bin/python -m ruff check .     # clean across the whole repo
 ```
 

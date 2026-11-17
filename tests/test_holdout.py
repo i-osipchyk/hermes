@@ -212,3 +212,22 @@ def test_analyzing_a_stored_run_cannot_reach_into_the_holdout_either(long_projec
 
     assert code == EXIT_ERR
     assert "holdout" in capsys.readouterr().err.lower()
+
+
+def test_a_strategy_that_leaves_timeframes_to_its_indicators_still_gets_a_default_end(
+    tmp_path, capsys
+):
+    """Backtest derives the base timeframe from declared Indicators when `timeframes` is
+    empty; the guard must find it the same way rather than assume `timeframes[0]`."""
+    sdir = tmp_path / "strategies"
+    sdir.mkdir()
+    src = (_LONG_STRATEGY
+           .replace("from hermes import Backtest,", "from hermes import SMA, Backtest,")
+           .replace("def setup(self): ...", "def setup(self):\n        self.use(SMA(D1, 3))")
+           .replace("timeframes=[D1],", "timeframes=[],"))
+    (sdir / "buy.py").write_text(src)
+    argv = ["--dir", str(sdir), "--runs-dir", str(tmp_path / "runs")]
+
+    assert main(["run", "buy", *argv, "--json", "--note", "t"]) == EXIT_OK
+
+    assert json.loads(capsys.readouterr().out)["end"] == "2021-12-30T00:00:00+00:00"

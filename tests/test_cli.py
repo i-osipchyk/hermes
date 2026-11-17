@@ -388,6 +388,17 @@ def ideas(tmp_path):
     return ["--ideas-file", str(tmp_path / "ideas.json")]
 
 
+def _earned(ideas, idea_id):
+    """Record a passed holdout for the idea (what `hermes holdout unlock` writes), and return
+    the argv that points `ideas set` at it — `validated` is earned, not asserted (ADR-0012)."""
+    from pathlib import Path
+
+    holdouts = Path(ideas[1]).parent / "holdouts_dir"
+    (holdouts / idea_id).mkdir(parents=True, exist_ok=True)
+    (holdouts / idea_id / "holdout.json").write_text('{"passed": true}')
+    return ["--holdout-dir", str(holdouts)]
+
+
 def test_ideas_add_then_list(ideas, capsys):
     assert main(["ideas", "add", "ORB on NQ", "--source", "book",
                  "--detail", "Carver", "--hypothesis", "first 30m sets direction",
@@ -416,7 +427,7 @@ def test_ideas_set_walks_the_pipeline_and_links_runs(ideas, capsys):
 
     main(["ideas", "set", idea_id[:4], "--status", "validated",
           "--strategy", "ema_crossover", "--run-key", "abc123",
-          "--verdict", "survives costs", *ideas, "--json"])
+          "--verdict", "survives costs", *ideas, *_earned(ideas, idea_id), "--json"])
     got = _json(capsys)["idea"]
     assert got["status"] == "validated"
     assert got["run_keys"] == ["abc123"]
@@ -452,7 +463,7 @@ def test_ideas_open_filter_hides_decided_work(ideas, capsys):
 def test_ideas_hit_rate_scores_provenance(ideas, capsys):
     main(["ideas", "add", "a", "--source", "trader", *ideas, "--json"])
     good = _json(capsys)["idea"]["id"]
-    main(["ideas", "set", good, "--status", "validated", *ideas, "--json"])
+    main(["ideas", "set", good, "--status", "validated", *ideas, *_earned(ideas, good), "--json"])
     _json(capsys)
     main(["ideas", "add", "b", "--source", "book", *ideas, "--json"])
     _json(capsys)

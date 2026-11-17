@@ -370,20 +370,23 @@ def axis_walkforward(backtest: Any, *, is_frac: float = 0.6,
     return AxisResult("walkforward", True, "; ".join(bits), data)
 
 
-def axis_validation(result: Any, *, seed: int = 42, coverage: float | None = None) -> AxisResult:
+def axis_validation(result: Any, *, seed: int = 42, coverage: float | None = None,
+                    holdout_carved: bool | None = None) -> AxisResult:
     """Rubric 4 — is the result distinguishable from luck, and is the sample big enough?
 
     ``coverage`` is the share of a universe's legs that actually ran; below the
     thresholds in :mod:`hermes.backtest.validation` it caps the evidence tier.
     """
     from ..backtest import validate
-    from ..backtest.validation import cap_tier_for_coverage
+    from ..backtest.validation import cap_tier_for_coverage, cap_tier_for_holdout
 
     sv = validate(result, seed=seed)
     sq = sv.sample_quality
     sq.tier, sq.tier_reason = cap_tier_for_coverage(sq.tier, sq.tier_reason, coverage)
+    sq.tier, sq.tier_reason = cap_tier_for_holdout(sq.tier, sq.tier_reason, holdout_carved)
     data = sv.to_dict()
     data["universe_coverage"] = coverage
+    data["holdout_carved"] = holdout_carved
 
     flags = []
     if coverage is not None and coverage < 1.0:
@@ -613,6 +616,7 @@ def analyze(
     coverage: float | None = None,
     deflation: DeflationInputs | None = None,
     null_n: int = 200,
+    holdout_carved: bool | None = None,
 ) -> Analysis:
     """Run the requested rubric axes and collect the evidence.
 
@@ -650,7 +654,8 @@ def analyze(
     add("oos", lambda: axis_oos(backtest, is_frac), backtest, "needs a Backtest to re-run")
     add("walkforward", lambda: axis_walkforward(backtest, is_frac=is_frac, param_grid=param_grid),
         backtest, "needs a Backtest to re-run")
-    add("validation", lambda: axis_validation(result, seed=seed, coverage=coverage), result, "needs a result")
+    add("validation", lambda: axis_validation(result, seed=seed, coverage=coverage,
+                                            holdout_carved=holdout_carved), result, "needs a result")
     add("deflation", lambda: axis_deflation(result, deflation, seed=seed), result,
         "needs a result")
     add("null", lambda: axis_null(backtest, result, n=null_n, seed=seed), backtest,
