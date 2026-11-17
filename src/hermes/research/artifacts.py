@@ -123,6 +123,7 @@ class Lessons:
     next_hypotheses: list[dict] = field(default_factory=list)  # {title, hypothesis, informed_by}
     infra_gaps: list[str] = field(default_factory=list)
     surprises: list[str] = field(default_factory=list)
+    written_at: str = ""                                 # set by the store when written
     schema_version: int = SCHEMA_VERSION
 
 
@@ -139,6 +140,11 @@ _WRITERS: dict[str, tuple[str, ...]] = {
 def _load_as(cls: type, d: dict) -> Any:
     known = {f.name for f in fields(cls)}
     return cls(**{k: v for k, v in decode_nonfinite(d).items() if k in known})
+
+
+def artifact_from_dict(name: str, d: dict) -> Any:
+    """A typed artifact from parsed JSON (unknown keys ignored, missing ones defaulted)."""
+    return _load_as(ArtifactStore._cls(name), d)
 
 
 def variants_hash(variants: list[dict]) -> str:
@@ -175,6 +181,8 @@ class ArtifactStore:
         self._allow(name, role)
         if name == "plan":
             artifact = self._guard_plan(idea_id, artifact, _role(role))
+        if name == "lessons":
+            artifact.written_at = datetime.now(UTC).isoformat()
         self._dump(idea_id, name, artifact)
         return artifact
 

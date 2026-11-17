@@ -349,6 +349,29 @@ class IdeaBook:
         """Where each idea's artifacts live (``holdout_dir`` is the older name for it)."""
         return self.holdout_dir
 
+    def reopen(self, id_or_prefix: str, reason: str) -> Idea:
+        """The one way out of ``rejected``: back to ``quantified``, with a recorded reason.
+        There is no force; an agent with a shell would use it."""
+        if not reason.strip():
+            raise ValueError("reopen needs a reason")
+        target = self.get(id_or_prefix)
+        if target.status != "rejected":
+            raise IllegalTransition(f"{target.id}: only a rejected idea can be reopened "
+                                    f"(it is {target.status})")
+        ideas = self._load()
+        for idea in ideas:
+            if idea.id == target.id:
+                idea.status = "quantified"
+                self._require_artifacts(idea, "quantified")
+                now = datetime.now(UTC).isoformat()
+                idea.history.append({"at": now, "from": "rejected", "to": "quantified",
+                                     "by": os.environ.get("HERMES_ROLE") or "owner",
+                                     "reason": f"reopen: {reason}"})
+                idea.updated_at = now
+                self._save(ideas)
+                return idea
+        raise KeyError(target.id)
+
     def legal_targets(self, idea: Idea) -> frozenset[str]:
         """The statuses an idea may move to from where it is (edges only, not the rules)."""
         return _targets(idea)

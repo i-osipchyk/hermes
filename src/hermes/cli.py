@@ -1010,6 +1010,102 @@ def cmd_holdout_unlock(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# pipeline — state, context and approvals (ADR-0014, phase 3)
+# ---------------------------------------------------------------------------
+
+def _pipeline_parts(args: argparse.Namespace):
+    from .research.approvals import ApprovalBook
+    from .research.artifacts import ArtifactStore
+    from .research.ideas import IdeaBook
+    from .research.ledger import RunLedger
+
+    book = IdeaBook(args.ideas_file, holdout_dir=args.ideas_dir)
+    return (book, ArtifactStore(args.ideas_dir), RunLedger(args.runs_dir),
+            ApprovalBook(args.approvals_file, book))
+
+
+def cmd_pipeline(args: argparse.Namespace) -> int:
+    from dataclasses import asdict
+
+    from .research.artifacts import artifact_from_dict
+    from .research.context import build_context, render_context
+    from .research.pipeline import status_report
+    from .research.reads import ReadsLog
+    from .research.trials import TrialRegistry
+
+    book, store, ledger, approvals = _pipeline_parts(args)
+    action = args.pipeline_action
+    try:
+        if action == "status":
+            rep = status_report(book, store, approvals, ledger, args.thesis_file)
+            lines = ["backlog  " + "  ".join(f"{k} {v}" for k, v in rep["by_status"].items() if v),
+                     f"pending approvals  {len(rep['pending_approvals'])}",
+                     f"awaiting reflection  {len(rep['awaiting_reflection'])}",
+                     f"thesis due  {'yes' if rep['thesis_due'] else 'no'}", ""]
+            for row in rep["open"]:
+                n = row["next_action"]
+                lines.append(f"  {row['idea']}  [{row['status']}] {row['title'][:50]}  →  "
+                             f"{n['role']}: {n['step']}")
+            _emit(rep, args.json, lines)
+            return EXIT_OK
+
+        if action == "context":
+            idea = book.get(args.idea)
+            _log_read("pipeline context", idea.id, target_idea=idea.id)
+            reads = ReadsLog()
+            ctx = build_context(idea.id, book=book, store=store, ledger=ledger,
+                                registry=TrialRegistry(ledger, book, reads),
+                                approvals=approvals, reads=reads, thesis_path=args.thesis_file)
+            _emit(ctx, args.json, [render_context(ctx, args.max_chars)])
+            return EXIT_OK
+
+        if action == "approvals":
+            items = approvals.all(pending_only=args.pending)
+            lines = [f"{len(items)} approval(s)"]
+            for a in items:
+                lines += [f"  {a.id}  [{a.status}] {a.kind}  idea {a.idea}",
+                          f"      ? {a.question}", f"      recommend: {a.recommendation}"]
+                if a.estimate:
+                    lines.append(f"      estimate: {a.estimate}")
+                lines += [f"      evidence: {e}" for e in a.evidence]
+            _emit({"approvals": [asdict(a) for a in items]}, args.json, lines)
+            return EXIT_OK if items else EXIT_EMPTY
+
+        if action == "answer":
+            done = approvals.answer(
+                args.id, "approved" if args.decision == "approve" else "denied",
+                args.note or "", deny_to="rejected" if args.reject else None)
+            idea = book.get(done.idea)
+            _emit({"approval": asdict(done), "idea": idea.to_dict()}, args.json,
+                  [f"{done.id}  {done.status}  → idea {idea.id} is {idea.status}"])
+            return EXIT_OK
+
+        if action == "reopen":
+            idea = book.reopen(args.idea, args.reason)
+            _emit({"idea": idea.to_dict()}, args.json, [f"{idea.id}  reopened → {idea.status}"])
+            return EXIT_OK
+
+        if action == "write":
+            idea = book.get(args.idea)
+            data = json.loads(Path(args.file).read_text())
+            written = store.write(idea.id, args.artifact, artifact_from_dict(args.artifact, data))
+            _emit({"idea": idea.id, "artifact": args.artifact, "path": str(
+                store.path(idea.id, args.artifact))}, args.json,
+                [f"wrote {store.path(idea.id, args.artifact)}"])
+            del written
+            return EXIT_OK
+
+        if action == "approve-plan":
+            idea = book.get(args.idea)
+            plan = store.approve_plan(idea.id, reviewer=args.reviewer)
+            _emit({"idea": idea.id, "locked_hash": plan.locked_hash}, args.json,
+                  [f"{idea.id}  plan approved and locked ({plan.locked_hash})"])
+            return EXIT_OK
+    except (ValueError, LookupError, PermissionError, OSError) as e:
+        raise SystemExit(f"hermes: {e}") from e
+    raise SystemExit(f"hermes: unknown pipeline action {action!r}")
+
+# ---------------------------------------------------------------------------
 # correlate — step 4 of the framework
 # ---------------------------------------------------------------------------
 
@@ -1285,6 +1381,45 @@ def build_parser() -> argparse.ArgumentParser:
                         "trials that ran outside the plan")
     _add_common(p)
     p.set_defaults(func=cmd_trials)
+
+    p = sub.add_parser("pipeline", help="idea state, the context pack and owner approvals")
+    psub = p.add_subparsers(dest="pipeline_action", required=True)
+    for name, helptext in [
+        ("status", "the backlog by status, pending approvals, and each idea's next action"),
+        ("context", "everything one iteration needs about an idea"),
+        ("approvals", "the owner's decisions (question, recommendation, evidence, estimate)"),
+        ("answer", "answer an approval (owner only: HERMES_ROLE must be unset)"),
+        ("reopen", "reopen a rejected idea, with a recorded reason"),
+        ("write", "write an artifact (spec|plan|validation|lessons) from a JSON file"),
+        ("approve-plan", "the Validator's approval: lock the plan's variants"),
+    ]:
+        q = psub.add_parser(name, help=helptext)
+        if name in ("context", "reopen", "write", "approve-plan"):
+            q.add_argument("idea", help="idea id or unique prefix")
+        if name == "context":
+            q.add_argument("--max-chars", type=int, default=12000)
+        if name == "approvals":
+            q.add_argument("--pending", action="store_true")
+        if name == "answer":
+            q.add_argument("id", help="approval id")
+            q.add_argument("decision", choices=["approve", "deny"])
+            q.add_argument("--note", help="why")
+            q.add_argument("--reject", action="store_true",
+                           help="on deny: reject the idea instead of parking it")
+        if name == "reopen":
+            q.add_argument("--reason", required=True)
+        if name == "write":
+            q.add_argument("artifact", choices=["spec", "plan", "validation", "lessons"])
+            q.add_argument("--file", required=True, help="JSON file with the artifact")
+        if name == "approve-plan":
+            q.add_argument("--reviewer", required=True)
+        q.add_argument("--ideas-file", default="research/ideas.json")
+        q.add_argument("--ideas-dir", default="research/ideas",
+                       help="per-idea artifacts (default: research/ideas)")
+        q.add_argument("--approvals-file", default="research/approvals.json")
+        q.add_argument("--thesis-file", default="research/thesis.md")
+        _add_common(q)
+        q.set_defaults(func=cmd_pipeline)
 
     p = sub.add_parser("holdout", help="the holdout: check the in-sample gate, then spend the "
                                        "single look")
