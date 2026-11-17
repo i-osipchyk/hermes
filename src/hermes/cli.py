@@ -25,11 +25,13 @@ import argparse
 import json
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
+from .research.holdout import HoldoutViolation
 from .research.jsonsafe import decode_nonfinite, encode_nonfinite
 
 if TYPE_CHECKING:
@@ -160,6 +162,7 @@ def _entry(name: str, directory: str):
 def _build(args: argparse.Namespace):
     """A configured Backtest plus the ledger inputs that identify it."""
     from .research.discovery import configured_backtest, default_config, stable_end
+    from .research.holdout import HoldoutSource
     from .research.ledger import advisor_fingerprint, cache_key, source_epoch, strategy_hash
 
     entry = _entry(args.strategy, args.dir)
@@ -168,14 +171,22 @@ def _build(args: argparse.Namespace):
     ticker = args.symbol or defaults.symbol.ticker
     source_name = args.source or defaults.source.name
     start = _parse_date(args.start) if args.start else defaults.start
-    end = _parse_date(args.end) if args.end else stable_end(defaults.end)
     cash = args.cash if args.cash is not None else defaults.starting_cash
     params = _parse_params(args.param)
 
+    # Research reads go through the holdout guard (ADR-0012); a run that names no end
+    # stops where the holdout starts (this also keeps a default "now" out of the key).
     bt = configured_backtest(
-        entry, ticker=ticker, source_name=source_name, start=start, end=end,
+        entry, ticker=ticker, source_name=source_name, start=start,
+        end=_parse_date(args.end) if args.end else stable_end(defaults.end),
         starting_cash=cash, params=params, unconstrained=args.unconstrained,
     )
+    bt = replace(bt, source=HoldoutSource(bt.source))
+    if not args.end:
+        held = bt.source.holdout_start(bt.symbol, bt.timeframes[0])
+        if held is not None and bt.end > held:
+            bt = replace(bt, end=held)
+    end = bt.end
     key = cache_key(
         strategy=entry.name,
         strategy_hash=strategy_hash(entry.path),
@@ -1005,6 +1016,9 @@ def main(argv: list[str] | None = None) -> int:
         return int(e.code or EXIT_OK)
     except KeyboardInterrupt:
         _warn("interrupted")
+        return EXIT_ERR
+    except HoldoutViolation as e:
+        _warn(f"hermes: {e}")
         return EXIT_ERR
 
 

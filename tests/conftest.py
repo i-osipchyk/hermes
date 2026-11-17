@@ -11,3 +11,9 @@ def _no_llmkit_sinks(monkeypatch):
 def _no_ctrader_ssm(monkeypatch):
     """Tests never read the shared cTrader token pair from AWS SSM."""
     monkeypatch.setenv("HERMES_CTRADER_SHARED_PATH", "")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_holdouts(monkeypatch, tmp_path):
+    """Tests never read or write the committed research/holdouts.json."""
+    monkeypatch.setenv("HERMES_HOLDOUTS_PATH", str(tmp_path / "holdouts.json"))
