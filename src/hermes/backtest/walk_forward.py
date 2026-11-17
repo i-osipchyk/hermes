@@ -91,9 +91,11 @@ class WalkForward:
                 grid[spec.name] = list(spec.choices)
             elif spec.bounds is not None:
                 lo, hi = spec.bounds
-                grid[spec.name] = [
-                    lo + (hi - lo) * i / (steps - 1) for i in range(steps)
-                ]
+                values = [lo + (hi - lo) * i / (steps - 1) for i in range(steps)]
+                if isinstance(spec.default, int) and not isinstance(spec.default, bool):
+                    # an integer parameter (a period, a count) stays integer — audit F13
+                    values = list(dict.fromkeys(round(v) for v in values))
+                grid[spec.name] = values
         return grid
 
     def _build_combos(self, grid: dict[str, list]) -> list[dict[str, Any]]:
