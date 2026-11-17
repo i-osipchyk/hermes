@@ -69,6 +69,8 @@ class RunMeta:
     # cache key; defaulted so older rows still load.
     idea: str | None = None
     kind: str = "trial"
+    # The plan variant (plan.json) this run executes; likewise outside the cache key.
+    variant: str | None = None
 
     @property
     def label(self) -> str:
@@ -285,10 +287,13 @@ class RunLedger:
             llm_log.save(d / "llm_log.jsonl")
         return key
 
-    def attribute(self, key: str, idea: str | None, kind: str) -> None:
-        """Re-label a stored run's idea/kind (intent, not an input, so the key is unchanged)."""
+    def attribute(self, key: str, idea: str | None, kind: str,
+                  variant: str | None = None) -> None:
+        """Re-label a stored run's idea/kind/variant (intent, not an input, so the key is
+        unchanged). A variant already recorded is kept unless a new one is given."""
         path = self._dir(key) / "meta.json"
-        meta = replace(RunMeta.from_dict(json.loads(path.read_text())), idea=idea, kind=kind)
+        old = RunMeta.from_dict(json.loads(path.read_text()))
+        meta = replace(old, idea=idea, kind=kind, variant=variant or old.variant)
         path.write_text(json.dumps(meta.to_dict(), indent=2))
 
     def delete(self, key: str) -> None:

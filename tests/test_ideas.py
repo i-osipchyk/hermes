@@ -12,11 +12,26 @@ import json
 import pytest
 
 from hermes.research.ideas import SOURCES, STATUSES, Idea, IdeaBook
+from tests.artifact_helpers import ready_for_testing
 
 
 @pytest.fixture
 def book(tmp_path):
-    return IdeaBook(tmp_path / "ideas.json")
+    return IdeaBook(tmp_path / "ideas.json", holdout_dir=tmp_path / "ideas")
+
+
+FAIL = {"kind": "no_edge", "assumption": "it drifts"}
+
+
+def _validate(book, idea_id):
+    """Walk an idea to `validated` the only way there is: through a passed holdout."""
+    ready_for_testing(book.ideas_dir, idea_id)
+    for status in ("quantified", "coded", "testing"):
+        book.update(idea_id, status=status)
+    d = book.holdout_dir / idea_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "holdout.json").write_text('{"state": "done", "passed": true}')
+    return book.update(idea_id, status="validated", verdict="survives costs and OOS")
 
 
 def test_add_records_provenance_and_starts_raw(book):
@@ -52,8 +67,13 @@ def test_a_fresh_book_is_empty_not_an_error(tmp_path):
 
 def test_update_moves_an_idea_through_the_pipeline(book):
     i = book.add("ema cross", source="trader")
+    ready_for_testing(book.ideas_dir, i.id)
     book.update(i.id, status="quantified", hypothesis="fast over slow continues")
+    book.update(i.id, status="coded")
     book.update(i.id, status="testing", strategy="ema_crossover")
+    d = book.holdout_dir / i.id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "holdout.json").write_text('{"state": "done", "passed": true}')
     done = book.update(i.id, status="validated", verdict="survives costs and OOS")
 
     assert done.status == "validated"
@@ -114,6 +134,7 @@ def test_remove_deletes_only_the_target(book):
 def test_filters_narrow_the_backlog(book):
     book.add("a", source="book", tags=["fx"])
     q = book.add("b", source="trader", tags=["eq"])
+    ready_for_testing(book.ideas_dir, q.id)
     book.update(q.id, status="quantified")
 
     assert [i.title for i in book.list(status="raw")] == ["a"]
@@ -124,7 +145,7 @@ def test_filters_narrow_the_backlog(book):
 def test_open_only_hides_decided_ideas(book):
     book.add("still working", source="data")
     done = book.add("finished", source="data")
-    book.update(done.id, status="rejected", verdict="no edge")
+    book.update(done.id, status="rejected", verdict="no edge", failure=FAIL)
 
     assert [i.title for i in book.list(open_only=True)] == ["still working"]
     # but a rejected idea is a real result and stays in the book
@@ -134,7 +155,7 @@ def test_open_only_hides_decided_ideas(book):
 def test_pipeline_counts_every_status_in_order(book):
     book.add("a", source="data")
     q = book.add("b", source="data")
-    book.update(q.id, status="validated")
+    _validate(book, q.id)
     p = book.pipeline()
     assert list(p) == list(STATUSES)
     assert p["raw"] == 1 and p["validated"] == 1 and p["testing"] == 0
@@ -146,14 +167,15 @@ def test_hit_rate_counts_only_decided_ideas(book):
         book.add("from a book", source="book")
     good = book.add("worked", source="trader")
     bad = book.add("did not", source="trader")
-    book.update(good.id, status="validated")
-    book.update(bad.id, status="rejected")
+    _validate(book, good.id)
+    book.update(bad.id, status="rejected", verdict="no", failure=FAIL)
 
     hr = book.hit_rate()
     assert hr["book"]["total"] == 3
     assert hr["book"]["decided"] == 0
     assert hr["book"]["rate"] is None, "undecided ideas must not score their source"
-    assert hr["trader"] == {"total": 2, "decided": 2, "validated": 1, "rate": 0.5}
+    assert hr["trader"] == {"total": 2, "decided": 2, "validated": 1, "rate": 0.5,
+                            "validated_without_holdout": 0}
 
 
 def test_every_source_and_status_appears_in_the_vocabulary():
@@ -169,3 +191,31 @@ def test_an_idea_tolerates_unknown_fields_on_disk(book):
         {"id": "abc", "title": "hand written", "from_the_future": True}
     ]))
     assert book.all()[0].title == "hand written"
+
+
+def test_a_validation_that_never_saw_a_holdout_is_reported_separately(book):
+    """ADR-0012: ideas validated before the holdout existed stay validated, but a hit rate
+    that mixes them with earned ones would flatter the source."""
+    earned = book.add("earned", source="book")
+    _validate(book, earned.id)
+    legacy = book.add("legacy", source="book")
+    ideas = book._load()
+    for i in ideas:
+        if i.id == legacy.id:
+            i.status = "validated"
+    book._save(ideas)
+
+    hr = book.hit_rate()["book"]
+
+    assert hr["validated"] == 2 and hr["validated_without_holdout"] == 1
+    assert book.get(earned.id).validation_basis == "holdout"
+
+
+def test_the_two_backlog_ideas_validated_before_the_holdout_are_labelled():
+    import json
+    from pathlib import Path
+
+    rows = json.loads(Path("research/ideas.json").read_text())
+    validated = [r for r in rows if r["status"] == "validated"]
+    assert validated and all(r.get("validation_basis") in ("holdout", "none (pre-holdout)")
+                             for r in validated)

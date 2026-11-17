@@ -47,6 +47,7 @@ class DeflationInputs:
 
     effective: Any
     trial_sharpes: list[float]
+    read_not_declared: tuple[str, ...] = ()    # ideas read (reads log) but not in informed_by
 
 
 @dataclass(slots=True)
@@ -442,6 +443,7 @@ def axis_deflation(result: Any, inputs: DeflationInputs | None, *, seed: int = 4
         "spread_basis": "trial-sharpes" if spread is not None else "own-standard-error",
         "sr0": _expected_max_sharpe(eff.n_eff, spread) if spread is not None else None,
         "basis": "trades", "n_trades": n_trades,
+        "read_not_declared": list(inputs.read_not_declared),
     }
     if eff.n_eff <= 1:
         return AxisResult("deflation", True,
@@ -455,6 +457,9 @@ def axis_deflation(result: Any, inputs: DeflationInputs | None, *, seed: int = 4
             else f"{eff.n_eff} effective trials, but the Sharpe is undefined on this run")
     if spread is None:
         note += "; fewer than two measurable trial Sharpes, spread taken from this run's own error"
+    if inputs.read_not_declared:
+        note += ("; counted because they were read but not declared in informed_by: "
+                 + ", ".join(inputs.read_not_declared))
     return AxisResult("deflation", True, note, data)
 
 

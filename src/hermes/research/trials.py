@@ -119,14 +119,31 @@ def _trade_sharpe(result: dict[str, Any]) -> float | None:
 
 
 class TrialRegistry:
-    def __init__(self, ledger: RunLedger, ideas: IdeaBook | None = None):
+    def __init__(self, ledger: RunLedger, ideas: IdeaBook | None = None, reads: Any = None):
         self.ledger = ledger
         self.ideas = ideas
+        self.reads = reads          # a ReadsLog: ideas the agent read count as declared ones
+
+    def informing(self, idea: str) -> list[str]:
+        """Ideas whose trials count against ``idea``: the declared ``informed_by`` plus the
+        ideas its reads log shows it targeted (ADR-0013), never itself, each once."""
+        if not self.ideas:
+            return []
+        out = [i for i in self.ideas.get(idea).informed_by if i != idea]
+        for other in (self.reads.read_ideas(idea) if self.reads else []):
+            if other in out or other == idea:
+                continue
+            try:
+                self.ideas.get(other)
+            except LookupError:
+                continue                    # a stale or foreign id is not an idea
+            out.append(other)
+        return out
 
     def effective_trials(self, idea: str) -> EffectiveTrials:
         """Own clusters + the clusters of every idea in its ``informed_by`` (undiscounted,
         not transitive) + the batch floor. An idea that nothing informed counts only itself."""
-        informed_by = self.ideas.get(idea).informed_by if self.ideas else []
+        informed_by = self.informing(idea)
         return EffectiveTrials(
             own=len(self.clusters(idea)),
             inherited={i: len(self.clusters(i)) for i in informed_by},
@@ -160,7 +177,7 @@ class TrialRegistry:
         """Per-trade Sharpes of the cluster representatives — the idea's own, then those of
         every idea in ``informed_by`` — whose dispersion sets the DSR threshold. A cluster
         whose representative has too few trades to measure is left out."""
-        informed_by = self.ideas.get(idea).informed_by if self.ideas else []
+        informed_by = self.informing(idea)
         out: list[float] = []
         for name in (idea, *informed_by):
             for cluster in self.clusters(name):

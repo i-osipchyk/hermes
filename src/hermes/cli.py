@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import replace
@@ -222,6 +223,7 @@ def _meta_for(entry, bt, args, params: dict):
         note=getattr(args, "note", "") or "",
         idea=getattr(args, "idea", None),
         kind="diagnostic" if getattr(args, "diagnostic", False) else "trial",
+        variant=getattr(args, "variant", None),
     )
 
 
@@ -362,6 +364,23 @@ def cmd_run_universe(args: argparse.Namespace) -> int:
     return EXIT_OK if m.get("num_trades") else EXIT_EMPTY
 
 
+def _check_variant(args: argparse.Namespace) -> None:
+    """``--variant`` names a variant of the idea's plan.json; nothing runs unplanned."""
+    if not getattr(args, "variant", None):
+        return
+    if not args.idea:
+        raise SystemExit("hermes: --variant needs --idea (the plan belongs to an idea)")
+    from .research.artifacts import ArtifactStore
+    from .research.reads import default_ideas_dir
+
+    plan = ArtifactStore(default_ideas_dir()).read(args.idea, "plan")
+    ids = [v.get("id") for v in plan.variants] if plan else []
+    if args.variant not in ids:
+        raise SystemExit(f"hermes: {args.variant!r} is not a variant of idea {args.idea}'s plan "
+                         f"(planned: {', '.join(ids) or 'no plan.json'}). A new variant is a plan "
+                         f"amendment and needs review")
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
 
@@ -369,6 +388,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if args.idea or args.diagnostic:
             raise SystemExit("hermes: --idea/--diagnostic are not supported on universe runs yet")
         return cmd_run_universe(args)
+    _check_variant(args)
     entry, bt, key = _build(args)
     ledger = RunLedger(args.runs_dir)
 
@@ -379,8 +399,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         # no idea) and is now claimed as a trial, count it: undercounting trials flatters
         # the deflated Sharpe, overcounting only makes it stricter.
         wants_trial = bool(args.idea) and not args.diagnostic
-        if wants_trial and (cached.meta.kind == "diagnostic" or cached.meta.idea is None):
-            ledger.attribute(key, args.idea, "trial")
+        if wants_trial and (cached.meta.kind == "diagnostic" or cached.meta.idea is None
+                            or (args.variant and cached.meta.variant != args.variant)):
+            ledger.attribute(key, args.idea, "trial", args.variant)
     else:
         _warn(f"running {entry.name} · {bt.symbol.ticker} · "
               f"{bt.start.date()}→{bt.end.date()} …")
@@ -433,6 +454,22 @@ def cmd_run(args: argparse.Namespace) -> int:
 # runs / show
 # ---------------------------------------------------------------------------
 
+def _log_read(command: str, target: str, *, target_idea: str | None = None,
+              kind: str = "targeted") -> None:
+    """When ``HERMES_IDEA`` names the idea doing the reading, record what it looked at
+    (research/reads.py). Never fails a command: the log is an audit, not a gate."""
+    reader = os.environ.get("HERMES_IDEA")
+    if not reader:
+        return
+    from .research.reads import ReadsLog
+
+    try:
+        ReadsLog().record(reader, command=command, target=target, target_idea=target_idea,
+                          kind=kind)
+    except OSError as e:
+        _warn(f"could not write the reads log: {e}")
+
+
 def cmd_runs(args: argparse.Namespace) -> int:
     from .research.ledger import RunLedger
 
@@ -440,6 +477,7 @@ def cmd_runs(args: argparse.Namespace) -> int:
         strategy=args.strategy, ticker=args.symbol, limit=args.limit,
         note_contains=args.note_contains,
     )
+    _log_read("runs", "*", kind="listing")
     payload = {"runs": [{"key": e.key, **e.meta.to_dict()} for e in entries]}
     lines = [f"{len(entries)} run(s) in the ledger"] if entries else ["ledger is empty"]
     for e in entries:
@@ -469,6 +507,7 @@ def cmd_show(args: argparse.Namespace) -> int:
     if rec is None:
         raise SystemExit(f"hermes: run {args.key!r} has no stored result")
 
+    _log_read("show", rec.key, target_idea=rec.meta.idea)
     payload: dict = {"run_key": rec.key, "meta": rec.meta.to_dict(), "metrics": rec.metrics}
     lines = [rec.meta.label, f"run  {rec.key}"]
     if rec.meta.note:
@@ -518,6 +557,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         stored = ledger.load(ledger.resolve(args.target))
     except Exception:  # noqa: BLE001 — not a key; maybe a strategy name
         stored = None
+    _log_read("analyze", args.target, target_idea=stored.meta.idea if stored else None)
     if stored is not None and stored.meta.universe:
         return _analyze_universe(args, ledger, axes, stored)
     if stored is None:
@@ -611,14 +651,18 @@ def _deflation_inputs(args: argparse.Namespace, ledger: RunLedger, rec: RunRecor
     """The trial count and trial Sharpes behind a run, or None when it belongs to no idea."""
     from .research.analysis import DeflationInputs
     from .research.ideas import IdeaBook
+    from .research.reads import ReadsLog, audit_informed_by
     from .research.trials import TrialRegistry
 
     if rec is None or not rec.meta.idea:
         return None
-    registry = TrialRegistry(ledger, IdeaBook(args.ideas_file))
+    book, reads = IdeaBook(args.ideas_file), ReadsLog()
+    registry = TrialRegistry(ledger, book, reads)
     try:
-        return DeflationInputs(registry.effective_trials(rec.meta.idea),
-                               registry.representative_sharpes(rec.meta.idea))
+        return DeflationInputs(
+            registry.effective_trials(rec.meta.idea),
+            registry.representative_sharpes(rec.meta.idea),
+            tuple(audit_informed_by(book, reads, rec.meta.idea)["read_not_declared"]))
     except LookupError as e:
         raise SystemExit(f"hermes: run is attributed to idea {rec.meta.idea!r}: {e}") from e
 
@@ -693,36 +737,30 @@ def _analyze_universe(args: argparse.Namespace, ledger: RunLedger, axes: tuple[s
 # ideas — step 1 of the framework
 # ---------------------------------------------------------------------------
 
-def _require_passed_holdout(book, args: argparse.Namespace) -> None:
-    """`validated` is earned on the holdout (ADR-0012), not asserted. `hermes holdout unlock`
-    is what sets it; this stops a hand edit from skipping the look."""
-    try:
-        idea = book.get(args.id)
-    except LookupError as e:
-        raise SystemExit(f"hermes: {e}") from e
-    path = Path(args.holdout_dir) / idea.id / "holdout.json"
-    passed = path.exists() and json.loads(path.read_text()).get("passed") is True
-    if not passed:
-        raise SystemExit(
-            f"hermes: idea {idea.id} cannot be marked validated: no passed holdout on record "
-            f"({path}). Earn it with `hermes holdout check` then `hermes holdout unlock`")
-
-
 def cmd_ideas(args: argparse.Namespace) -> int:
     from .research.ideas import SOURCES, IdeaBook
 
-    book = IdeaBook(args.ideas_file)
+    book = IdeaBook(args.ideas_file, holdout_dir=getattr(args, "holdout_dir", None)
+                    or "research/ideas")
     action = args.ideas_action
 
     if action == "add":
         if args.source not in SOURCES:
             raise SystemExit(f"hermes: unknown --source {args.source!r}. "
                              f"Known: {', '.join(SOURCES)}")
-        idea = book.add(args.title, hypothesis=args.hypothesis or "",
-                        source=args.source, source_detail=args.detail or "",
-                        tags=args.tag or [])
-        _emit({"idea": idea.to_dict()}, args.json,
+        try:
+            idea = book.add(args.title, hypothesis=args.hypothesis or "",
+                            source=args.source, source_detail=args.detail or "",
+                            tags=args.tag or [], parent=args.parent)
+        except (ValueError, LookupError) as e:       # DuplicateIdea is a ValueError
+            raise SystemExit(f"hermes: {e}") from e
+        text = " ".join([idea.title, idea.hypothesis, *idea.tags])
+        similar = [{"id": i.id, "title": i.title, "status": i.status, "score": score}
+                   for i, score in book.similar(text, exclude=idea.id) if i.id in idea.similar_to]
+        _emit({"idea": idea.to_dict(), "similar": similar}, args.json,
               [f"{idea.id}  {idea.label}",
+               *[f"  similar {m['score']:.2f}  {m['id']}  [{m['status']}] {m['title']}"
+                 for m in similar],
                "  next: quantify it into unambiguous rules, then "
                f"`hermes ideas set {idea.id} --status quantified`"])
         return EXIT_OK
@@ -732,15 +770,15 @@ def cmd_ideas(args: argparse.Namespace) -> int:
             "status": args.status, "hypothesis": args.hypothesis,
             "strategy": args.strategy, "verdict": args.verdict,
             "run_keys": args.run_key or None, "tags": args.tag or None,
-            "informed_by": args.informed_by or None,
+            "informed_by": args.informed_by or None, "links": args.link or None,
+            "failure": ({"kind": args.failure_kind, "assumption": args.failure_assumption or "",
+                         "detail": args.failure_detail or ""} if args.failure_kind else None),
         }.items() if v}
         if not changes:
             raise SystemExit("hermes: nothing to change — pass --status/--hypothesis/"
-                             "--strategy/--verdict/--run-key/--tag")
-        if changes.get("status") == "validated":
-            _require_passed_holdout(book, args)
+                             "--strategy/--verdict/--run-key/--tag/--link")
         try:
-            idea = book.update(args.id, **changes)
+            idea = book.update(args.id, reason=args.reason or "", **changes)
         except ValueError as e:
             raise SystemExit(f"hermes: {e}") from e
         except LookupError as e:
@@ -757,6 +795,7 @@ def cmd_ideas(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     # default: list
+    _log_read("ideas", "*", kind="listing")
     ideas = book.list(status=args.status, source=args.source_filter,
                       tag=args.tag_filter, open_only=args.open)
     pipeline = book.pipeline()
@@ -791,14 +830,16 @@ def cmd_ideas(args: argparse.Namespace) -> int:
 def cmd_trials(args: argparse.Namespace) -> int:
     from .research.ideas import IdeaBook
     from .research.ledger import RunLedger
+    from .research.reads import ReadsLog
     from .research.trials import TrialRegistry
 
-    book = IdeaBook(args.ideas_file)
+    book = IdeaBook(args.ideas_file, holdout_dir=args.out_dir)
     try:
         idea = book.get(args.idea)
     except LookupError as e:                      # KeyError is a LookupError
         raise SystemExit(f"hermes: {e}") from e
-    registry = TrialRegistry(RunLedger(args.runs_dir), book)
+    _log_read("trials", idea.id, target_idea=idea.id)
+    registry = TrialRegistry(RunLedger(args.runs_dir), book, ReadsLog())
     eff = registry.effective_trials(idea.id)
     payload = {
         "idea": idea.id, "own": eff.own, "inherited": eff.inherited,
@@ -806,6 +847,22 @@ def cmd_trials(args: argparse.Namespace) -> int:
         "clusters": [{"representative": c.representative, "keys": c.keys}
                      for c in registry.clusters(idea.id)],
     }
+    plan_lines: list[str] = []
+    if args.plan:
+        from .research.artifacts import ArtifactStore
+
+        plan = ArtifactStore(args.out_dir).read(idea.id, "plan")
+        planned = [v["id"] for v in plan.variants] if plan else []
+        ran = [e.meta.variant for e in registry.ledger.entries()
+               if e.meta.idea == idea.id and e.meta.variant]
+        payload["plan"] = {
+            "planned": planned, "unrun": [v for v in planned if v not in ran],
+            "unplanned_runs": [e.key for e in registry.ledger.entries()
+                               if e.meta.idea == idea.id and e.meta.kind == "trial"
+                               and (e.meta.variant or "") not in planned],
+        }
+        plan_lines = [f"  plan: unrun {payload['plan']['unrun'] or 'none'}; "
+                      f"trials outside the plan {payload['plan']['unplanned_runs'] or 'none'}"]
     out = Path(args.out_dir) / idea.id / "trials.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2) + "\n")
@@ -817,7 +874,7 @@ def cmd_trials(args: argparse.Namespace) -> int:
     for i, c in enumerate(payload["clusters"], 1):
         lines.append(f"  cluster {i}: {len(c['keys'])} run(s), representative "
                      f"{c['representative']}")
-    _emit(payload, args.json, lines)
+    _emit(payload, args.json, lines + plan_lines)
     return EXIT_OK if eff.n_eff else EXIT_EMPTY
 
 
@@ -837,7 +894,7 @@ def _candidate(args: argparse.Namespace):
         raise SystemExit(f"hermes: {e}") from e
     if rec is None:
         raise SystemExit(f"hermes: no run {args.run_key!r} in the ledger")
-    book = IdeaBook(args.ideas_file)
+    book = IdeaBook(args.ideas_file, holdout_dir=args.out_dir)
     try:
         idea = book.get(args.idea)
     except LookupError as e:
@@ -851,14 +908,17 @@ def _candidate(args: argparse.Namespace):
 def _measure_gate(args: argparse.Namespace, ledger, book, idea, bt):
     """Re-run the candidate (guarded) and measure the in-sample gate on it."""
     from .research.analysis import DeflationInputs
+    from .research.reads import ReadsLog, audit_informed_by
     from .research.trials import TrialRegistry
     from .research.unlock import evaluate_gate
 
     _warn(f"measuring the gate for {idea.id} …")
     result = bt.run()
-    registry = TrialRegistry(ledger, book)
+    registry = TrialRegistry(ledger, book, ReadsLog())
     deflation = DeflationInputs(registry.effective_trials(idea.id),
-                                registry.representative_sharpes(idea.id))
+                                registry.representative_sharpes(idea.id),
+                                tuple(audit_informed_by(book, ReadsLog(), idea.id)
+                                      ["read_not_declared"]))
     return result, evaluate_gate(bt, result, deflation, null_n=args.null_n, seed=args.seed)
 
 
@@ -881,6 +941,10 @@ def cmd_holdout_unlock(args: argparse.Namespace) -> int:
     if (Path(args.out_dir) / idea.id / "holdout.json").exists():
         raise SystemExit(f"hermes: idea {idea.id} has already looked at the holdout — one look "
                          f"per idea, even if the strategy has changed since")
+    if "validated" not in book.legal_targets(idea):
+        raise SystemExit(f"hermes: idea {idea.id} is {idea.status}; the holdout is only "
+                         f"unlocked for an idea that is `testing`. Move it there first "
+                         f"(`hermes ideas set {idea.id} --status testing`)")
     entry, bt = _rebuild(args, rec)
     if strategy_hash(entry.path) != rec.meta.strategy_hash:
         raise SystemExit(f"hermes: {entry.name} has changed since run {rec.key}; the holdout "
@@ -930,16 +994,116 @@ def cmd_holdout_unlock(args: argparse.Namespace) -> int:
     if verdict["passed"]:
         book.update(idea.id, status="validated",
                     verdict=f"passed the holdout ({record['window']['start'][:10]} → "
-                            f"{record['window']['end'][:10]}): PSR {verdict['holdout']['psr']:.2f}")
+                            f"{record['window']['end'][:10]}): PSR {verdict['holdout']['psr']:.2f}",
+                    reason="holdout unlock")
     else:
         failed = ", ".join(n for n, c in verdict["checks"].items() if not c["ok"])
-        book.update(idea.id, status="rejected", verdict=f"holdout_failed: {failed}")
+        book.update(idea.id, status="rejected", verdict=f"holdout_failed: {failed}",
+                    reason="holdout unlock",
+                    failure={"kind": "holdout_failed", "detail": failed,
+                             "assumption": "the in-sample edge persists out of sample"})
     lines = [f"{idea.id}  holdout {'PASSED' if verdict['passed'] else 'FAILED'}"]
     for name, c in verdict["checks"].items():
         lines.append(f"  {'✓' if c['ok'] else '✗'} {name:<6} {c['value']}  (need {c['need']})")
     _emit(record, args.json, lines)
     return EXIT_OK if verdict["passed"] else EXIT_EMPTY
 
+
+# ---------------------------------------------------------------------------
+# pipeline — state, context and approvals (ADR-0014, phase 3)
+# ---------------------------------------------------------------------------
+
+def _pipeline_parts(args: argparse.Namespace):
+    from .research.approvals import ApprovalBook
+    from .research.artifacts import ArtifactStore
+    from .research.ideas import IdeaBook
+    from .research.ledger import RunLedger
+
+    book = IdeaBook(args.ideas_file, holdout_dir=args.ideas_dir)
+    return (book, ArtifactStore(args.ideas_dir), RunLedger(args.runs_dir),
+            ApprovalBook(args.approvals_file, book))
+
+
+def cmd_pipeline(args: argparse.Namespace) -> int:
+    from dataclasses import asdict
+
+    from .research.artifacts import artifact_from_dict
+    from .research.context import build_context, render_context
+    from .research.pipeline import status_report
+    from .research.reads import ReadsLog
+    from .research.trials import TrialRegistry
+
+    book, store, ledger, approvals = _pipeline_parts(args)
+    action = args.pipeline_action
+    try:
+        if action == "status":
+            rep = status_report(book, store, approvals, ledger, args.thesis_file)
+            lines = ["backlog  " + "  ".join(f"{k} {v}" for k, v in rep["by_status"].items() if v),
+                     f"pending approvals  {len(rep['pending_approvals'])}",
+                     f"awaiting reflection  {len(rep['awaiting_reflection'])}",
+                     f"thesis due  {'yes' if rep['thesis_due'] else 'no'}", ""]
+            for row in rep["open"]:
+                n = row["next_action"]
+                lines.append(f"  {row['idea']}  [{row['status']}] {row['title'][:50]}  →  "
+                             f"{n['role']}: {n['step']}")
+            _emit(rep, args.json, lines)
+            return EXIT_OK
+
+        if action == "context":
+            idea = book.get(args.idea)
+            _log_read("pipeline context", idea.id, target_idea=idea.id)
+            reads = ReadsLog()
+            ctx = build_context(idea.id, book=book, store=store, ledger=ledger,
+                                registry=TrialRegistry(ledger, book, reads),
+                                approvals=approvals, reads=reads, thesis_path=args.thesis_file)
+            _emit(ctx, args.json, [render_context(ctx, args.max_chars)])
+            return EXIT_OK
+
+        if action == "approvals":
+            items = approvals.all(pending_only=args.pending)
+            lines = [f"{len(items)} approval(s)"]
+            for a in items:
+                lines += [f"  {a.id}  [{a.status}] {a.kind}  idea {a.idea}",
+                          f"      ? {a.question}", f"      recommend: {a.recommendation}"]
+                if a.estimate:
+                    lines.append(f"      estimate: {a.estimate}")
+                lines += [f"      evidence: {e}" for e in a.evidence]
+            _emit({"approvals": [asdict(a) for a in items]}, args.json, lines)
+            return EXIT_OK if items else EXIT_EMPTY
+
+        if action == "answer":
+            done = approvals.answer(
+                args.id, "approved" if args.decision == "approve" else "denied",
+                args.note or "", deny_to="rejected" if args.reject else None)
+            idea = book.get(done.idea)
+            _emit({"approval": asdict(done), "idea": idea.to_dict()}, args.json,
+                  [f"{done.id}  {done.status}  → idea {idea.id} is {idea.status}"])
+            return EXIT_OK
+
+        if action == "reopen":
+            idea = book.reopen(args.idea, args.reason)
+            _emit({"idea": idea.to_dict()}, args.json, [f"{idea.id}  reopened → {idea.status}"])
+            return EXIT_OK
+
+        if action == "write":
+            idea = book.get(args.idea)
+            data = json.loads(Path(args.file).read_text())
+            written = store.write(idea.id, args.artifact, artifact_from_dict(args.artifact, data))
+            _emit({"idea": idea.id, "artifact": args.artifact, "path": str(
+                store.path(idea.id, args.artifact))}, args.json,
+                [f"wrote {store.path(idea.id, args.artifact)}"])
+            del written
+            return EXIT_OK
+
+        if action == "approve-plan":
+            idea = book.get(args.idea)
+            plan = store.approve_plan(idea.id, reviewer=args.reviewer)
+            _emit({"idea": idea.id, "locked_hash": plan.locked_hash}, args.json,
+                  [f"{idea.id}  plan approved and locked ({plan.locked_hash})"])
+            return EXIT_OK
+    except (ValueError, LookupError, PermissionError, OSError) as e:
+        raise SystemExit(f"hermes: {e}") from e
+    raise SystemExit(f"hermes: unknown pipeline action {action!r}")
 
 # ---------------------------------------------------------------------------
 # correlate — step 4 of the framework
@@ -1088,6 +1252,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note", help="why this run — the hypothesis it tests, or what "
                                    "changed since the last variant. Recorded in the ledger.")
     p.add_argument("--idea", help="the idea this run is evidence for (counted by `hermes trials`)")
+    p.add_argument("--variant", help="the plan.json variant this run executes (needs --idea; "
+                                     "must be one the plan lists)")
     p.add_argument("--diagnostic", action="store_true",
                    help="this run explains, it does not select: not counted as a trial")
     p.add_argument("--no-cache", action="store_true", help="re-run even if the ledger has it")
@@ -1151,10 +1317,22 @@ def build_parser() -> argparse.ArgumentParser:
                            help="book | discretionary | trader | course | data | other")
             q.add_argument("--detail", help="which book / trader / course / session")
             q.add_argument("--tag", action="append", default=[])
+            q.add_argument("--parent", metavar="IDEA_ID",
+                           help="the idea this one is spun out of; needed to re-propose "
+                                "something close to a rejected idea")
         elif name == "set":
             q.add_argument("id", help="idea id, or a unique prefix")
             q.add_argument("--status",
-                           help="raw | quantified | testing | validated | rejected | parked")
+                           help="one of the idea statuses; only the edges the pipeline allows "
+                                "(validated needs a passed `hermes holdout unlock`)")
+            q.add_argument("--reason", help="why (recorded in the idea's history)")
+            q.add_argument("--link", action="append", default=[], metavar="URL",
+                           help="a source link (repeatable); literature_done needs one")
+            q.add_argument("--failure-kind", help="why it failed (rejected/needs_infra): "
+                           "no_edge | cost_killed | regime_dependent | overfit | data_limit | "
+                           "holdout_failed | duplicate | infra | other")
+            q.add_argument("--failure-assumption", help="the assumption that did not hold")
+            q.add_argument("--failure-detail", help="detail; for needs_infra, the missing capability")
             q.add_argument("--hypothesis")
             q.add_argument("--strategy", help="strategies/<name>.py this became")
             q.add_argument("--verdict", help="why it was validated or rejected")
@@ -1164,8 +1342,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="an idea whose results this one drew on; its trial "
                                 "clusters count against this idea (repeatable)")
             q.add_argument("--tag", action="append", default=[])
-            q.add_argument("--holdout-dir", default="research/ideas",
-                           help="where <idea>/holdout.json lives (default: research/ideas)")
+            q.add_argument("--ideas-dir", "--holdout-dir", dest="holdout_dir",
+                           default="research/ideas",
+                           help="where <idea>/spec.json, plan.json, holdout.json … live "
+                                "(default: research/ideas)")
         elif name == "rm":
             q.add_argument("id", help="idea id, or a unique prefix")
         else:
@@ -1196,8 +1376,50 @@ def build_parser() -> argparse.ArgumentParser:
                    help="backlog file (default: research/ideas.json)")
     p.add_argument("--out-dir", default="research/ideas",
                    help="where <idea>/trials.json is written (default: research/ideas)")
+    p.add_argument("--plan", action="store_true",
+                   help="compare the trials with plan.json: planned-but-unrun variants and "
+                        "trials that ran outside the plan")
     _add_common(p)
     p.set_defaults(func=cmd_trials)
+
+    p = sub.add_parser("pipeline", help="idea state, the context pack and owner approvals")
+    psub = p.add_subparsers(dest="pipeline_action", required=True)
+    for name, helptext in [
+        ("status", "the backlog by status, pending approvals, and each idea's next action"),
+        ("context", "everything one iteration needs about an idea"),
+        ("approvals", "the owner's decisions (question, recommendation, evidence, estimate)"),
+        ("answer", "answer an approval (owner only: HERMES_ROLE must be unset)"),
+        ("reopen", "reopen a rejected idea, with a recorded reason"),
+        ("write", "write an artifact (spec|plan|validation|lessons) from a JSON file"),
+        ("approve-plan", "the Validator's approval: lock the plan's variants"),
+    ]:
+        q = psub.add_parser(name, help=helptext)
+        if name in ("context", "reopen", "write", "approve-plan"):
+            q.add_argument("idea", help="idea id or unique prefix")
+        if name == "context":
+            q.add_argument("--max-chars", type=int, default=12000)
+        if name == "approvals":
+            q.add_argument("--pending", action="store_true")
+        if name == "answer":
+            q.add_argument("id", help="approval id")
+            q.add_argument("decision", choices=["approve", "deny"])
+            q.add_argument("--note", help="why")
+            q.add_argument("--reject", action="store_true",
+                           help="on deny: reject the idea instead of parking it")
+        if name == "reopen":
+            q.add_argument("--reason", required=True)
+        if name == "write":
+            q.add_argument("artifact", choices=["spec", "plan", "validation", "lessons"])
+            q.add_argument("--file", required=True, help="JSON file with the artifact")
+        if name == "approve-plan":
+            q.add_argument("--reviewer", required=True)
+        q.add_argument("--ideas-file", default="research/ideas.json")
+        q.add_argument("--ideas-dir", default="research/ideas",
+                       help="per-idea artifacts (default: research/ideas)")
+        q.add_argument("--approvals-file", default="research/approvals.json")
+        q.add_argument("--thesis-file", default="research/thesis.md")
+        _add_common(q)
+        q.set_defaults(func=cmd_pipeline)
 
     p = sub.add_parser("holdout", help="the holdout: check the in-sample gate, then spend the "
                                        "single look")

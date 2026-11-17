@@ -141,9 +141,22 @@ def _out(capsys):
     return json.loads(capsys.readouterr().out)
 
 
+def _to_testing(lab, capsys, idea):
+    """The unlock is only for an idea that is `testing`; walk the legal edges there."""
+    from tests.artifact_helpers import ready_for_testing
+
+    out = lab["tmp"] / "ideas_out"
+    ready_for_testing(out, idea)
+    for status in ("quantified", "coded", "testing"):
+        assert main(["ideas", "set", idea, "--status", status, *lab["ideas"],
+                     "--holdout-dir", str(out), "--json"]) == EXIT_OK
+        capsys.readouterr()
+
+
 def _idea_and_run(lab, capsys, kind):
     main(["ideas", "add", f"{kind} idea", *lab["ideas"], "--json"])
     idea = _out(capsys)["idea"]["id"]
+    _to_testing(lab, capsys, idea)
     assert main(["run", kind, *lab["common"], "--idea", idea, "--json", "--note", "t"]) == EXIT_OK
     return idea, _out(capsys)["run_key"]
 
@@ -320,29 +333,34 @@ def _new_idea(lab, capsys):
 
 def test_an_idea_cannot_be_marked_validated_without_a_passed_holdout(lab, capsys):
     idea = _new_idea(lab, capsys)
+    _to_testing(lab, capsys, idea)
     code, err = _set(lab, capsys, idea, "--status", "validated")
     assert code == EXIT_ERR and "holdout" in err.lower()
-    assert _status(lab, capsys, idea)["status"] == "raw"
+    assert _status(lab, capsys, idea)["status"] == "testing"
 
 
 def test_a_failed_holdout_does_not_license_validated(lab, capsys):
     idea = _new_idea(lab, capsys)
+    _to_testing(lab, capsys, idea)
     d = lab["tmp"] / "ideas_out" / idea
-    d.mkdir(parents=True)
-    (d / "holdout.json").write_text(json.dumps({"passed": False}))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "holdout.json").write_text(json.dumps({"state": "done", "passed": False}))
     assert _set(lab, capsys, idea, "--status", "validated")[0] == EXIT_ERR
 
 
 def test_a_passed_holdout_licenses_validated(lab, capsys):
     idea = _new_idea(lab, capsys)
+    _to_testing(lab, capsys, idea)
     d = lab["tmp"] / "ideas_out" / idea
-    d.mkdir(parents=True)
-    (d / "holdout.json").write_text(json.dumps({"passed": True}))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "holdout.json").write_text(json.dumps({"state": "done", "passed": True}))
     assert _set(lab, capsys, idea, "--status", "validated")[0] == EXIT_OK
     assert _status(lab, capsys, idea)["status"] == "validated"
 
 
 def test_other_edits_and_other_statuses_are_not_gated(lab, capsys):
     idea = _new_idea(lab, capsys)
-    assert _set(lab, capsys, idea, "--status", "testing", "--verdict", "wip")[0] == EXIT_OK
-    assert _set(lab, capsys, idea, "--status", "rejected")[0] == EXIT_OK
+    _to_testing(lab, capsys, idea)
+    assert _set(lab, capsys, idea, "--verdict", "wip")[0] == EXIT_OK
+    assert _set(lab, capsys, idea, "--status", "rejected", "--failure-kind", "no_edge",
+                "--failure-assumption", "it drifts")[0] == EXIT_OK

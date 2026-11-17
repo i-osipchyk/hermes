@@ -16,11 +16,20 @@ they survive, and so the *source* of your wins is measurable.
 .venv/bin/hermes ideas --hit-rate                       # which sources pay off
 .venv/bin/hermes ideas add "<title>" --source book --detail "<which book>" \
     --hypothesis "<the claim, in Hermes vocabulary>"
-.venv/bin/hermes ideas set <id> --status quantified
+.venv/bin/hermes ideas set <id> --status quantified   # needs spec.json; see below
+.venv/bin/hermes pipeline status                        # the queue and each idea's next step
 ```
 
-Statuses move forward only on evidence: `raw` → `quantified` → `testing` → `validated`
-or `rejected`. `parked` is for ideas blocked on something external (data Hermes cannot
+`hermes ideas add` prints the nearest existing ideas. A near-duplicate of a **rejected** idea
+is refused unless you add `--parent <id>` and say what is different.
+
+Statuses move forward only on evidence, along fixed edges: `raw` → `literature_done` →
+`quantified` → `coded` → `testing` → `validated` or `rejected`. A move that is not an edge
+fails; there is no `--force`. Each has a rule: `literature_done` needs a source `--link`
+(unless the source is `discretionary` or `data`); `quantified` needs a valid `spec.json`;
+`testing` needs a plan the Validator has approved; `rejected` needs
+`--failure-kind/--failure-assumption` and `--verdict`; `needs_infra` names the missing
+capability in `--failure-detail`. `validated` comes only from `hermes holdout unlock`. `parked` is for ideas blocked on something external (data Hermes cannot
 reach, an instrument with no source) — **not** for ideas you have gone cold on. The
 distinction matters: parked is a to-do, rejected is a result.
 
@@ -75,7 +84,7 @@ does before designing for it.
 ## Hand off
 
 Capture, then route: an idea worth working on goes to **`hermes-research`**, which pins
-the hypothesis, quantifies it, and runs the loop. Set `--status testing` and record the
+the hypothesis, quantifies it, and runs the loop. Move it through `quantified` → `coded` → `testing` (each needs its artifact) and record the
 run keys with `--run-key` as they come in, so the idea's verdict is traceable to the
 evidence that produced it.
 

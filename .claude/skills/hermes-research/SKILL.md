@@ -247,7 +247,7 @@ Deliver, in this order:
 5. **What you'd do next**, and what you deliberately did not do (and why — budget,
    money, scope).
 6. **Where it sits in the pipeline** — update the backlog
-   (`hermes ideas set <id> --status rejected --verdict "…" --run-key …`; `validated` is
+   (`hermes ideas set <id> --status rejected --verdict "…" --failure-kind <kind> --failure-assumption "…" --run-key …`; `validated` is
    set by a passed `hermes holdout unlock` and refused by hand), and
    if it survived, say that **step 4 is next**: a validated strategy is a candidate for a
    portfolio, not a portfolio. Route to `hermes-portfolio` to check whether it actually
