@@ -39,9 +39,11 @@ the reset.
   is a thin front-end. State is files, so a crashed or paused run resumes without repeating work.
 - Idea statuses extend today's `raw / quantified / testing / validated / rejected / parked`
   (`research/ideas.py`) and keep them valid:
-  `raw → literature_done → specified → coded → backtested → validated → reflected`, and the
-  terminal or parked outcomes `rejected`, `needs_infra`, `awaiting_approval`,
-  `ready_to_forward_test`. Old records stay valid and are backfilled lazily when next touched.
+  `raw → literature_done → quantified → coded → testing → validated`, and the terminal or parked
+  outcomes `rejected`, `needs_infra`, `awaiting_approval`, `ready_to_forward_test` (the existing
+  names `quantified` and `testing` are kept; "reflected" is the presence of `lessons.json`, not a
+  status — see [phase-3-memory-and-state-plan.md](phase-3-memory-and-state-plan.md)). Old records
+  stay valid and are backfilled lazily when next touched.
 - Per-idea artifacts live in `research/ideas/<id>/` and are committed like `ideas.json`:
   `spec.json`, `plan.json` (the pre-registered test plan), `trials.json`, `validation.json`,
   `lessons.json`, `holdout.json`, `reads.jsonl`. Anything an iteration needs to know about what
@@ -123,7 +125,9 @@ Never pushes.
 1. **Audit** — done, [audit-2026-11.md](audit-2026-11.md).
 2. **Validation hardening** — holdout, trial clusters, deflation, null test. Plan in
    [phase-2-validation-plan.md](phase-2-validation-plan.md). Depends on audit fixes F2–F7.
-3. **Memory and state** — richer idea records, the state machine. Can overlap with 2.
+3. **Memory and state** — richer idea records, the state machine. **Implemented**; plan and
+   as-built notes in [phase-3-memory-and-state-plan.md](phase-3-memory-and-state-plan.md), decision
+   in ADR-0017.
 4. **Roles and the single-idea pipeline**, including the advisor cost estimate.
 5. **Test of the workflow** — one real raw idea from backlog to verdict with no human input beyond
    parked approvals; a crash resumes from files; planted-answer ideas (one bogus, one real) as a

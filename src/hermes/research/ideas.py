@@ -474,5 +474,8 @@ class IdeaBook:
                 "decided": len(decided),
                 "validated": len(validated),
                 "rate": round(len(validated) / len(decided), 3) if decided else None,
+                # validated before the holdout existed (ADR-0012): not earned the new way
+                "validated_without_holdout": sum(
+                    1 for i in validated if i.validation_basis != "holdout"),
             }
         return out

@@ -231,6 +231,25 @@ _Avoid_: Number of variants, trial count (the raw count includes near-duplicates
 The control a rule-based strategy lacked: the observed trades replayed through the real engine at a random circular time offset — same sides, sizes, holding periods and spacing — and the observed Sharpe ranked against the result (`hermes analyze --axes null`). It asks whether the *timing* of the trades carries information. Distinct from the [[random-baseline]], which randomises an AI veto.
 _Avoid_: Monte Carlo (that reorders the realised trades; this moves them in time)
 
+**Artifact**:
+A typed, committed file in `research/ideas/<id>/` that carries one piece of an idea's state between iterations: `spec.json` (unambiguous rules, every invented number named, a falsifier), `plan.json` (the pre-registered test plan), `validation.json` (the Validator's verdict; nobody else writes it), `lessons.json` (the Researcher's reflection), beside `trials.json`, `holdout.json` and `reads.jsonl`. Written through `ArtifactStore`, which checks the writer's `HERMES_ROLE` and locks a reviewed plan's variants by hash. An idea is *reflected* when `lessons.json` exists; that is a fact, not a status.
+_Avoid_: Report, note
+
+**Approval**:
+An owner decision an agent could not take: the AI Advisor's cost, a change of instrument, an engine-semantics change, a Developer branch merge, or forward testing a validated idea. Recorded in `research/approvals.json` with the question, a recommended answer, evidence and (for the advisor) a cost estimate. Only the owner answers (`hermes pipeline answer`); `ready_to_forward_test` is reachable only through an approved `forward_test` approval.
+
+**Park**:
+To set an idea to `awaiting_approval` on an [[approval]] in one library call (`ApprovalBook.park`), remembering the status to resume at, and carry on with other work. Not the same as the `parked` status, which means blocked on something external.
+
+**Context Pack**:
+Everything one iteration needs to know about an idea in one command (`hermes pipeline context <id>`): the record, spec, plan joined to the runs that executed it, trial clusters and where each count came from, validation and holdout state, the lessons of its parent and of the ideas that informed it, the relevant slice of the [[thesis]], and its open approvals. Deterministic and size-capped.
+
+**Reads Log**:
+`research/ideas/<id>/reads.jsonl`, written when `HERMES_IDEA` is set: what the idea looked at. A targeted read of another idea's results (`show`, `analyze`, `trials`, `pipeline context`) makes that idea's trial clusters count against this one whether or not it was declared in `informed_by`; listings (`runs`, `ideas`) are logged but not counted.
+
+**Thesis**:
+`research/thesis.md`: what the whole backlog has taught — what survived, what failed by `failure.kind`, recurring mechanisms, open questions, next hypotheses. Written only by the Strategist; due when five ideas have lessons newer than it, or the queue is empty.
+
 **Forward Test**:
 Running a finished strategy on paper or minimum size and comparing realised results to the backtest over the same window — the last rung of testing and the only one that sees data no backtest could have seen. **Hermes cannot do this**: there is no live [[executionvenue]] (ADR-0001 — the seam exists, the adapter does not). So a strategy that survives the whole rubric is *ready to forward test*, never "deployed".
 _Avoid_: Paper trading (that is the mechanism), live testing, deployment

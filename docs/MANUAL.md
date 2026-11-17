@@ -138,7 +138,34 @@ print(book.pipeline())                  # {'raw': 3, 'quantified': 1, ...}
 
 ### The pipeline
 
-`raw` → `quantified` → `testing` → `validated` | `rejected`, plus `parked`.
+`raw` → `literature_done` → `quantified` → `coded` → `testing` → `validated` | `rejected`;
+`needs_infra`, `awaiting_approval` and `parked` are side states, and `ready_to_forward_test`
+follows `validated` once the owner approves. Moves are guarded **in the library** (ADR-0017): an
+illegal edge raises, and there is no `--force`.
+
+- `quantified` needs a valid `spec.json`; `testing` needs a `plan.json` the Validator has
+  approved and locked; `literature_done` needs a source link (`--link`) unless the source is
+  `discretionary` or `data`; `rejected` needs a failure (`--failure-kind`,
+  `--failure-assumption`) and a verdict; `needs_infra` names the missing capability.
+- `validated` is set only by a passed `hermes holdout unlock`; `ready_to_forward_test` only by an
+  approved `forward_test` approval. Out of `rejected` there is only
+  `hermes pipeline reopen <id> --reason …`.
+- Every change is appended to the idea's `history` (`at`, `from`, `to`, `by`, `reason`);
+  `by` is `HERMES_ROLE` or `owner`.
+- `hermes ideas add` prints near matches and refuses a near-duplicate of a *rejected* idea unless
+  you pass `--parent <id>` (Jaccard ≥ 0.6; ≥ 0.25 is shown).
+
+### The pipeline CLI
+
+`hermes pipeline status` is the queue: the backlog by status, pending approvals, ideas waiting
+for reflection, whether the thesis is due, and each open idea's next action.
+`hermes pipeline context <id>` is the one thing a fresh session needs. `approvals` and `answer`
+are how you batch-answer what agents parked; only you can (the role must be unset).
+`write <id> spec|plan|validation|lessons --file f.json` stores an artifact under the writer's
+`HERMES_ROLE`; `approve-plan` is the Validator's. Run a planned variant with
+`hermes run --idea <id> --variant <variant id>`; `hermes trials <id> --plan` lists planned but
+unrun variants and trials that ran outside the plan. With `HERMES_IDEA` set, what an idea reads
+is logged and counts against it (see holdout, trials and the deflated Sharpe).
 
 **`parked` is for ideas blocked on something external** — data Hermes can't reach, an
 instrument with no source — *not* for ideas you've gone cold on. Parked is a to-do;
@@ -733,7 +760,8 @@ and **what went unmeasured**.
 
 | Command | Stage | Does |
 |---|---|---|
-| `hermes ideas [add\|set\|rm]` | 1 | The idea backlog |
+| `hermes ideas [add\|set\|rm]` | 1 | The idea backlog; moves are guarded (ADR-0017) |
+| `hermes pipeline status\|context\|approvals\|answer\|reopen\|write\|approve-plan` | all | State, the context pack, owner approvals, artifacts |
 | `hermes strategies` | 2 | What's runnable; broken files with their error |
 | `hermes run <name>` | 3 | Run + record. `--note` is effectively mandatory |
 | `hermes run <name> --universe <u>` | 3 | The same over a `tickers/*.json` list or `sp500`, one shared capital pool |

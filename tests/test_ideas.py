@@ -174,7 +174,8 @@ def test_hit_rate_counts_only_decided_ideas(book):
     assert hr["book"]["total"] == 3
     assert hr["book"]["decided"] == 0
     assert hr["book"]["rate"] is None, "undecided ideas must not score their source"
-    assert hr["trader"] == {"total": 2, "decided": 2, "validated": 1, "rate": 0.5}
+    assert hr["trader"] == {"total": 2, "decided": 2, "validated": 1, "rate": 0.5,
+                            "validated_without_holdout": 0}
 
 
 def test_every_source_and_status_appears_in_the_vocabulary():
@@ -190,3 +191,31 @@ def test_an_idea_tolerates_unknown_fields_on_disk(book):
         {"id": "abc", "title": "hand written", "from_the_future": True}
     ]))
     assert book.all()[0].title == "hand written"
+
+
+def test_a_validation_that_never_saw_a_holdout_is_reported_separately(book):
+    """ADR-0012: ideas validated before the holdout existed stay validated, but a hit rate
+    that mixes them with earned ones would flatter the source."""
+    earned = book.add("earned", source="book")
+    _validate(book, earned.id)
+    legacy = book.add("legacy", source="book")
+    ideas = book._load()
+    for i in ideas:
+        if i.id == legacy.id:
+            i.status = "validated"
+    book._save(ideas)
+
+    hr = book.hit_rate()["book"]
+
+    assert hr["validated"] == 2 and hr["validated_without_holdout"] == 1
+    assert book.get(earned.id).validation_basis == "holdout"
+
+
+def test_the_two_backlog_ideas_validated_before_the_holdout_are_labelled():
+    import json
+    from pathlib import Path
+
+    rows = json.loads(Path("research/ideas.json").read_text())
+    validated = [r for r in rows if r["status"] == "validated"]
+    assert validated and all(r.get("validation_basis") in ("holdout", "none (pre-holdout)")
+                             for r in validated)
