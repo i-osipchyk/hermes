@@ -20,6 +20,7 @@ worth far more than an exception.
 from __future__ import annotations
 
 import math
+import statistics
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,7 +29,7 @@ from typing import Any
 DEFAULT_AXES: tuple[str, ...] = (
     "trades", "costs", "params", "oos", "validation", "regime", "gate",
 )
-ALL_AXES: tuple[str, ...] = (*DEFAULT_AXES, "walkforward", "baseline")
+ALL_AXES: tuple[str, ...] = (*DEFAULT_AXES, "deflation", "walkforward", "baseline")
 
 # Axes that can be computed from a *stored* run (a RestoredResult), because they only
 # read its serialised dict. Everything else needs the live BacktestResult — `validate`
@@ -36,6 +37,16 @@ ALL_AXES: tuple[str, ...] = (*DEFAULT_AXES, "walkforward", "baseline")
 # of which survives JSON. Asking for those from the ledger alone must trigger a re-run,
 # not an AttributeError.
 RESTORABLE_AXES: frozenset[str] = frozenset({"trades", "gate"})
+
+
+@dataclass(slots=True)
+class DeflationInputs:
+    """What the ``deflation`` axis needs beyond the result: how many independent trials
+    stand behind it (``hermes.research.trials.EffectiveTrials``) and the per-trade Sharpes
+    of those trials' cluster representatives."""
+
+    effective: Any
+    trial_sharpes: list[float]
 
 
 @dataclass(slots=True)
@@ -392,6 +403,58 @@ def axis_validation(result: Any, *, seed: int = 42, coverage: float | None = Non
     return AxisResult("validation", True, note, data)
 
 
+def axis_deflation(result: Any, inputs: DeflationInputs | None, *, seed: int = 42) -> AxisResult:
+    """Is the Sharpe still distinguishable from luck once the search that found it is counted?
+
+    The deflated Sharpe uses the idea's effective trials and the spread of the Sharpes those
+    trials produced (ADR-0013). With one effective trial there is nothing to deflate.
+    """
+    from ..backtest import validate
+    from ..backtest.validation import (
+        MIN_TRADES_FOR_TRADE_LEVEL_INFERENCE,
+        _expected_max_sharpe,
+        _trade_returns,
+    )
+
+    if inputs is None:
+        why = ("this run is not attributed to an idea, so its trials cannot be counted — "
+               "run it with `hermes run <strategy> --idea <id>`, then measure with "
+               "`hermes analyze <key> --axes deflation`")
+        return AxisResult("deflation", False, f"not measured — {why}", error=why)
+    n_trades = len(_trade_returns(result.trades, result.equity_curve))
+    if n_trades < MIN_TRADES_FOR_TRADE_LEVEL_INFERENCE:
+        why = (f"only {n_trades} trades (under {MIN_TRADES_FOR_TRADE_LEVEL_INFERENCE} trades the "
+               f"Sharpe statistics fall back to bar returns, which are not independent "
+               f"observations, so it is not deflated)")
+        return AxisResult("deflation", False, f"not measured — {why}", error=why)
+
+    eff = inputs.effective
+    sv = validate(result, n_bootstrap=10, n_mc=10, seed=seed, n_trials=eff.n_eff,
+                  trial_sharpes=inputs.trial_sharpes)
+    spread = statistics.stdev(inputs.trial_sharpes) if len(inputs.trial_sharpes) >= 2 else None
+    data = {
+        "dsr": sv.deflated_sharpe, "psr": sv.probabilistic_sharpe, "n_eff": eff.n_eff,
+        "own": eff.own, "inherited": dict(eff.inherited), "batch_floor": eff.batch_floor,
+        "trial_sharpe_std": spread,
+        "spread_basis": "trial-sharpes" if spread is not None else "own-standard-error",
+        "sr0": _expected_max_sharpe(eff.n_eff, spread) if spread is not None else None,
+        "basis": "trades", "n_trades": n_trades,
+    }
+    if eff.n_eff <= 1:
+        return AxisResult("deflation", True,
+                          "one effective trial — nothing to deflate, DSR equals PSR", data)
+    parts = [f"{eff.own} own"] + [f"{n} from {i}" for i, n in eff.inherited.items()]
+    if eff.batch_floor:
+        parts.append(f"{eff.batch_floor} batch floor")
+    note = (f"deflated Sharpe {sv.deflated_sharpe:.0%} vs probabilistic {sv.probabilistic_sharpe:.0%} "
+            f"after {eff.n_eff} effective trials ({' + '.join(parts)})"
+            if sv.deflated_sharpe is not None and sv.probabilistic_sharpe is not None
+            else f"{eff.n_eff} effective trials, but the Sharpe is undefined on this run")
+    if spread is None:
+        note += "; fewer than two measurable trial Sharpes, spread taken from this run's own error"
+    return AxisResult("deflation", True, note, data)
+
+
 def axis_regime(result: Any, *, external_benchmark: list | None = None) -> AxisResult:
     """Rubric 6 — was it the strategy, or being long in a bull market?"""
     from ..backtest import regime_analysis
@@ -510,6 +573,7 @@ def analyze(
     baseline_workers: int = 1,
     build_backtest: Any | None = None,
     coverage: float | None = None,
+    deflation: DeflationInputs | None = None,
 ) -> Analysis:
     """Run the requested rubric axes and collect the evidence.
 
@@ -548,6 +612,8 @@ def analyze(
     add("walkforward", lambda: axis_walkforward(backtest, is_frac=is_frac, param_grid=param_grid),
         backtest, "needs a Backtest to re-run")
     add("validation", lambda: axis_validation(result, seed=seed, coverage=coverage), result, "needs a result")
+    add("deflation", lambda: axis_deflation(result, deflation, seed=seed), result,
+        "needs a result")
     add("regime", lambda: axis_regime(result), result, "needs a result")
     add("gate", lambda: axis_gate(result), result, "needs a result")
 

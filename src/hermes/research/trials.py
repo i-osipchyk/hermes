@@ -7,7 +7,9 @@ variants of one bet are one draw, not nine, when the Sharpe is deflated.
 
 from __future__ import annotations
 
+import bisect
 import math
+import statistics
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -18,6 +20,7 @@ from .ledger import RunLedger
 CLUSTER_CORR = 0.9       # daily-return correlation at or above this -> same bet
 CLUSTER_OVERLAP = 0.8    # shared (entry day, side) share at or above this -> same bet
 MIN_OVERLAP_DAYS = 20    # fewer common days than this and correlation is not trusted
+MIN_TRADES_FOR_SHARPE = 10   # the trade-level inference floor (audit F5)
 
 
 @dataclass
@@ -96,6 +99,25 @@ class EffectiveTrials:
 BATCH_FLOOR = 0     # grows with the ideas processed in a pipeline run; none until that exists
 
 
+def _trade_sharpe(result: dict[str, Any]) -> float | None:
+    """Per-trade Sharpe (mean / population std of ``net_pnl / equity at entry``) of a stored
+    run — the same unit the measured run's PSR/DSR use, so the two are comparable."""
+    curve = [(datetime.fromisoformat(ts), float(eq)) for ts, eq in result.get("equity_curve") or []]
+    times = [ts for ts, _ in curve]
+    rets: list[float] = []
+    for t in result.get("trades") or []:
+        if not t.get("entry_time") or t.get("net_pnl") is None or not curve:
+            continue
+        # at-or-before the entry, clamped to the first point — as validation._equity_at does
+        i = max(0, bisect.bisect_right(times, datetime.fromisoformat(t["entry_time"])) - 1)
+        if curve[i][1] > 0:
+            rets.append(t["net_pnl"] / curve[i][1])
+    if len(rets) < MIN_TRADES_FOR_SHARPE:
+        return None
+    std = statistics.pstdev(rets)
+    return statistics.fmean(rets) / std if std > 0 else None
+
+
 class TrialRegistry:
     def __init__(self, ledger: RunLedger, ideas: IdeaBook | None = None):
         self.ledger = ledger
@@ -133,3 +155,17 @@ class TrialRegistry:
                 clusters.append(TrialCluster([entry.key]))
                 reps.append(fp)
         return clusters
+
+    def representative_sharpes(self, idea: str) -> list[float]:
+        """Per-trade Sharpes of the cluster representatives — the idea's own, then those of
+        every idea in ``informed_by`` — whose dispersion sets the DSR threshold. A cluster
+        whose representative has too few trades to measure is left out."""
+        informed_by = self.ideas.get(idea).informed_by if self.ideas else []
+        out: list[float] = []
+        for name in (idea, *informed_by):
+            for cluster in self.clusters(name):
+                record = self.ledger.load(cluster.representative)
+                sharpe = _trade_sharpe(record.result) if record else None
+                if sharpe is not None:
+                    out.append(sharpe)
+        return out

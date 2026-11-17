@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import random
+import statistics
 from dataclasses import asdict, dataclass
 
 from .result import BacktestResult, _annualisation  # reuse existing helper
@@ -155,6 +156,7 @@ def validate(
     level: float = 0.95,
     seed: int | None = 42,
     n_trials: int = 1,
+    trial_sharpes: list[float] | None = None,
 ) -> StatValidation:
     """Compute statistical validation for a completed BacktestResult.
 
@@ -165,7 +167,10 @@ def validate(
     n_mc:        Number of Monte Carlo trade-reorder simulations.
     level:       Confidence level (default 0.95 → 95 % CI).
     seed:        RNG seed for reproducibility (None = non-deterministic).
-    n_trials:    Number of independent strategy variants tested (for DSR correction).
+    n_trials:    Effective number of independent trials (for DSR correction; ADR-0013).
+    trial_sharpes: Per-observation (per-trade) Sharpes of the trial clusters'
+                 representatives. Their dispersion sets the DSR threshold; with fewer than two
+                 the dispersion falls back to this run's own Sharpe standard error.
     """
     rng = random.Random(seed)
     trades = result.trades
@@ -179,7 +184,10 @@ def validate(
     rets = _inference_returns(trades, equity_curve)
     psr = _probabilistic_sharpe(rets)
     sq = _sample_quality(metrics, result.equity_curve)
-    dsr = _deflated_sharpe(rets, n_trials)
+    trial_std = (
+        statistics.stdev(trial_sharpes) if trial_sharpes and len(trial_sharpes) >= 2 else None
+    )
+    dsr = _deflated_sharpe(rets, n_trials, trial_std)
     min_trl = _min_trl(rets, level)
 
     return StatValidation(

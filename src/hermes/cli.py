@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
-from .research.holdout import HoldoutViolation
+from .research.holdout import HoldoutSource, HoldoutViolation
 from .research.jsonsafe import decode_nonfinite, encode_nonfinite
 
 if TYPE_CHECKING:
@@ -162,7 +162,6 @@ def _entry(name: str, directory: str):
 def _build(args: argparse.Namespace):
     """A configured Backtest plus the ledger inputs that identify it."""
     from .research.discovery import configured_backtest, default_config, stable_end
-    from .research.holdout import HoldoutSource
     from .research.ledger import advisor_fingerprint, cache_key, source_epoch, strategy_hash
 
     entry = _entry(args.strategy, args.dir)
@@ -552,6 +551,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             params=rec.meta.params,
             unconstrained=rec.meta.unconstrained,
         )
+        bt = replace(bt, source=HoldoutSource(bt.source))   # a stored row may predate the guard
     else:
         args.strategy = args.target
         entry, bt, run_key = _build(args)
@@ -575,6 +575,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         bt, result, axes=axes, run_key=run_key, strategy=strategy_name,
         is_frac=args.is_frac, seed=args.seed, baseline_n=args.baseline_n,
         build_backtest=(lambda **kw: bt) if "baseline" in axes else None,
+        deflation=_deflation_inputs(args, ledger, rec) if "deflation" in axes else None,
     )
 
     if run_key and not args.no_save:
@@ -588,6 +589,22 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         lines.append(f"  {'✓' if a.ran else '·'} {a.axis:<12} {a.note}")
     _emit(analysis.to_dict(), args.json, lines)
     return EXIT_OK if analysis.ran else EXIT_EMPTY
+
+
+def _deflation_inputs(args: argparse.Namespace, ledger: RunLedger, rec: RunRecord | None):
+    """The trial count and trial Sharpes behind a run, or None when it belongs to no idea."""
+    from .research.analysis import DeflationInputs
+    from .research.ideas import IdeaBook
+    from .research.trials import TrialRegistry
+
+    if rec is None or not rec.meta.idea:
+        return None
+    registry = TrialRegistry(ledger, IdeaBook(args.ideas_file))
+    try:
+        return DeflationInputs(registry.effective_trials(rec.meta.idea),
+                               registry.representative_sharpes(rec.meta.idea))
+    except LookupError as e:
+        raise SystemExit(f"hermes: run is attributed to idea {rec.meta.idea!r}: {e}") from e
 
 
 # Axes that perturb and re-run one Backtest. A universe run is a PortfolioBacktest over
@@ -947,6 +964,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--axes", help="comma-separated subset (default: the cheap seven)")
     p.add_argument("--is-frac", type=float, default=0.7, help="in-sample fraction (default 0.7)")
     p.add_argument("--seed", type=int, default=42, help="RNG seed for the statistical axes")
+    p.add_argument("--ideas-file", default="research/ideas.json",
+                   help="backlog file, for the deflation axis (default: research/ideas.json)")
     p.add_argument("--baseline-n", type=int, default=50,
                    help="simulations for the `baseline` axis (default 50)")
     p.add_argument("--no-save", action="store_true", help="do not write analysis.json")

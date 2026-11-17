@@ -193,3 +193,22 @@ def test_carving_a_holdout_does_not_poison_the_bar_cache_against_future_data(tmp
     provider.available += 30                      # a month of new bars is published
     later = provider.history(provider.inst, D1, now, now + timedelta(days=29))
     assert len(later) == 30
+
+
+def test_analyzing_a_stored_run_cannot_reach_into_the_holdout_either(long_project, tmp_path, capsys):
+    """Rows written before the guard existed may end inside the holdout; `analyze` re-runs
+    them, so it must not become a side door."""
+    from hermes.research.ledger import RunLedger, RunMeta
+
+    ledger = RunLedger(tmp_path / "runs")
+    meta = RunMeta(
+        strategy="buy", strategy_hash="h", source="memory", ticker="BTCUSDT", universe=None,
+        start="2018-01-01T00:00:00+00:00", end="2022-06-01T00:00:00+00:00", params={},
+        sizer="", unconstrained=False, created_at="2026-01-01T00:00:00+00:00",
+    )
+    ledger.save("legacy01", {"metrics": {}, "equity_curve": [], "trades": []}, meta)
+
+    code = main(["analyze", "legacy01", *long_project, "--axes", "costs", "--json"])
+
+    assert code == EXIT_ERR
+    assert "holdout" in capsys.readouterr().err.lower()
