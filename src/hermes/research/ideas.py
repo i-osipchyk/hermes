@@ -294,7 +294,8 @@ class IdeaBook:
         self._save(ideas)
         return idea
 
-    def update(self, id_or_prefix: str, *, reason: str = "", **changes: object) -> Idea:
+    def update(self, id_or_prefix: str, *, reason: str = "", approval: object = None,
+               **changes: object) -> Idea:
         """Change fields on an idea; ``run_keys``, ``tags``, ``informed_by`` and ``links`` are
         appended, not replaced.
 
@@ -327,7 +328,10 @@ class IdeaBook:
                     setattr(idea, k, v)
             now = datetime.now(UTC).isoformat()
             if idea.status != before:
-                self._check(idea, before)
+                self._check(idea, before, approval)
+                if before == "awaiting_approval":
+                    idea.resume_status = None
+                    idea.approval_id = None
                 idea.history.append({"at": now, "from": before, "to": idea.status,
                                      "by": os.environ.get("HERMES_ROLE") or "owner",
                                      "reason": reason})
@@ -349,21 +353,29 @@ class IdeaBook:
         """The statuses an idea may move to from where it is (edges only, not the rules)."""
         return _targets(idea)
 
-    def _check(self, idea: Idea, before: str) -> None:
+    def _check(self, idea: Idea, before: str, approval: object = None) -> None:
         """Raise if ``before → idea.status`` is not allowed. ``idea`` already carries the changes."""
         to = idea.status
         was = Idea(id=idea.id, title=idea.title, status=before, resume_status=idea.resume_status,
                    history=idea.history)
         if to == "ready_to_forward_test":
-            raise IllegalTransition(
-                f"{idea.id}: ready_to_forward_test is set only by an owner approval "
-                "(`hermes pipeline answer`), never by a status update")
+            ok = (approval is not None and getattr(approval, "kind", None) == "forward_test"
+                  and getattr(approval, "status", None) == "approved"
+                  and getattr(approval, "idea", None) == idea.id
+                  and (before == "validated" or (before == "awaiting_approval"
+                                                 and idea.resume_status == "validated")))
+            if not ok:
+                raise IllegalTransition(
+                    f"{idea.id}: ready_to_forward_test is set only by an approved forward_test "
+                    "approval (`hermes pipeline answer`), never by a status update")
+            return
         if to not in _targets(was):
             raise IllegalTransition(f"{idea.id}: {before} → {to} is not a legal transition "
                                     f"(from {before}: {', '.join(sorted(_targets(was))) or 'none'})")
         if before not in ("parked", "awaiting_approval"):    # resuming is not re-judged
             self._require_artifacts(idea, to)
-        if to == "validated" and not self._holdout_passed(idea.id):
+        resuming = before in ("parked", "awaiting_approval")   # not re-judged (legacy ideas too)
+        if to == "validated" and not resuming and not self._holdout_passed(idea.id):
             raise IllegalTransition(
                 f"{idea.id}: validated is earned, not asserted — no passed holdout on record "
                 f"({self.holdout_dir / idea.id / 'holdout.json'}). "
