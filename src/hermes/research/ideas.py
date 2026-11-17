@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
@@ -85,6 +86,30 @@ class IllegalTransition(ValueError):
     """A status change the pipeline does not allow."""
 
 
+class DuplicateIdea(ValueError):
+    """A new idea that restates one already rejected, with no ``parent`` to say why it is back."""
+
+
+# Token overlap (Jaccard) over title + hypothesis + tags. Read off the real backlog, where
+# the closest sibling pair scores 0.28 and nothing reaches 0.5: 0.25 surfaces siblings
+# without noise. 0.6 for refusing is untested on real data (there are no real duplicates
+# yet) — a starting value, to be calibrated.
+SIMILAR_WARN = 0.25
+SIMILAR_REFUSE = 0.6
+_STOPWORDS = frozenset(
+    "the an of to in on and or for with is are be by at as it its this that from when than then "
+    "into over under after before".split())
+
+
+def _tokens(text: str) -> frozenset[str]:
+    return frozenset(w for w in re.findall(r"[a-z0-9]+", text.lower())
+                     if len(w) > 2 and w not in _STOPWORDS)
+
+
+def _idea_text(idea: Idea) -> str:
+    return " ".join([idea.title, idea.hypothesis, *idea.tags])
+
+
 @dataclass
 class Idea:
     """One trading idea and where it has got to."""
@@ -114,6 +139,7 @@ class Idea:
     priority: int | None = None            # manual order; lower runs first
     validation_basis: str | None = None    # "holdout" or "none (pre-holdout)"
     history: list[dict] = field(default_factory=list)    # {at, from, to, by, reason}
+    similar_to: list[str] = field(default_factory=list)  # near matches found when it was added
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -209,6 +235,23 @@ class IdeaBook:
             )
         return hits[0]
 
+    def similar(self, text: str, k: int = 5, *, exclude: str | None = None
+                ) -> list[tuple[Idea, float]]:
+        """The ``k`` ideas closest to ``text`` by token overlap, best first. No LLM: Hermes
+        computes, the agent interprets. Ideas with nothing in common are not listed."""
+        query = _tokens(text)
+        scored = []
+        for idea in self._load():
+            if idea.id == exclude:
+                continue
+            other = _tokens(_idea_text(idea))
+            union = query | other
+            score = len(query & other) / len(union) if union else 0.0
+            if score > 0:
+                scored.append((idea, round(score, 3)))
+        scored.sort(key=lambda p: (-p[1], p[0].created_at or "", p[0].id))
+        return scored[:k]
+
     # --- writing -----------------------------------------------------------
 
     def add(
@@ -219,9 +262,20 @@ class IdeaBook:
         source: str = "other",
         source_detail: str = "",
         tags: list[str] | None = None,
+        parent: str | None = None,
     ) -> Idea:
         if source not in SOURCES:
             raise ValueError(f"unknown source {source!r}. Known: {', '.join(SOURCES)}")
+        parent_id = self.get(parent).id if parent else None
+        text = " ".join([title, hypothesis, *(tags or [])])
+        near = [(i, score) for i, score in self.similar(text) if score >= SIMILAR_WARN]
+        if parent_id is None:
+            for i, score in near:
+                if i.status == "rejected" and score >= SIMILAR_REFUSE:
+                    raise DuplicateIdea(
+                        f"{title!r} restates rejected idea {i.id} ({i.title!r}, similarity "
+                        f"{score:.2f}; its verdict: {i.verdict}). If it is a deliberate "
+                        f"variant, add it with --parent {i.id}")
         now = datetime.now(UTC).isoformat()
         idea = Idea(
             id=uuid.uuid4().hex[:8],
@@ -230,6 +284,8 @@ class IdeaBook:
             source=source,
             source_detail=source_detail,
             tags=list(tags or []),
+            parent=parent_id,
+            similar_to=[i.id for i, _ in near],
             created_at=now,
             updated_at=now,
         )

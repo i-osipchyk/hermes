@@ -704,11 +704,19 @@ def cmd_ideas(args: argparse.Namespace) -> int:
         if args.source not in SOURCES:
             raise SystemExit(f"hermes: unknown --source {args.source!r}. "
                              f"Known: {', '.join(SOURCES)}")
-        idea = book.add(args.title, hypothesis=args.hypothesis or "",
-                        source=args.source, source_detail=args.detail or "",
-                        tags=args.tag or [])
-        _emit({"idea": idea.to_dict()}, args.json,
+        try:
+            idea = book.add(args.title, hypothesis=args.hypothesis or "",
+                            source=args.source, source_detail=args.detail or "",
+                            tags=args.tag or [], parent=args.parent)
+        except (ValueError, LookupError) as e:       # DuplicateIdea is a ValueError
+            raise SystemExit(f"hermes: {e}") from e
+        text = " ".join([idea.title, idea.hypothesis, *idea.tags])
+        similar = [{"id": i.id, "title": i.title, "status": i.status, "score": score}
+                   for i, score in book.similar(text, exclude=idea.id) if i.id in idea.similar_to]
+        _emit({"idea": idea.to_dict(), "similar": similar}, args.json,
               [f"{idea.id}  {idea.label}",
+               *[f"  similar {m['score']:.2f}  {m['id']}  [{m['status']}] {m['title']}"
+                 for m in similar],
                "  next: quantify it into unambiguous rules, then "
                f"`hermes ideas set {idea.id} --status quantified`"])
         return EXIT_OK
@@ -1145,6 +1153,9 @@ def build_parser() -> argparse.ArgumentParser:
                            help="book | discretionary | trader | course | data | other")
             q.add_argument("--detail", help="which book / trader / course / session")
             q.add_argument("--tag", action="append", default=[])
+            q.add_argument("--parent", metavar="IDEA_ID",
+                           help="the idea this one is spun out of; needed to re-propose "
+                                "something close to a rejected idea")
         elif name == "set":
             q.add_argument("id", help="idea id, or a unique prefix")
             q.add_argument("--status",
