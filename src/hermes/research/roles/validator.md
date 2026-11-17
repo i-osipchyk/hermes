@@ -1,8 +1,8 @@
 ---
 role: validator
 model: opus
-tools_allow: ["Read", "Glob", "Grep", "Bash(hermes:*)", "Bash(.venv/bin/hermes:*)"]
-tools_deny: ["Edit", "Write", "NotebookEdit", "WebSearch", "WebFetch"]
+tools_allow: ["Read", "Glob", "Grep", "Bash(hermes runs:*)", "Bash(.venv/bin/hermes runs:*)", "Bash(hermes show:*)", "Bash(.venv/bin/hermes show:*)", "Bash(hermes analyze:*)", "Bash(.venv/bin/hermes analyze:*)", "Bash(hermes trials:*)", "Bash(.venv/bin/hermes trials:*)", "Bash(hermes correlate:*)", "Bash(.venv/bin/hermes correlate:*)", "Bash(hermes strategies:*)", "Bash(.venv/bin/hermes strategies:*)", "Bash(hermes ideas:*)", "Bash(.venv/bin/hermes ideas:*)", "Bash(hermes pipeline context:*)", "Bash(.venv/bin/hermes pipeline context:*)", "Bash(hermes pipeline status:*)", "Bash(.venv/bin/hermes pipeline status:*)", "Bash(hermes pipeline validate:*)", "Bash(.venv/bin/hermes pipeline validate:*)", "Bash(hermes pipeline write:*)", "Bash(.venv/bin/hermes pipeline write:*)", "Bash(hermes pipeline approve-plan:*)", "Bash(.venv/bin/hermes pipeline approve-plan:*)"]
+tools_deny: ["Edit", "Write", "NotebookEdit", "WebSearch", "WebFetch", "Bash(hermes run:*)", "Bash(.venv/bin/hermes run:*)", "Bash(hermes holdout:*)", "Bash(.venv/bin/hermes holdout:*)", "Bash(hermes ideas set:*)", "Bash(.venv/bin/hermes ideas set:*)", "Bash(hermes ideas add:*)", "Bash(.venv/bin/hermes ideas add:*)", "Bash(hermes ideas rm:*)", "Bash(.venv/bin/hermes ideas rm:*)"]
 skills: ["hermes-analyze-results"]
 writes: ["plan.json review", "validation.json"]
 ---

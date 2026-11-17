@@ -23,3 +23,10 @@ def _isolated_holdouts(monkeypatch, tmp_path):
 def _isolated_ideas_dir(monkeypatch, tmp_path):
     """Tests never write reads logs into the committed research/ideas/."""
     monkeypatch.setenv("HERMES_IDEAS_DIR", str(tmp_path / "ideas_default"))
+
+
+@pytest.fixture(autouse=True)
+def _no_data_probe_network(monkeypatch):
+    """The driver's data check may fetch a week of bars to confirm an instrument; no test
+    ever does. The stand-in answers "found" so the ordinary path is exercised."""
+    monkeypatch.setattr("hermes.research.data_check.real_probe", lambda source, ticker, tf: 1)

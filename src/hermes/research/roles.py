@@ -27,7 +27,7 @@ ROLES_DIR = Path(__file__).parent / "roles"
 ROLE_NAMES = ("researcher", "quant", "validator", "developer", "mechanical")
 # Which role performs which step (the driver's own transitions are not here).
 STEP_ROLE = {
-    "write_spec": "researcher", "reflect": "researcher",
+    "write_spec": "researcher", "add_source": "researcher", "reflect": "researcher",
     "write_plan": "quant", "write_strategy": "quant", "run_variants": "quant",
     "amend_plan": "quant", "review_plan": "validator", "validate": "validator",
     "build_infra": "developer",

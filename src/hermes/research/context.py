@@ -14,6 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .data_check import read_data_check
 from .thesis import DEFAULT_THESIS_PATH, read_thesis
 
 HISTORY_TAIL = 5
@@ -78,6 +79,7 @@ def build_context(idea_id: str, *, book: Any, store: Any, ledger: Any, registry:
     return {
         "idea": record,
         "spec": asdict(spec) if spec else None,
+        "data": read_data_check(store.root, idea.id),
         "plan": plan_section,
         "trials": trials,
         "validation": asdict(validation) if validation else None,

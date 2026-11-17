@@ -1,8 +1,8 @@
 ---
 role: quant
 model: sonnet
-tools_allow: ["Read", "Glob", "Grep", "Write(strategies/**)", "Edit(strategies/**)", "Bash(hermes:*)", "Bash(.venv/bin/hermes:*)", "Bash(.venv/bin/python:*)"]
-tools_deny: ["WebSearch", "WebFetch", "Read(research/ideas/*/validation*.json)"]
+tools_allow: ["Read", "Glob", "Grep", "Write(strategies/**)", "Edit(strategies/**)", "Bash(hermes:*)", "Bash(.venv/bin/hermes:*)"]
+tools_deny: ["WebSearch", "WebFetch", "Read(research/ideas/*/validation*.json)", "Bash(hermes holdout:*)", "Bash(.venv/bin/hermes holdout:*)", "Bash(hermes pipeline approve-plan:*)", "Bash(.venv/bin/hermes pipeline approve-plan:*)", "Bash(hermes pipeline answer:*)", "Bash(.venv/bin/hermes pipeline answer:*)", "Bash(hermes pipeline validate:*)", "Bash(.venv/bin/hermes pipeline validate:*)"]
 skills: ["hermes-strategy", "hermes-research"]
 writes: ["plan.json", "strategies/**"]
 ---

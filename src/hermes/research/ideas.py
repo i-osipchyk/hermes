@@ -82,6 +82,13 @@ TRANSITIONS: dict[str, frozenset[str]] = {
 LINK_FREE_SOURCES = ("discretionary", "data")
 
 
+def lacks_source_link(idea: Idea) -> bool:
+    """True when the idea needs a source link (every idea does, bar discretionary and data
+    ones) and has none. Checked on the way into ``quantified`` as well as ``literature_done``:
+    the driver goes raw → quantified, so the rule cannot hang on a status it never visits."""
+    return not idea.links and idea.source not in LINK_FREE_SOURCES
+
+
 class IllegalTransition(ValueError):
     """A status change the pipeline does not allow."""
 
@@ -403,9 +410,9 @@ class IdeaBook:
                 f"{idea.id}: validated is earned, not asserted — no passed holdout on record "
                 f"({self.holdout_dir / idea.id / 'holdout.json'}). "
                 "Earn it with `hermes holdout check` then `hermes holdout unlock`")
-        if to == "literature_done" and not idea.links and idea.source not in LINK_FREE_SOURCES:
+        if to in ("literature_done", "quantified") and lacks_source_link(idea):
             raise IllegalTransition(
-                f"{idea.id}: literature_done needs at least one source link (--link), "
+                f"{idea.id}: {to} needs at least one source link (--link), "
                 f"unless the source is {' or '.join(LINK_FREE_SOURCES)}")
         if to == "rejected":
             f = idea.failure or {}

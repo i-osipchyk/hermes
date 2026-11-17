@@ -232,7 +232,7 @@ def test_ideas_dir_is_the_artifact_directory(book, tmp_path):
 
 
 def test_quantified_needs_a_valid_spec(book):
-    idea = book.add("x")
+    idea = book.add("x", source="discretionary")
     with pytest.raises(IllegalTransition, match="spec"):
         book.update(idea.id, status="quantified")
     ArtifactStore(book.ideas_dir).write(idea.id, "spec", good_spec(falsifier=""), role="researcher")
@@ -243,7 +243,7 @@ def test_quantified_needs_a_valid_spec(book):
 
 
 def test_testing_needs_a_locked_reviewed_plan(book):
-    idea = book.add("x")
+    idea = book.add("x", source="discretionary")
     store = ArtifactStore(book.ideas_dir)
     store.write(idea.id, "spec", good_spec(), role="researcher")
     for status in ("quantified", "coded"):
@@ -259,7 +259,7 @@ def test_testing_needs_a_locked_reviewed_plan(book):
 
 def test_resuming_from_park_is_not_re_judged(book):
     """A legacy idea parked at `testing` (no plan) goes back to where it was."""
-    idea = book.add("x")
+    idea = book.add("x", source="discretionary")
     ideas = book._load()
     ideas[0].status = "testing"
     book._save(ideas)

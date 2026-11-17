@@ -154,7 +154,7 @@ def _to_testing(lab, capsys, idea):
 
 
 def _idea_and_run(lab, capsys, kind):
-    main(["ideas", "add", f"{kind} idea", *lab["ideas"], "--json"])
+    main(["ideas", "add", f"{kind} idea", "--source", "discretionary", *lab["ideas"], "--json"])
     idea = _out(capsys)["idea"]["id"]
     _to_testing(lab, capsys, idea)
     assert main(["run", kind, *lab["common"], "--idea", idea, "--json", "--note", "t"]) == EXIT_OK
@@ -216,7 +216,7 @@ def test_a_strategy_changed_since_the_run_is_refused(lab, capsys):
 
 def test_a_run_that_belongs_to_another_idea_is_refused(lab, capsys):
     _, key = _idea_and_run(lab, capsys, "real")
-    main(["ideas", "add", "someone else", *lab["ideas"], "--json"])
+    main(["ideas", "add", "someone else", "--source", "discretionary", *lab["ideas"], "--json"])
     other = _out(capsys)["idea"]["id"]
     code, _, err = _unlock(lab, capsys, other, key)
     assert code == EXIT_ERR and "not a trial of idea" in err
@@ -327,7 +327,7 @@ def _set(lab, capsys, idea, *args):
 
 
 def _new_idea(lab, capsys):
-    main(["ideas", "add", "candidate", *lab["ideas"], "--json"])
+    main(["ideas", "add", "candidate", "--source", "discretionary", *lab["ideas"], "--json"])
     return _out(capsys)["idea"]["id"]
 
 

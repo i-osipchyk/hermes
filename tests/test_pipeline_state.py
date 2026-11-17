@@ -28,7 +28,7 @@ def store(book):
 
 
 def _at(book, status, **kw):
-    idea = book.add(kw.pop("title", "x"))
+    idea = book.add(kw.pop("title", "x"), source=kw.pop("source", "discretionary"))
     ideas = book._load()
     for i in ideas:
         if i.id == idea.id:
@@ -51,7 +51,26 @@ def test_a_raw_idea_needs_a_spec_then_to_be_marked_quantified(book, store):
     idea = _at(book, "raw")
     assert _act(idea, store) == ("researcher", "write_spec")
     store.write(idea.id, "spec", good_spec(), role="researcher")
+    assert _act(idea, store) == ("driver", "check_data")
+    (store.root / idea.id).mkdir(parents=True, exist_ok=True)
+    (store.root / idea.id / "data_check.json").write_text('{"verdict": "ok", "rows": []}')
     assert _act(idea, store) == ("researcher", "mark_quantified")
+
+
+def test_a_failed_data_check_is_run_again_not_trusted(book, store):
+    idea = _at(book, "raw")
+    store.write(idea.id, "spec", good_spec(), role="researcher")
+    (store.root / idea.id).mkdir(parents=True, exist_ok=True)
+    (store.root / idea.id / "data_check.json").write_text('{"verdict": "owner_action"}')
+    assert _act(idea, store) == ("driver", "check_data")
+
+
+def test_a_book_idea_with_a_spec_but_no_link_needs_a_source_before_it_is_quantified(book, store):
+    idea = _at(book, "raw", source="book")
+    store.write(idea.id, "spec", good_spec(), role="researcher")
+    assert _act(idea, store) == ("researcher", "add_source")
+    book.update(idea.id, links=["https://ssrn.com/x"])
+    assert _act(book.get(idea.id), store) == ("driver", "check_data")
 
 
 def test_a_quantified_idea_walks_plan_review_strategy_and_coding(book, store):
@@ -118,7 +137,7 @@ def test_next_action_is_pure_and_resumes_from_what_is_on_disk(book, store):
     first = next_action(idea, store)
     assert next_action(idea, store) == first and isinstance(first, Action)
     store.write(idea.id, "spec", good_spec(), role="researcher")   # "a crash", then a new call
-    assert next_action(idea, store).step == "mark_quantified"
+    assert next_action(idea, store).step == "check_data"
     assert first.produces == ("spec.json",)
 
 

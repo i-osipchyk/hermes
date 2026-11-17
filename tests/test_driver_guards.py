@@ -27,7 +27,7 @@ def test_a_quant_cannot_write_the_validators_file(proj):
         proj.store.write(i, "plan", good_plan())
 
     proj.runner.scripts[("quant", "write_plan")] = greedy
-    proj.driver.run(idea, max_steps=3)
+    proj.driver.run(idea, max_steps=4)
 
     assert "quant" in seen["error"] and proj.store.read(idea, "validation") is None
 

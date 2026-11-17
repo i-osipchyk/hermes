@@ -132,7 +132,8 @@ Never pushes.
    notes in [phase-4-roles-and-pipeline-plan.md](phase-4-roles-and-pipeline-plan.md), decision in ADR-0018.
 5. **Test of the workflow** — one real raw idea from backlog to verdict with no human input beyond
    parked approvals; a crash resumes from files; planted-answer ideas (one bogus, one real) as a
-   regression check on the validation.
+   regression check on the validation. Plan (not yet run) in
+   [phase-5-workflow-test-plan.md](phase-5-workflow-test-plan.md); ADR-0019 reserved for the calibration.
 6. **Queue runner, Strategist synthesis, literature loop.**
 
 ## Skill changes this implies

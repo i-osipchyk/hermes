@@ -8,6 +8,7 @@ import random
 from datetime import UTC, datetime, timedelta
 
 from hermes.research.artifacts import Lessons, Validation
+from hermes.research.data_check import DataCheck, DataRow
 from hermes.research.driver import Driver, DriverConfig, ScriptedRunner, role_env
 from hermes.research.ledger import RunLedger, RunMeta
 from tests.artifact_helpers import good_plan, good_spec
@@ -40,8 +41,9 @@ class Project:
             repo=tmp_path / "repo")
         (tmp_path / "strategies").mkdir(parents=True, exist_ok=True)
         self.runner = runner or ScriptedRunner(self.happy_scripts())
+        self.data_verdict = "ok"
         self.driver = Driver(self.cfg, self.runner, unlocker=self.unlock, filler=self.fill,
-                             **driver_kw)
+                             data_checker=self.data_check, **driver_kw)
         self.book, self.store = self.driver.book, self.driver.store
         self.ledger, self.approvals = self.driver.ledger, self.driver.approvals
         self.unlocked: list[str] = []
@@ -79,6 +81,11 @@ class Project:
             save_run(self.ledger, f"{idea}-{v['id']}", idea, v["id"], 100 + 37 * n)
 
     # --- the driver's seams ----------------------------------------------------------
+
+    def data_check(self, spec):
+        state = {"ok": "cached", "owner_action": "needs_credentials",
+                 "needs_infra": "unavailable"}[self.data_verdict]
+        return DataCheck(self.data_verdict, [DataRow("XAUUSD", "1h", state, detail="test")])
 
     def fill(self, idea, driver):
         return Validation(recommendation=self.recommendation, recommendation_reason="test",
