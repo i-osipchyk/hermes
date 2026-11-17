@@ -130,7 +130,11 @@ All six steps are in. Where the code differs from the plan above:
   later does not retroactively give an idea a holdout it already saw all of.
 - **Guard coverage.** `hermes run` and `hermes analyze` (name or stored key) are guarded.
   **Not yet:** universe runs, `WalkForward` templates built outside the CLI, reference feeds,
-  the `BarCache.read` env guard (`HERMES_RESEARCH=1`) and the Claude Code hook.
+  and the Claude Code hook. The `BarCache.read` env guard (`HERMES_RESEARCH=1`) was built in the
+  pre-phase-5 cleanup: a read past a frozen `holdout_start`, or of an instrument whose holdout is
+  not frozen yet, raises `HoldoutViolation`; carving and the unlock suspend it in-process
+  (`guard_suspended`). It stops a strategy file or script that bypasses `HoldoutSource`, not a
+  process that reads the parquet files directly.
 - **PSR basis.** Trade-level (audit F5), not daily-resampled with an autocorrelation
   correction; the deflation and null axes refuse to run under 10 trades rather than fall back
   to bars.

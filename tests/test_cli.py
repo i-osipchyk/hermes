@@ -412,7 +412,8 @@ def _walk(ideas, idea_id, capsys, *statuses):
     holdouts = _earned_dir(ideas)
     ready_for_testing(holdouts, idea_id)
     for status in statuses:
-        assert main(["ideas", "set", idea_id, "--status", status, *ideas,
+        assert main(["ideas", "set", idea_id, "--status", status, "--link",
+                     "https://example.org/paper", *ideas,
                      "--holdout-dir", str(holdouts), "--json"]) == EXIT_OK
         capsys.readouterr()
 

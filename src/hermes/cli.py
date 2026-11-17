@@ -1040,7 +1040,11 @@ def cmd_holdout_unlock(args: argparse.Namespace) -> int:
           f"{record['window']['end'][:10]} (one look) …")
     unguarded = replace(bt, source=bt.source.inner, start=held,
                         end=datetime.fromisoformat(record["window"]["end"]))
-    verdict = holdout_verdict(record["in_sample_sharpe"], unguarded.run(), prior)
+    from .data.cache import guard_suspended
+
+    with guard_suspended():              # the one sanctioned read of the held-out bars
+        holdout_result = unguarded.run()
+    verdict = holdout_verdict(record["in_sample_sharpe"], holdout_result, prior)
     record.update(state="done", passed=verdict["passed"], **{
         k: verdict[k] for k in ("checks", "holdout", "required_psr", "prior_looks")})
     out.write_text(json.dumps(encode_nonfinite(record), indent=2, allow_nan=False) + "\n")
@@ -1113,7 +1117,8 @@ def _pipeline_run(args: argparse.Namespace, action: str) -> int:
         approvals_file=Path(args.approvals_file), thesis_file=Path(args.thesis_file),
         runs_dir=Path(args.runs_dir) if args.runs_dir else None,
         strategies_dir=Path(args.dir), repo=Path.cwd(),
-        max_steps=1 if action == "step" else args.max_steps)
+        max_steps=1 if action == "step" else args.max_steps,
+        probe=not getattr(args, "no_probe", False))
     driver = Driver(cfg, _make_runner(), devflow=_devflow(args))
     summary = driver.run(args.idea, until=getattr(args, "until", None),
                          dry_run=getattr(args, "dry_run", False))
@@ -1279,6 +1284,20 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
 
         if action == "validate":
             return _pipeline_validate(args, book, store, ledger)
+
+        if action == "data-check":
+            from .research.data_check import check_spec_data, real_probe
+            idea = book.get(args.idea)
+            spec = store.read(idea.id, "spec")
+            if spec is None:
+                raise SystemExit(f"hermes: {idea.id} has no spec.json to check "
+                                 f"(`hermes pipeline write {idea.id} spec --file …`)")
+            check = check_spec_data(spec, probe=real_probe if args.probe else None)
+            lines = [f"{idea.id}  data: {check.verdict}"] + [
+                f"  {r.instrument:<10} {r.timeframe:<4} {r.state:<18} {r.source or '-':<12} "
+                f"{r.detail}" for r in check.rows]
+            _emit(check.to_dict(), args.json, lines)
+            return EXIT_OK if check.verdict == "ok" else EXIT_EMPTY
 
         if action == "extension":
             idea = book.get(args.idea)
@@ -1588,13 +1607,20 @@ def build_parser() -> argparse.ArgumentParser:
         ("run", "drive one idea to a verdict: next action, role, verify, repeat"),
         ("step", "drive exactly one step"),
         ("validate", "fill validation.json's computed fields and recommendation"),
+        ("data-check", "can the data the spec names be had? prints; the driver records it"),
         ("extension", "the Developer's record of what its branch adds"),
         ("estimate-advisor", "the cost of an advisor variant, computed (and optionally parked)"),
     ]:
         q = psub.add_parser(name, help=helptext)
         if name in ("context", "reopen", "write", "approve-plan", "amend-plan", "run", "step",
-                    "validate", "extension", "estimate-advisor"):
+                    "validate", "data-check", "extension", "estimate-advisor"):
             q.add_argument("idea", help="idea id or unique prefix")
+        if name == "data-check":
+            q.add_argument("--probe", action="store_true",
+                           help="fetch a week of bars from each reachable source to confirm")
+        if name in ("run", "step"):
+            q.add_argument("--no-probe", action="store_true",
+                           help="skip the one-week fetch that confirms the spec's data exists")
         if name == "run":
             q.add_argument("--until", metavar="STEP", help="stop before this step")
             q.add_argument("--max-steps", type=int, default=40)

@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import data_check as _data_check
 from .approvals import ApprovalBook
 from .artifacts import (
     ArtifactStore,
@@ -33,8 +34,9 @@ from .artifacts import (
     validate_validation,
 )
 from .context import build_context, render_context
+from .data_check import DataCheck, check_spec_data, write_data_check
 from .dev_flow import DevFlow, ExtensionLimit
-from .ideas import IdeaBook, IllegalTransition
+from .ideas import IdeaBook, IllegalTransition, lacks_source_link
 from .jsonsafe import encode_nonfinite
 from .ledger import RunLedger
 from .pipeline import Action, next_action, ran_variants
@@ -49,7 +51,7 @@ DEFAULT_MAX_ATTEMPTS = 3          # 1 try + 2 retries
 # Steps the driver performs itself: a library call, no agent.
 TRANSITION_STEPS = {"mark_quantified": "quantified", "mark_coded": "coded",
                     "mark_testing": "testing", "resume_from_infra": "quantified"}
-_DRIVER_STEPS = (*TRANSITION_STEPS, "reject_idea", "unlock_holdout")
+_DRIVER_STEPS = (*TRANSITION_STEPS, "reject_idea", "unlock_holdout", "check_data")
 
 
 @contextmanager
@@ -80,6 +82,8 @@ class DriverConfig:
     repo: Path = field(default_factory=Path.cwd)
     max_steps: int = DEFAULT_MAX_STEPS
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    cache_root: Path = Path(".hermes_cache/bars")
+    probe: bool = False          # fetch a week of bars to confirm an instrument; the CLI turns it on
 
 
 @dataclass
@@ -125,7 +129,8 @@ class Driver:
     def __init__(self, cfg: DriverConfig, runner: RoleRunner, *,
                  unlocker: Callable[[str, str], None] | None = None,
                  filler: Callable[..., Any] | None = None,
-                 devflow: DevFlow | None = None):
+                 devflow: DevFlow | None = None,
+                 data_checker: Callable[[Any], DataCheck] | None = None):
         self.cfg, self.runner = cfg, runner
         self.book = IdeaBook(cfg.ideas_file, holdout_dir=cfg.ideas_dir)
         self.store = ArtifactStore(cfg.ideas_dir)
@@ -133,6 +138,7 @@ class Driver:
         self.approvals = ApprovalBook(cfg.approvals_file, self.book)
         self.unlocker = unlocker or self._cli_unlock
         self.filler = filler
+        self.data_checker = data_checker or self._default_data_check
         self.devflow = devflow or DevFlow(cfg.repo, cfg.ideas_dir)
 
     # --- the loop ---------------------------------------------------------------------
@@ -202,15 +208,49 @@ class Driver:
         if act.step in _DRIVER_STEPS:
             try:
                 with role_env("driver", idea_id):
-                    self._transition(idea_id, act)
+                    override = self._transition(idea_id, act)
             except (IllegalTransition, ValueError, RuntimeError, OSError, SystemExit) as e:
                 return self._stall(idea_id, act, [f"{act.step}: {e}"], 1, t0)
             self._log(idea_id, step=act.step, role="driver", attempt=1, outcome="done",
                       duration_s=time.monotonic() - t0)
+            if override:
+                self._log(idea_id, step=act.step, role="driver", attempt=1,
+                          outcome=override["outcome"], duration_s=time.monotonic() - t0,
+                          detail=override.get("detail", ""))
+                return override
             return {"step": act.step, "role": "driver", "outcome": "done"}
         return self._role_step(idea_id, act, t0)
 
-    def _transition(self, idea_id: str, act: Action) -> None:
+    def _default_data_check(self, spec: Any) -> DataCheck:
+        return check_spec_data(spec, cache_root=self.cfg.cache_root,
+                               probe=_data_check.real_probe if self.cfg.probe else None)
+
+    def _check_data(self, idea_id: str) -> dict | None:
+        """Is the data the spec names obtainable, and whose problem is it if not? Recorded in
+        ``data_check.json``. ``ok`` continues; missing credentials park an owner approval and a
+        later answer re-checks; a missing capability goes to the Developer."""
+        spec = self.store.read(idea_id, "spec")
+        check = self.data_checker(spec)
+        path = write_data_check(self.cfg.ideas_dir, idea_id, check)
+        if check.verdict == "ok":
+            return None
+        if check.verdict == "owner_action":
+            a = self.approvals.park(
+                idea_id, "other", f"data not available (needs_credentials): {check.summary()}",
+                "set the missing credentials (or choose another instrument), then approve to "
+                "re-check; the pipeline will not proceed on data it cannot fetch",
+                evidence=[str(path)])
+            return {"step": "check_data", "role": "driver", "outcome": "parked",
+                    "approval": a.id, "detail": f"approval {a.id}: {a.question}"}
+        self.book.update(idea_id, status="quantified", reason="driver: check_data")
+        self.book.update(idea_id, status="needs_infra", reason="driver: check_data", failure={
+            "kind": "infra", "assumption": "the data the spec needs can be fetched",
+            "detail": check.summary()})
+        return None
+
+    def _transition(self, idea_id: str, act: Action) -> dict | None:
+        if act.step == "check_data":
+            return self._check_data(idea_id)
         if act.step in TRANSITION_STEPS:
             self.book.update(idea_id, status=TRANSITION_STEPS[act.step],
                              reason=f"driver: {act.step}")
@@ -297,6 +337,10 @@ class Driver:
         if step == "write_spec":
             spec = s.read(idea_id, "spec")
             return ["spec.json was not written"] if spec is None else validate_spec(spec)
+        if step == "add_source":
+            return (["no source link recorded: `hermes ideas set <idea> --link <url>` with the "
+                     "paper, book or data page the idea comes from"]
+                    if lacks_source_link(self.book.get(idea_id)) else [])
         if step == "write_plan":
             plan = s.read(idea_id, "plan")
             return ["plan.json was not written"] if plan is None else validate_plan(plan)

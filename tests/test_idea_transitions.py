@@ -34,7 +34,7 @@ def _earn(book, idea_id, passed=True):
     path.write_text(json.dumps({"state": "done", "passed": passed}))
 
 
-def _at(book, status, *, source="trader"):
+def _at(book, status, *, source="discretionary"):
     """An idea parked directly at ``status`` (bypassing the rules, as an old record would be)."""
     idea = book.add("x", source=source)
     ideas = book._load()
@@ -47,7 +47,8 @@ def _changes(to):
     """The fields a transition to ``to`` requires, so a test of the edge is only about the edge."""
     extra = {"rejected": {"failure": FAILURE, "verdict": "no edge"},
              "needs_infra": {"failure": {"kind": "infra", "assumption": "", "detail": "needs L2 data"}},
-             "literature_done": {"links": ["https://example.org/paper"]}}
+             "literature_done": {"links": ["https://example.org/paper"]},
+             "quantified": {"links": ["https://example.org/paper"]}}
     return extra.get(to, {})
 
 
@@ -165,6 +166,17 @@ def test_literature_done_needs_a_source_link_unless_the_idea_is_discretionary_or
         book.update(book_idea.id, status="literature_done")
     assert book.update(book_idea.id, status="literature_done",
                        links=["https://ssrn.com/x"]).links == ["https://ssrn.com/x"]
+
+
+def test_quantified_needs_the_link_too_because_the_driver_skips_literature_done(book):
+    """raw → quantified is a legal edge and the one the driver takes, so the "every idea needs
+    a source" rule cannot hang on literature_done alone."""
+    idea = _at(book, "raw", source="book")
+    ready_for_testing(book.ideas_dir, idea.id)
+    with pytest.raises(IllegalTransition, match="link"):
+        book.update(idea.id, status="quantified")
+    assert book.update(idea.id, status="quantified",
+                       links=["https://ssrn.com/x"]).status == "quantified"
 
 
 @pytest.mark.parametrize("source", ["discretionary", "data"])

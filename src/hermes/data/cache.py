@@ -8,6 +8,8 @@ just files — easy to inspect, delete, or version.
 from __future__ import annotations
 
 import contextlib
+import contextvars
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +17,45 @@ from ..core import Bar, Instrument, Timeframe
 
 DEFAULT_CACHE_DIR = Path(".hermes_cache/bars")
 _COLUMNS = ["ts", "open", "high", "low", "close", "volume"]
+
+
+_guard_suspended: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "hermes_cache_guard_suspended", default=False)
+
+
+@contextlib.contextmanager
+def guard_suspended():
+    """Lift the research read guard for a block. In-process only (not an env var, so a shell
+    cannot set it): the holdout's own carving and its one sanctioned unlock use it."""
+    token = _guard_suspended.set(True)
+    try:
+        yield
+    finally:
+        _guard_suspended.reset(token)
+
+
+def _check_research_read(instrument: Instrument, timeframe: Timeframe, end: datetime) -> None:
+    """The backstop for ADR-0012. With ``HERMES_RESEARCH=1`` (set by the pipeline for every
+    agent) a read may not reach held-out bars, nor touch an instrument whose holdout has not
+    been frozen yet (the freeze happens at the first ``hermes run``). It stops a strategy file
+    or a script that bypasses ``HoldoutSource``; a determined process can still read the
+    parquet files directly — the honest limit of ADR-0012."""
+    if os.environ.get("HERMES_RESEARCH") != "1" or _guard_suspended.get():
+        return
+    from ..research.holdout import HoldoutPolicy, HoldoutViolation  # lazy: research imports data
+
+    sym = instrument.symbol
+    frozen, held = HoldoutPolicy().frozen(sym.source, sym.ticker, timeframe)
+    where = f"{sym.source}/{sym.ticker} {timeframe}"
+    if not frozen:
+        raise HoldoutViolation(
+            f"{where}: the holdout is not frozen yet, so a direct cache read cannot be checked "
+            "against it (HERMES_RESEARCH=1). Run `hermes run` on it first, which freezes it "
+            "(ADR-0012)")
+    if held is not None and end > held:
+        raise HoldoutViolation(
+            f"{where}: requested bars through {end:%Y-%m-%d} but the holdout starts "
+            f"{held:%Y-%m-%d}; research may not read them, not even from the cache (ADR-0012)")
 
 
 def complete_bars(
@@ -119,6 +160,7 @@ class BarCache:
     def read(
         self, instrument: Instrument, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[Bar]:
+        _check_research_read(instrument, timeframe, end)
         df = self._load(instrument, timeframe)
         if df.empty:
             return []

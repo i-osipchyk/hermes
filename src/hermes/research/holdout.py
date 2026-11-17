@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ..core import Bar, Instrument, Symbol, Timeframe
+from ..data.cache import guard_suspended
 from ..data.source import DataSource
 
 HOLDOUT_FRACTION = 0.20
@@ -53,6 +54,16 @@ class HoldoutPolicy:
         self._write(store)
         return start
 
+    def frozen(self, source_name: str, ticker: str, timeframe: Timeframe
+               ) -> tuple[bool, datetime | None]:
+        """(is it frozen, its holdout start) from the store alone — never carves. The cache
+        guard uses it, so it must not read bars."""
+        entry = self._read().get(f"{source_name}/{ticker}/{timeframe}")
+        if entry is None:
+            return False, None
+        start = entry["holdout_start"]
+        return True, datetime.fromisoformat(start) if start else None
+
     def looks(self, source: DataSource, symbol: Symbol, timeframe: Timeframe) -> list[dict]:
         """Every look any idea has taken at this instrument's holdout, oldest first."""
         return list(self._read().get(_key(source, symbol, timeframe), {}).get("looks", []))
@@ -80,7 +91,8 @@ class HoldoutPolicy:
         # future and bars published later would never be fetched.
         today = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         inst = source.get_instrument(symbol)
-        bars = source.history(inst, timeframe, _EPOCH, today)
+        with guard_suspended():          # carving must see the whole history to place the cut
+            bars = source.history(inst, timeframe, _EPOCH, today)
         if not bars:
             return None
         first, last = bars[0].timestamp, bars[-1].timestamp

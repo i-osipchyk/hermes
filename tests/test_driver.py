@@ -155,8 +155,7 @@ def test_a_dry_run_runs_no_role_and_changes_nothing(proj):
     assert proj.book.get(idea).status == "raw" and proj.run_log(idea) == []
 
     proj.driver.run(idea, max_steps=1)                                # spec written
-    assert [s["step"] for s in proj.driver.run(idea, dry_run=True).steps] == [
-        "mark_quantified", "write_plan"]
+    assert [s["step"] for s in proj.driver.run(idea, dry_run=True).steps] == ["check_data"]
     assert proj.book.get(idea).status == "raw"                        # still nothing changed
 
 
@@ -192,3 +191,78 @@ def test_the_run_log_is_strict_json(proj):
     proj.driver.run(idea, max_steps=2)
     for line in (proj.cfg.ideas_dir / idea / "run.jsonl").read_text().splitlines():
         json.loads(line, parse_constant=lambda c: pytest.fail(c))
+
+
+def test_a_missing_source_link_is_asked_for_not_left_to_stall_the_transition(proj):
+    idea = proj.book.add("index momentum", source="book").id
+    calls = []
+    proj.runner.scripts[("researcher", "add_source")] = lambda i, p: (
+        calls.append(p), proj.book.update(i, links=["https://ssrn.com/x"]))
+
+    summary = proj.driver.run(idea, until="write_plan")
+
+    assert summary.stopped == "until" and len(calls) == 1
+    assert proj.book.get(idea).status == "quantified"
+
+
+def test_a_role_that_does_not_record_a_link_is_retried_then_parked(proj):
+    idea = proj.book.add("index momentum", source="book").id
+    proj.runner.scripts[("researcher", "add_source")] = lambda i, p: None
+
+    summary = proj.driver.run(idea)
+
+    assert summary.stopped == "stalled" and "link" in summary.detail
+
+
+# --- the data check between the spec and `quantified` -------------------------------
+
+
+def test_the_data_check_runs_between_the_spec_and_quantified_and_is_recorded(proj):
+    idea = proj.idea()
+    summary = proj.driver.run(idea, until="write_plan")
+    assert summary.stopped == "until"
+    assert [r["step"] for r in proj.run_log(idea) if r["role"] == "driver"] == [
+        "check_data", "mark_quantified"]
+    saved = json.loads((proj.cfg.ideas_dir / idea / "data_check.json").read_text())
+    assert saved["verdict"] == "ok" and saved["rows"][0]["state"] == "cached"
+
+
+def test_missing_credentials_park_an_owner_approval_and_answering_rechecks(proj):
+    idea = proj.idea()
+    proj.data_verdict = "owner_action"
+
+    summary = proj.driver.run(idea)
+
+    assert summary.stopped == "parked" and summary.approval
+    approval = proj.approvals.get(summary.approval)
+    assert approval.kind == "other" and "needs_credentials" in approval.question
+    assert proj.book.get(idea).status == "awaiting_approval"
+
+    proj.data_verdict = "ok"                                  # the owner fixed the environment
+    proj.approvals.answer(summary.approval, "approved", "credentials set")
+    assert proj.book.get(idea).status == "raw"
+    assert proj.driver.run(idea, until="write_plan").stopped == "until"
+    assert proj.book.get(idea).status == "quantified"
+
+
+def test_a_still_missing_credential_parks_again_instead_of_slipping_through(proj):
+    idea = proj.idea()
+    proj.data_verdict = "owner_action"
+    first = proj.driver.run(idea)
+    proj.approvals.answer(first.approval, "approved", "i think i set them")
+
+    second = proj.driver.run(idea)
+
+    assert second.stopped == "parked" and second.approval != first.approval
+
+
+def test_missing_capability_sends_the_idea_to_the_developer_with_the_gap_named(proj):
+    idea = proj.idea()
+    proj.data_verdict = "needs_infra"
+
+    proj.driver.run(idea, max_steps=2)
+
+    got = proj.book.get(idea)
+    assert got.status == "needs_infra"
+    assert got.failure["kind"] == "infra" and "unavailable" in got.failure["detail"]
+    assert proj.driver.next(idea).role == "developer"

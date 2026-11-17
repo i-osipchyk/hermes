@@ -26,6 +26,7 @@ FAIL = {"kind": "no_edge", "assumption": "it drifts"}
 def _validate(book, idea_id):
     """Walk an idea to `validated` the only way there is: through a passed holdout."""
     ready_for_testing(book.ideas_dir, idea_id)
+    book.update(idea_id, links=["https://example.org/paper"])
     for status in ("quantified", "coded", "testing"):
         book.update(idea_id, status=status)
     d = book.holdout_dir / idea_id
@@ -68,7 +69,8 @@ def test_a_fresh_book_is_empty_not_an_error(tmp_path):
 def test_update_moves_an_idea_through_the_pipeline(book):
     i = book.add("ema cross", source="trader")
     ready_for_testing(book.ideas_dir, i.id)
-    book.update(i.id, status="quantified", hypothesis="fast over slow continues")
+    book.update(i.id, status="quantified", hypothesis="fast over slow continues",
+                links=["https://example.org/paper"])
     book.update(i.id, status="coded")
     book.update(i.id, status="testing", strategy="ema_crossover")
     d = book.holdout_dir / i.id
@@ -135,7 +137,7 @@ def test_filters_narrow_the_backlog(book):
     book.add("a", source="book", tags=["fx"])
     q = book.add("b", source="trader", tags=["eq"])
     ready_for_testing(book.ideas_dir, q.id)
-    book.update(q.id, status="quantified")
+    book.update(q.id, status="quantified", links=["https://example.org/paper"])
 
     assert [i.title for i in book.list(status="raw")] == ["a"]
     assert [i.title for i in book.list(source="trader")] == ["b"]

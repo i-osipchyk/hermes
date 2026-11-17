@@ -62,7 +62,7 @@ def _build(lab, idea=None):
 
 def test_the_pack_has_every_section_the_iteration_needs(lab):
     ctx = _build(lab)
-    assert list(ctx) == ["idea", "spec", "plan", "trials", "validation", "holdout", "lessons",
+    assert list(ctx) == ["idea", "spec", "data", "plan", "trials", "validation", "holdout", "lessons",
                          "approvals", "thesis"]
     assert ctx["idea"]["title"] == "child idea" and ctx["idea"]["parent"] == lab["parent"].id
     assert ctx["spec"]["falsifier"]

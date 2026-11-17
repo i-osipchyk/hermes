@@ -364,6 +364,10 @@ def validate_spec(spec: Spec) -> list[str]:
     for name in ("claim", "entry", "exit", "falsifier"):
         if not getattr(spec, name).strip():
             out.append(f"{name} is missing")
+    if not [i for i in spec.instruments if i.strip()]:
+        out.append("instruments is empty (the tickers you would pass to `hermes run --symbol`)")
+    if not [t for t in spec.timeframes if t.strip()]:
+        out.append("timeframes is empty (for example 5m, 1h, 1d)")
     if not spec.lookahead.strip():
         out.append("look-ahead statement is missing (what information each decision uses)")
     named = {_norm(n.get("value")) for n in spec.invented_numbers} | {

@@ -40,7 +40,8 @@ ADR-0011 puts the rigour in "the holdout and the trial count"; this ADR makes th
 ## Consequences
 
 - Honest limit: an agent with a shell can call a source directly. The guard therefore also sits in
-  `BarCache.read` when `HERMES_RESEARCH=1` (set by the pipeline driver for every agent subprocess);
+  `BarCache.read` when `HERMES_RESEARCH=1` (set by the pipeline driver for every agent subprocess;
+  built, with the in-process `guard_suspended` for carving and the unlock);
   ledger rows with `end > holdout_start` are invalidated by `hermes analyze`; and a Claude Code
   hook denies Bash that reads the bar cache outside the CLI. This reduces the risk. It cannot
   remove it against a determined agent, and the doc says so.

@@ -28,7 +28,7 @@ def _run(lab, capsys, *args):
 
 
 def _add(lab, capsys, title="x"):
-    main(["ideas", "add", title, "--ideas-file", lab["argv"][1], "--json"])
+    main(["ideas", "add", title, "--source", "discretionary", "--ideas-file", lab["argv"][1], "--json"])
     return json.loads(capsys.readouterr().out)["idea"]["id"]
 
 
@@ -48,7 +48,7 @@ def test_status_shows_the_queue_and_each_ideas_next_step(lab, capsys):
 def test_write_then_status_advances_the_idea_without_any_agent(lab, capsys):
     idea = _add(lab, capsys)
     assert _run(lab, capsys, "write", idea, "spec", "--file", _file(lab, "s", good_spec()))[0] == EXIT_OK
-    assert _run(lab, capsys, "status")[1]["open"][0]["next_action"]["step"] == "mark_quantified"
+    assert _run(lab, capsys, "status")[1]["open"][0]["next_action"]["step"] == "check_data"
 
 
 def test_an_agent_role_cannot_write_the_validators_file(lab, capsys, monkeypatch):

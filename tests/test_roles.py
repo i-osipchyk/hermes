@@ -35,6 +35,37 @@ def test_the_validator_has_no_edit_tools_and_the_quant_cannot_read_verdicts():
     assert any("strategies" in t for t in q.tools_allow)
 
 
+def _cmds(prefixes, subs):
+    return [f"Bash({p} {x}:*)" for p in prefixes for x in subs]
+
+
+def test_only_the_developer_may_run_arbitrary_python():
+    """Python in a role's shell is every guard bypassed at once: bars, ideas.json, verdicts."""
+    for role in ROLE_NAMES:
+        rd = load_role(role)
+        has_python = any("python" in t or t == "Bash" for t in rd.tools_allow)
+        assert has_python == (role == "developer"), role
+
+
+def test_the_validator_may_read_and_judge_but_not_run_trials():
+    v = load_role("validator")
+    assert "Bash(hermes:*)" not in v.tools_allow and "Bash(.venv/bin/hermes:*)" not in v.tools_allow
+    for sub in ("runs", "show", "analyze", "trials", "pipeline context", "pipeline validate",
+                "pipeline write", "pipeline approve-plan"):
+        assert f"Bash(hermes {sub}:*)" in v.tools_allow, sub
+    for sub in ("run", "holdout", "ideas set"):
+        assert f"Bash(hermes {sub}:*)" in v.tools_deny, sub
+        assert f"Bash(.venv/bin/hermes {sub}:*)" in v.tools_deny, sub
+
+
+def test_the_decisions_that_belong_to_other_roles_are_denied_by_name():
+    q, r = load_role("quant"), load_role("researcher")
+    for sub in ("holdout", "pipeline approve-plan", "pipeline answer", "pipeline validate"):
+        assert f"Bash(hermes {sub}:*)" in q.tools_deny, sub
+    for sub in ("run", "holdout", "pipeline approve-plan", "pipeline answer"):
+        assert f"Bash(hermes {sub}:*)" in r.tools_deny, sub
+
+
 def test_the_developer_never_pushes():
     assert "Bash(git push:*)" in load_role("developer").tools_deny
 

@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import validate_spec, variants_hash
+from .data_check import read_data_check
 from .dev_flow import read_extensions
+from .ideas import lacks_source_link
 from .thesis import DEFAULT_THESIS_PATH, due
 
 
@@ -49,6 +51,11 @@ def next_action(idea: Any, store: Any, *, ran_variants: set[str] | None = None) 
     if s in ("raw", "literature_done"):
         if spec is None or validate_spec(spec):
             return Action("researcher", "write_spec", (), ("spec.json",))
+        if lacks_source_link(idea):
+            return Action("researcher", "add_source", ("spec.json",), ("a source link",))
+        check = read_data_check(store.root, idea.id)
+        if check is None or check.get("verdict") != "ok":      # re-checked until it is ok
+            return Action("driver", "check_data", ("spec.json",), ("data_check.json",))
         return Action("researcher", "mark_quantified", ("spec.json",), ())
     if s in ("quantified", "coded"):
         if plan is None or _sent_back(plan):
