@@ -14,6 +14,9 @@ from hermes.research.ideas import IdeaBook, IllegalTransition
 FAIL = {"kind": "no_edge", "assumption": "x"}
 
 
+_EST = {"model": "m", "low": 0.5, "high": 1.0, "blocked": ""}
+
+
 @pytest.fixture
 def book(tmp_path):
     return IdeaBook(tmp_path / "ideas.json", holdout_dir=tmp_path / "ideas")
@@ -46,7 +49,7 @@ def test_parking_records_the_question_and_parks_the_idea_in_one_call(book, appro
 
 def test_approving_returns_the_idea_to_where_it_was(book, approvals):
     idea = _idea(book, "testing")
-    a = approvals.park(idea.id, "advisor", "q", "r")
+    a = approvals.park(idea.id, "advisor", "q", "r", estimate=_EST)
     done = approvals.answer(a.id, "approved", note="go", by="owner")
 
     assert done.status == "approved" and done.answered_by == "owner" and done.note == "go"
@@ -56,7 +59,7 @@ def test_approving_returns_the_idea_to_where_it_was(book, approvals):
 
 def test_a_denied_advisor_approval_sends_the_idea_back_and_the_pipeline_keeps_moving(book, approvals):
     idea = _idea(book, "coded")
-    a = approvals.park(idea.id, "advisor", "q", "r")
+    a = approvals.park(idea.id, "advisor", "q", "r", estimate=_EST)
     approvals.answer(a.id, "denied", note="no budget")
     got = book.get(idea.id)
     assert got.status == "coded" and "no budget" in got.history[-1]["reason"]
@@ -101,7 +104,7 @@ def test_a_denied_forward_test_leaves_the_idea_validated(book, approvals):
 
 def test_an_agent_role_cannot_answer(book, approvals, monkeypatch):
     idea = _idea(book, "coded")
-    a = approvals.park(idea.id, "advisor", "q", "r")
+    a = approvals.park(idea.id, "advisor", "q", "r", estimate=_EST)
     monkeypatch.setenv("HERMES_ROLE", "quant")
     with pytest.raises(ApprovalPermission):
         approvals.answer(a.id, "approved")
@@ -111,14 +114,14 @@ def test_an_agent_role_cannot_answer(book, approvals, monkeypatch):
 
 def test_the_owner_can_answer_with_no_role_or_the_owner_role(book, approvals, monkeypatch):
     idea = _idea(book, "coded")
-    a = approvals.park(idea.id, "advisor", "q", "r")
+    a = approvals.park(idea.id, "advisor", "q", "r", estimate=_EST)
     monkeypatch.setenv("HERMES_ROLE", "owner")
     assert approvals.answer(a.id, "approved").answered_by == "owner"
 
 
 def test_an_approval_is_answered_once(book, approvals):
     idea = _idea(book, "coded")
-    a = approvals.park(idea.id, "advisor", "q", "r")
+    a = approvals.park(idea.id, "advisor", "q", "r", estimate=_EST)
     approvals.answer(a.id, "approved")
     with pytest.raises(ValueError, match="already"):
         approvals.answer(a.id, "denied")
@@ -126,7 +129,7 @@ def test_an_approval_is_answered_once(book, approvals):
 
 def test_an_idea_already_waiting_cannot_be_parked_again(book, approvals):
     idea = _idea(book, "coded")
-    approvals.park(idea.id, "advisor", "q", "r")
+    approvals.park(idea.id, "advisor", "q", "r", estimate=_EST)
     with pytest.raises(ValueError, match="awaiting"):
         approvals.park(idea.id, "other", "q2", "r2")
     assert len(approvals.all()) == 1
@@ -150,7 +153,7 @@ def test_unknown_kind_and_decision_are_refused(book, approvals):
 
 def test_pending_lists_and_prefixes_resolve(book, approvals):
     a_idea, b_idea = _idea(book, "coded"), _idea(book, "coded")
-    a = approvals.park(a_idea.id, "advisor", "q", "r")
+    a = approvals.park(a_idea.id, "advisor", "q", "r", estimate=_EST)
     b = approvals.park(b_idea.id, "other", "q", "r")
     approvals.answer(a.id, "approved")
     assert [x.id for x in approvals.all(pending_only=True)] == [b.id]

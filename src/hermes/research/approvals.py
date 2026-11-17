@@ -136,6 +136,11 @@ class ApprovalBook:
         idea = self.ideas.get(approval.idea)
         why = f"{approval.kind} {decision}: {note}".rstrip(": ")
 
+        if decision == "approved" and approval.kind == "advisor" and (
+                approval.estimate is None or approval.estimate.get("blocked")
+                or approval.estimate.get("high") is None):
+            why = (approval.estimate or {}).get("blocked") or "it has no estimate"
+            raise ValueError(f"approval {approval.id} cannot be approved on a number: {why}")
         if decision == "approved":
             if approval.kind == "forward_test":
                 approval.status = "approved"

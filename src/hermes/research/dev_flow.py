@@ -95,7 +95,7 @@ def _write(ideas_dir: Path, idea: str, items: list[dict]) -> None:
 class DevFlow:
     repo: Path
     ideas_dir: Path
-    gates: list[list[str]] = field(default_factory=default_gates)
+    gates: list[list[str]] = field(default_factory=lambda: default_gates())
     base: str = "master"
     worktrees: Path | None = None        # default: <repo>/../.hermes_worktrees/<repo name>
 
